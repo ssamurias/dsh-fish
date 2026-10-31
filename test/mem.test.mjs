@@ -10,7 +10,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -160,6 +160,34 @@ test('轮换：旧会话改名留档、新会话接管、原话搬过去', () =>
   assert.equal(st.turns, 0)
   const carry = await activeCarry(root)
   assert.match(carry, /你还记得那天吗/)
+}))
+
+test('换会话只换该换的：preset / hearAt / title 这些还不能丢（issue #14 第二报）', () => withRoot(async (root) => {
+  const { writeAtomic, paths } = await import('../lib/store.js')
+  const homeFile = join(paths(root).root, 'home.json')
+  // 以前这里整份覆盖写，preset/hearAt/title 全被抹掉 —— 换完会话旁听节奏归零、
+  // 她挑的那套预设也丢了，但没有任何日志能看出来。
+  await writeAtomic(homeFile, JSON.stringify({
+    wsId: 'ws-1',
+    sessionId: 'sess-old',
+    turns: 40,
+    preset: '那个人挑的那套',
+    hearAt: 7,
+    title: '她自己起的名字',
+    adoptedAt: '2026-10-01T00:00:00.000Z',
+  }))
+
+  const r = await rotateTalkSession(fakeCtx(), { root })
+  assert.equal(r.ok, true)
+
+  const raw = JSON.parse(await readFile(homeFile, 'utf8'))
+  assert.equal(raw.sessionId, 'sess-new')
+  assert.equal(raw.turns, 0)
+  assert.equal(raw.preset, '那个人挑的那套')
+  assert.equal(raw.hearAt, 7)
+  assert.equal(raw.title, '她自己起的名字')
+  assert.equal(raw.rotatedFrom, 'sess-old')
+  assert.ok(raw.rotatedAt)
 }))
 
 test('搬运最多管 8 轮，之后自己消失（否则她会被一段旧话钉住）', () => withRoot(async (root) => {

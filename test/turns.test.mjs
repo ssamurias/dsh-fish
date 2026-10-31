@@ -12,7 +12,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -45,6 +45,7 @@ function fakeCtx() {
   const handlers = new Map()
   const created = []
   const renamed = []
+  const prompted = []
   const ctx = {
     on(ev, fn) {
       const set = handlers.get(ev) ?? new Set()
@@ -64,10 +65,23 @@ function fakeCtx() {
       async rename(arg) {
         renamed.push(arg)
       },
+      // 2026-10-31（issue #14 第二报）：轮换后要叫醒新会话。
+      // 宿主这边要 list 判空、prompt 出声；两个都给出来，才走得到 markWoke。
+      async list() {
+        return { items: [{ sessionId: 's-new-1', blank: true }] }
+      },
+      async prompt(arg, signal) {
+        if (!signal || typeof signal.throwIfAborted !== 'function') {
+          // 真宿主这里会抛（issue #1），测试里也照着抛，免得漏传 signal 又悄悄通过
+          throw new Error('Cannot read properties of undefined (reading \'throwIfAborted\')')
+        }
+        prompted.push(arg)
+        return { ok: true }
+      },
     },
     get: () => null,
   }
-  return { ctx, created, renamed }
+  return { ctx, created, renamed, prompted }
 }
 
 const session = (id = HER_SESSION) => ({ header: { id }, id })
@@ -234,6 +248,122 @@ test('满 rotateAfter 就换会话，事件流里留一条 meta', async () => {
       })
       assert.equal(meta[0].text, 'rotate:1:s-new-1')
       assert.equal(meta[0].source, 'system')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('换会话之后要叫醒新会话，不然人看不见它（issue #14 第二报）', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 1 } })
+    const { ctx, prompted } = fakeCtx()
+    const off = registerTurns(ctx, { root })
+    try {
+      ctx.emit('session/event', session(), humanMsg('聊满一轮了'))
+      ctx.emit('session/event', session(), TURN_END)
+
+      // 轮换本身先落地
+      await waitFor(async () => {
+        const st = await homeStatus(root)
+        return st.sessionId && st.sessionId !== HER_SESSION ? st : null
+      })
+      // 然后是叫醒：宿主的 prompt 得真发出去，且记进 wokeFor（一条会话只叫一次）
+      const saved = await waitFor(async () => {
+        const raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+        return raw.wokeFor === 's-new-1' ? raw : null
+      })
+      assert.equal(saved.wokeFor, 's-new-1')
+      assert.equal(prompted.length, 1, '只该叫一声')
+      assert.equal(prompted[0].sessionId, 's-new-1')
+      assert.equal(prompted[0].mode, 'queue')
+      // 叫醒文本要能让她知道"屋子刚建好"，别是一句空白
+      assert.match(String(prompted[0].content?.[0]?.text ?? ''), /醒一醒/)
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('换会话之后人还在旧的那条里说话 → 屋子认回它，轮数接着涨（issue #14 第二报）', async () => {
+  const root = await tmpRoot()
+  try {
+    // 已经在"刚换过会话"的状态：home 指向新会话，rotatedFrom 记着换下来那条
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    await writeAtomic(
+      join(paths(root).root, 'home.json'),
+      JSON.stringify(
+        {
+          wsId: 'ws-1',
+          sessionId: 's-new-1',
+          createdAt: '2026-10-31T00:50:27.000Z',
+          turns: 0,
+          rotatedFrom: HER_SESSION,
+          rotatedAt: '2026-10-31T00:50:27.000Z',
+          carry: [{ me: '上次说到这', her: '嗯' }],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      // 人在旧会话里说话——原来这里会被静默丢掉
+      ctx.emit('session/event', session(HER_SESSION), humanMsg('我还在旧窗口里说话'))
+      ctx.emit('session/event', session(HER_SESSION), TURN_END)
+
+      const h = await waitFor(async () => {
+        const st = await homeStatus(root)
+        return st.turns > 0 ? st : null
+      })
+      assert.equal(h.sessionId, HER_SESSION, '屋子该认回他实际在说话的那条')
+      assert.equal(h.turns, 1, '轮数接着数，不该停')
+      // 认回来之后这条会话不再是"换下来的"，carry 也不该再粘一遍
+      const raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+      assert.equal(raw.rotatedFrom, undefined)
+      assert.equal(raw.carry, undefined)
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('认回只认换下来那条，别的会话照样不记', async () => {
+  const root = await tmpRoot({ rotatedFrom: HER_SESSION })
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    await writeAtomic(
+      join(paths(root).root, 'home.json'),
+      JSON.stringify(
+        {
+          wsId: 'ws-1',
+          sessionId: 's-new-1',
+          createdAt: '2026-10-31T00:50:27.000Z',
+          turns: 0,
+          rotatedFrom: HER_SESSION,
+        },
+        null,
+        2,
+      ),
+    )
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session('s-somewhere-else'), humanMsg('随便哪条会话都认就不对了'))
+      ctx.emit('session/event', session('s-somewhere-else'), TURN_END)
+      await settled()
+      const h = await homeStatus(root)
+      assert.equal(h.turns, 0)
+      assert.equal(h.sessionId, 's-new-1', '屋子不该被搬走')
     } finally {
       off()
     }
