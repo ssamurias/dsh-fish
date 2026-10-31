@@ -18,6 +18,8 @@ import { startScheduler, nextWakeAt } from '../lib/scheduler.js'
 import { appendEvent, readEvents, writeConfig } from '../lib/store.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
 import { getWakeSection, clearWakeSection } from '../lib/identity.js'
+import { registerCapture } from '../lib/capture.js'
+import { inWake } from '../lib/wakewin.js'
 
 const at = (h, m, day = 29) => new Date(2026, 9, day, h, m).getTime()
 const wakeEv = (t, dk = '2026-10-29') => ({ type: 'meta', text: `wake:${dk} x`, ts: new Date(t).toISOString() })
@@ -143,6 +145,70 @@ test('叫醒准备的几秒里她刚好开始了别的一轮：等那一轮说�
       await s.tick()
       assert.equal(h.prompts.length, 1)
       assert.match(h.prompts[0].section, /叫醒你的信号/, '叫的时候处境还在，没被那一轮的 turn/end 收走')
+    } finally {
+      s.dispose()
+    }
+  })
+})
+
+// ---- 唤醒时间窗（wakewin）：叫醒那一轮里她写的话不算「他来过」 ----
+// prompt() 入队就返回。原来用 withWake 包住 prompt()，窗口在她开口之前就关了，
+// 于是她醒来写的每一句都落一条 seen:，冷落检测量成了「她写没写话」。
+
+const seenCount = async (root) => (await readEvents(root)).events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length
+function growthCommit(root) {
+  const regs = new Map()
+  registerCapture({ tools: { register: (spec) => { regs.set(spec.name, spec); return () => {} } } }, { root })
+  return regs.get('growth_commit')
+}
+
+test('叫醒那一轮里她写的话不记 seen:；这一轮结束后窗口关上', async () => {
+  await withRoot(async (root) => {
+    const h = fakeHost()
+    const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
+    const commit = growthCommit(root)
+    try {
+      await s.tick()
+      assert.equal(h.prompts.length, 1)
+      h.emit('turn/start')
+      assert.equal(inWake(), true, 'prompt() 已经返回，她这一轮才开始：窗口还开着')
+      assert.equal((await commit.execute({ type: 'utterance', text: '醒了，外面在下雨。' })).ok, true)
+      assert.equal(await seenCount(root), 0, '叫醒那一轮里写的话不算他来过（修之前这里是 1）')
+      h.emit('turn/end')
+      assert.equal(inWake(), false, '这一轮结束，窗口关上')
+      await commit.execute({ type: 'utterance', text: '刚才那件事我想明白了。' })
+      assert.equal(await seenCount(root), 1, '窗口外写的照旧记 seen:')
+    } finally {
+      s.dispose()
+    }
+  })
+})
+
+test('turn/end 一直不来、她也不在忙：兜底把窗口和处境一起关上', async () => {
+  await withRoot(async (root, { sleep }) => {
+    const h = fakeHost()
+    const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
+    try {
+      await s.tick()
+      assert.equal(h.prompts.length, 1)
+      assert.equal(inWake(), true)
+      await sleep(40)
+      assert.equal(getWakeSection(), '', '兜底到点：处境撤掉')
+      assert.equal(inWake(), false, '兜底到点：窗口也关上，不会一直开着')
+    } finally {
+      s.dispose()
+    }
+  })
+})
+
+test('消息没送进去：窗口当场关上', async () => {
+  await withRoot(async (root) => {
+    const h = fakeHost()
+    h.ctx.sessionController.prompt = async () => { throw new Error('host down') }
+    const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
+    try {
+      await s.tick()
+      assert.equal(inWake(), false)
     } finally {
       s.dispose()
     }
