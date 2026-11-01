@@ -23,6 +23,7 @@ import {
   turnsToday,
   lastTurnAt,
   idleHoursOf,
+  countsForIdle,
   looseEnds,
   recentMaterial,
   findTriggerSeq,
@@ -219,9 +220,38 @@ test('turnsToday / lastTurnAt 只认当日与最近一次，不把别人的 meta
   ]
   assert.equal(turnsToday(events, dk), 1)
   assert.equal(lastTurnAt(events), now - 3_600_000)
-  // ev_other 那一秒前刚写过，所以「安静了多久」要按最近的那条算，别被几小时前的空手回合骗了。
-  assert.ok(idleHoursOf(events, now) < 1)
+  // 那条 diary 是一秒前写的，但它是系统记账、不是谁说的话：idle 时钟停在 1 小时前那个空手回合上。
+  // 改之前这里会算成「一秒前刚说过话」——2026-11-01 用户 m02507 修的就是这个。
+  assert.ok(idleHoursOf(events, now) > 0.9, '系统记账不许把 idle 时钟往回拨')
+  const withSpeak = [...events, ev({ id: 'ev_u', type: 'utterance', ts: new Date(now - 300).toISOString() })]
+  assert.ok(idleHoursOf(withSpeak, now) < 0.1, '她真的说了话，才算「刚才说过」')
   assert.equal(idleHoursOf([], now), Infinity, '一条记录都没有时算「很久」')
+})
+
+test('meta:quiet 不刷新 idle：今天没找到模板，不等于她刚说过话（用户 m02507）', () => {
+  const now = Date.now()
+  const quiet = ev({ id: 'ev_q', type: 'meta', text: 'quiet:2026-10-31 无候选模板，今天不打扰', ts: new Date(now - 60_000).toISOString() })
+  const spoke = ev({ id: 'ev_u', type: 'utterance', ts: new Date(now - 6 * 3_600_000).toISOString() })
+  assert.equal(countsForIdle(quiet), false, 'quiet 是记账行，不算有人说话')
+  assert.ok(idleHoursOf([quiet, spoke], now) > 5.9, '时钟还是停在 6 小时前那句真话上')
+  assert.equal(idleHoursOf([quiet], now), Infinity, '只有记账行时，等于「一直没人说话」')
+})
+
+test('meta:watched 也不刷新 idle：她看了条视频，不等于她说过话（真机 2026-10-30 22:03 那次假阴性）', () => {
+  const now = Date.now()
+  // 那次现场：她实际安静了 17.55 小时，插件读到 0.01h，来源是一条 meta:watched。
+  const watched = ev({ id: 'ev_w', type: 'meta', text: 'watched:BV1xx411c7mD', ts: new Date(now - 36_000).toISOString() })
+  const answer = ev({ id: 'ev_a', type: 'answer', text: '可以', ts: new Date(now - 17.55 * 3_600_000).toISOString() })
+  assert.equal(countsForIdle(watched), false)
+  const idle = idleHoursOf([watched, answer], now)
+  assert.ok(idle > 17.5, '应该是 17.5 小时，不是 0.01 小时')
+  // 反过来：几种「真的有人说话」的事件都要算，尤其 seen:（他来过）。
+  for (const type of ['utterance', 'revise', 'heard', 'voice', 'ask', 'answer', 'dream']) {
+    assert.equal(countsForIdle(ev({ type })), true, `${type} 应该算`)
+  }
+  assert.equal(countsForIdle(ev({ type: 'meta', text: `seen:${new Date(now).toISOString()}` })), true, 'seen: 算他来过')
+  assert.equal(countsForIdle(ev({ type: 'meta', text: `diary:2026-10-31` })), false, 'diary 不算')
+  assert.equal(countsForIdle(ev({ type: 'meta', text: `sched:2026-11-01` })), false, 'sched 不算')
 })
 
 test('触发语收尾：回合结束后能把那条 user/message 换成空节点（用户 m05007）', () => {
@@ -246,11 +276,29 @@ test('触发语收尾：回合结束后能把那条 user/message 换成空节点
   }
   assert.equal(hideTrigger(session, { rpcId: 'proactive-1793372588185' }), true)
   assert.equal(session.appended.type, 'system/message')
-  assert.deepEqual(session.appended.data.message, { role: 'system', content: [] }, '空 content 才不投影任何消息')
+  // 空 content 才不投影任何消息；id 必须是非空字符串——宿主 v4 的
+  // assertV4SystemMessageFields 会查它，缺了整批写盘会抛、并把会话置成 drainPaused。
+  assert.equal(session.appended.data.message.role, 'system')
+  assert.deepEqual(session.appended.data.message.content, [])
+  assert.equal(typeof session.appended.data.message.id, 'string', '替换节点必须带 id（2026-11-01 真机：缺 id 会让整条会话写不下去）')
+  assert.ok(session.appended.data.message.id.length > 0)
   assert.deepEqual(session.appended.opts.surfaceOp, { op: 'replace', startSeq: 3, endSeq: 3 })
   assert.deepEqual(session.appended.opts.sourceEventSeqs, [3], '要带 sourceEventSeqs，宿主才知道替的是哪条')
   assert.equal(session.appended.data.turn, 7, 'turn 取触发语所在回合，不伪造')
   assert.equal(session.appended.data.step, 2)
+
+  // turn / step 拿不到时退回 1：0 会让宿主 v4 校验抛「must be positive」，
+  // 那和缺 id 一样是写盘时才炸、会把整条会话毒成 drainPaused。
+  const bare = {
+    appended: null,
+    snapshotEvents: () => [{ seq: 1, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: 'x' }], source: { rpcId: 'proactive-bare' } } }],
+    append(type, data, opts) {
+      this.appended = { type, data, opts }
+    },
+  }
+  assert.equal(hideTrigger(bare, { rpcId: 'proactive-bare' }), true)
+  assert.ok(bare.appended.data.turn > 0, 'turn 绝不能是 0')
+  assert.ok(bare.appended.data.step > 0, 'step 绝不能是 0')
 
   // 找不到、没会话、没 rpcId 都不该抛，也不该乱写。
   assert.equal(hideTrigger(session, { rpcId: 'proactive-别的' }), false)
@@ -310,9 +358,14 @@ test('补扫：历史里遗留的触发语也要收走，但别误伤她复述�
   assert.equal(appended[0].data.turn, 3)
   assert.equal(appended[1].data.turn, 4)
 
+  // 每条替换节点都得有自己的 id，不能复用
+  const ids = appended.map((a) => String(a.data.message.id ?? ''))
+  assert.equal(ids.filter((id) => id.length > 0).length, 2, '两条都要带 id')
+  assert.notEqual(ids[0], ids[1], '两条替换节点不能共用一个 id')
+
   // 已收过的再扫不会再叠：把 replace 节点也放进事件流里
-  events.push({ seq: 7, type: 'system/message', data: { surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, message: { role: 'system', content: [] } } })
-  events.push({ seq: 8, type: 'system/message', data: { surfaceOp: { op: 'replace', startSeq: 6, endSeq: 6 }, message: { role: 'system', content: [] } } })
+  events.push({ seq: 7, type: 'system/message', data: { surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, message: { id: 'sys-2', role: 'system', content: [] } } })
+  events.push({ seq: 8, type: 'system/message', data: { surfaceOp: { op: 'replace', startSeq: 6, endSeq: 6 }, message: { id: 'sys-6', role: 'system', content: [] } } })
   appended.length = 0
   assert.equal(sweepTriggers(session), 0)
 })

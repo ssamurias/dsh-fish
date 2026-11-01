@@ -352,3 +352,43 @@ test('台账已经绑了会话 id 时，同一个工作区里别的会话不该�
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// 0.8.5（用户 m01579 B 案）：出门的会话也要把宿主的 coding agent 段摘掉——
+// 钩子不是段，mountedCount 不变，但回家那一刻必须跟着一起拆。
+function fakeAgentWithHook() {
+  const sections = []
+  let guardDisposed = 0
+  let hookDisposed = 0
+  const agent = {
+    ctx: {
+      systemPrompt: { section: (s) => { sections.push(s); return () => { sections.pop() } } },
+      tools: { guard: () => () => { guardDisposed += 1 } },
+      effect: (fn) => fn,
+      on: (evt) => {
+        if (evt !== 'system-prompt/assemble') return () => {}
+        return () => { hookDisposed += 1 }
+      },
+    },
+  }
+  return { agent, sections, guardDisposed: () => guardDisposed, hookDisposed: () => hookDisposed }
+}
+
+test('出门时也会挂上组装钩子（摘掉宿主那句 coding agent），回家一起拆', () => {
+  const root = tmpRoot()
+  try {
+    const { agent, sections, hookDisposed } = fakeAgentWithHook()
+    assert.equal(attachIdentity(agent, root, { frozen: '走的时候的我' }).ok, true)
+    assert.equal(sections.length, 3, '钩子不是段，不许占段位')
+    assert.equal(mountedCount(agent), 3, 'mountedCount 只数段：身份 + 处境 + 手边')
+    assert.equal(hookDisposed(), 0, '还没拆')
+
+    const r = detachOutside(agent)
+    assert.equal(r.ok, true)
+    assert.equal(r.removed, 4, '三段 + 钩子')
+    assert.equal(sections.length, 0)
+    assert.equal(hookDisposed(), 1, '钩子也必须拆——不然回家那一刻旧钩子还挂着')
+    assert.equal(mountedCount(agent), 0)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

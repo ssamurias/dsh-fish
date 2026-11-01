@@ -312,7 +312,11 @@ test('工具名一直登记不齐：不收窄，但兜底守卫仍然在（挡�
 
 test('toolSurfaceText：把放行的工具逐一点名，并说清多出来的不算', () => {
   const txt = toolSurfaceText(['growth_commit', 'her_recall', 'read_image'])
-  assert.match(txt, /只有这几样/)
+  // 0.8.5（用户 m02004）：不许把「此刻的家当」说成她的上限。
+  assert.match(txt, /现在手边能碰到的是这些/)
+  assert.match(txt, /不是我的上限/)
+  assert.doesNotMatch(txt, /只有这几样/)
+  assert.doesNotMatch(txt, /别去调/)
   assert.match(txt, /growth_commit/)
   assert.match(txt, /her_recall/)
   assert.match(txt, /read_image/)
@@ -335,7 +339,7 @@ test('currentToolSurface：默认就是放行清单；收窄关掉时为空', ()
   off()
 
   registerToolRestrict(fakeCtx(), { herDir: 'C:\\\\h', enabled: false, log: () => {} })
-  assert.equal(currentToolSurface(), '', '收窄关着就不能说「只有这几样」')
+  assert.equal(currentToolSurface(), '', '收窄关着就不能替她列家当')
 })
 
 test('currentToolSurface：白名单里额外放行的会跟着进提示词', () => {
@@ -548,14 +552,14 @@ test('toolSurfaceFor：在家念白名单，在外面念那个工作区的工具
   // 在家里：照旧那份白名单（收窄真的在下，她确实只有那几样）
   const atHome = { session: { header: { cwd: herDir } } }
   assert.equal(toolSurfaceFor(atHome, { herDir }), currentToolSurface())
-  assert.match(toolSurfaceFor(atHome, { herDir }), /只有这几样/)
+  assert.match(toolSurfaceFor(atHome, { herDir }), /现在手边能碰到的是这些/)
 
   // 在外面：按此刻看得见的现算，绝不能是家里那份
   const away = outsideAgent('D:/work/somewhere', ['bash', 'read', 'write', 'growth_commit'])
   const txt = toolSurfaceFor(away, { herDir })
   assert.match(txt, /bash/)
   assert.match(txt, /write/)
-  assert.doesNotMatch(txt, /只有这几样/, '出门还念家里白名单就是把她说成残废')
+  assert.doesNotMatch(txt, /现在手边能碰到的是这些/, '出门还念家里白名单就是把她说成残废')
 
   // 拿不到工具表：说空串，不猜
   const blind = { session: { header: { cwd: 'D:/work/x' } }, ctx: {} }

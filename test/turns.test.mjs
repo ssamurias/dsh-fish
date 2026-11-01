@@ -16,7 +16,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { classifyMessage, messageText, registerTurns } from '../lib/turns.js'
+import { classifyMessage, messageText, assistantText, registerTurns } from '../lib/turns.js'
 import { homeStatus } from '../lib/home.js'
 import { appendEvent, readEvents, writeAtomic, paths } from '../lib/store.js'
 import { recentExchanges } from '../lib/talkmem.js'
@@ -114,6 +114,27 @@ function pluginMsg(text) {
 
 const TURN_END = { type: 'turn/end' }
 
+/**
+ * 宿主里她自己说出口的话（2026-11-01）。
+ * 真机形态见 dsh-agent-loop/lib/index.js:1098：
+ *   { turn, step, message:{id,role:'assistant',content:[{type:'text'|'reasoning',text}]}, interrupted }
+ */
+function herMsg(blocks, extra = {}) {
+  return {
+    type: 'assistant/message',
+    data: {
+      turn: 1,
+      step: 1,
+      message: {
+        id: extra.id ?? `a-${Math.random().toString(36).slice(2)}`,
+        role: 'assistant',
+        content: blocks,
+      },
+      ...extra,
+    },
+  }
+}
+
 // 全量跑时这个文件会和别的测试文件并行，CPU 一挤，3 秒就不够了
 // （2026-10-28 全量回归里偶发超时，单跑必过）。放宽到 15 秒，只在真卡住时才失败。
 async function waitFor(fn, timeout = 15000) {
@@ -153,6 +174,34 @@ test('正文提取：真机 content 数组、老宿主 data.text 都兜得住', 
   assert.equal(messageText(null), '')
 })
 
+test('她说出口的话：只收 text 块，reasoning 不算她说的话', () => {
+  assert.equal(
+    assistantText({ message: { content: [{ type: 'text', text: '我把窗开着吧。' }] } }),
+    '我把窗开着吧。',
+  )
+  // 她脑子里的嘀咕不能进「上次我们说到这」——那不是她开口说的
+  assert.equal(
+    assistantText({
+      message: {
+        content: [
+          { type: 'reasoning', text: '他心里大概是想让我问一句。' },
+          { type: 'text', text: '外面下雨了吗？' },
+        ],
+      },
+    }),
+    '外面下雨了吗？',
+  )
+  assert.equal(
+    assistantText({ message: { content: [{ type: 'text', text: '第一句' }, { type: 'text', text: '第二句' }] } }),
+    '第一句\n第二句',
+  )
+  // 只有 reasoning 的一轮：她没说出口，取到空
+  assert.equal(assistantText({ message: { content: [{ type: 'reasoning', text: '想想' }] } }), '')
+  assert.equal(assistantText({ message: { content: '字符串兜底' } }), '字符串兜底')
+  assert.equal(assistantText({}), '')
+  assert.equal(assistantText(null), '')
+})
+
 test('她屋里真人说一句 → turn/end 结账：turns +1、原话进 talkmem', async () => {
   const root = await tmpRoot()
   try {
@@ -172,6 +221,79 @@ test('她屋里真人说一句 → turn/end 结账：turns +1、原话进 talkme
       assert.equal(list.length, 1, '换会话时要搬的那几句里得有这一轮')
       assert.match(list[0].me, /今天外面下雨了/)
       assert.match(list[0].her, /那我把窗开着/, '她那一轮说的话要一起记下来')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('她在侧栏里说出口的话，也要进 talkmem（原来 her 永远是空的）', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(), humanMsg('外面下雨了吗'))
+      await settled()
+      // 宿主把她说的话作为 assistant/message 追加进来（不是 events.jsonl）
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '下了，我把窗关上了。' }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+
+      const list = await recentExchanges(root)
+      assert.equal(list.length, 1)
+      assert.match(list[0].me, /外面下雨了吗/)
+      assert.match(list[0].her, /下了，我把窗关上了/, '她说的原话要跟着这一轮一起存下来')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('同一条 assistant/message 重放两次，只记一次', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(), humanMsg('你在想什么'))
+      await settled()
+      const one = herMsg([{ type: 'text', text: '想一件很久以前的事。' }], { id: 'a-dup' })
+      ctx.emit('session/event', session(), one)
+      ctx.emit('session/event', session(), one)
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+
+      const list = await recentExchanges(root)
+      const hits = String(list[0].her).match(/很久以前/g) ?? []
+      assert.equal(hits.length, 1, '同一个 message id 的重放不该记成两句')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('没有等结账的那一轮（唤醒轮）里她说的话，不算进「他来过」的那几轮', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      // 定时唤醒：只有她的话 + turn/end，没有人打的字
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '醒了，外面在下雨。' }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await settled()
+      assert.equal((await homeStatus(root)).turns, 0)
+      assert.deepEqual(await recentExchanges(root), [], '唤醒轮不该留下对话记录')
     } finally {
       off()
     }

@@ -56,6 +56,10 @@ test('registerWatch：注册一个叫 bili_watch 的工具，参数是合法 JSO
   assert.equal(t.parameters.type, 'object')
   assert.ok(t.parameters.properties.bvid)
   assert.deepEqual(t.parameters.required, ['bvid'])
+  // 2026-11-01 用户 m02712：at 是可选的，不许挤进 required，否则老的调用全失败
+  assert.equal(t.parameters.properties.at.type, 'array')
+  assert.equal(t.parameters.properties.at.items.type, 'number')
+  assert.match(t.description, /at/)
   assert.equal(t.output.render.length >= 0, true)
 })
 
@@ -167,5 +171,17 @@ test('抽帧失败时写 warn 一行，带上失败原因', async () => {
     } finally {
       process.env.PATH = saved
     }
+  })
+})
+
+// issue #16 第二半（2026-11-01，用户 m03454）：看画面写的 watched: 也要认调用者。
+test('bili_watch：不在这个家里的会话调不动它', async () => {
+  await withRoot(async (root) => {
+    const ctx = fakeCtx()
+    registerWatch(ctx, { root, tenant: { herDir: join(root, 'her'), tenant: { ok: true } } })
+    const away = { agent: { session: { id: 'session-other', header: { id: 'session-other', cwd: tmpdir() } } } }
+    const out = await ctx._tools[0].execute({ bvid: 'BV1ED4y1Y7dc' }, away)
+    assert.equal(out.ok, false)
+    assert.match(out.note, /另一个家|没有落盘/)
   })
 })

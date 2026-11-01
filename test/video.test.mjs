@@ -16,7 +16,7 @@ import { mkdtemp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { grabFrames } from '../lib/video.js'
+import { grabFrames, sampleTimes, normalizeAt } from '../lib/video.js'
 import { detectFfmpeg, mediaDir } from '../lib/media.js'
 
 const BVID = 'BV1ph4y1g75E'
@@ -37,6 +37,60 @@ function fakeClient(over = {}) {
 
 /** 恒失败的 ffmpeg：指向一个不存在的二进制，spawn 会发 'error' */
 const NO_SUCH_BIN = { ok: true, bin: join(tmpdir(), 'definitely-not-ffmpeg-xyz', 'ffmpeg.exe') }
+
+// ---- 帧时刻（2026-11-01 用户 m02712：等距九帧 → 分段抖动 + at）----
+// 等距的问题是每次取到的都是那同九张图，反复看等于看同一张拼图。
+
+test('sampleTimes：分段抖动，每段必有帧、严格递增、不出头尾 4%', () => {
+  const duration = 600
+  const seq = [0.1, 0.9, 0.5, 0.3, 0.7, 0.0, 0.99, 0.42, 0.61]
+  let i = 0
+  const rand = () => seq[i++ % seq.length]
+  const times = sampleTimes(duration, 9, rand)
+
+  assert.equal(times.length, 9)
+  for (let k = 0; k < times.length; k++) {
+    assert.ok(times[k] >= duration * 0.04, `第 ${k} 帧不许落回片头黑场：${times[k]}`)
+    assert.ok(times[k] <= duration * 0.96, `第 ${k} 帧不许落进片尾下滑栏：${times[k]}`)
+    if (k > 0) assert.ok(times[k] > times[k - 1], '时刻要严格递增，别让 ffmpeg 来回 seek')
+  }
+  // 每段都落到了（覆盖不丢）：第 k 帧应落在第 k 段里
+  const seg = (duration * 0.96 - duration * 0.04) / 9
+  for (let k = 0; k < 9; k++) {
+    const from = duration * 0.04 + seg * k
+    assert.ok(times[k] >= from && times[k] <= from + seg, `第 ${k} 帧跑到别的段去了`)
+  }
+})
+
+test('sampleTimes：每次取到的时刻不一样（这正是要修的病）', () => {
+  const a = sampleTimes(600, 9)
+  const b = sampleTimes(600, 9)
+  // 随机源独立，九帧全同的概率是 0；真同了就说明根本没抖
+  assert.notDeepEqual(a, b)
+})
+
+test('sampleTimes：不知道时长就按固定间隔退回去，不崩', () => {
+  assert.deepEqual(sampleTimes(0, 3), [0, 5, 10])
+  assert.deepEqual(sampleTimes(-1, 2), [0, 5])
+})
+
+test('normalizeAt：夹回片内、丢掉乱写、排好序', () => {
+  assert.deepEqual(normalizeAt(90, 600), [90])
+  assert.deepEqual(normalizeAt([90, 30], 600), [30, 90])
+  assert.deepEqual(normalizeAt([99999], 600), [599.5], '越界要夹回片尾前，不能交给 ffmpeg 去失败')
+  assert.deepEqual(normalizeAt([-5, 'x', null], 600), [], '乱写的全丢掉')
+  assert.deepEqual(normalizeAt(undefined, 600), [])
+  assert.deepEqual(normalizeAt([], 600), [])
+  assert.deepEqual(normalizeAt([100, 100, 100], 0), [100, 100, 100], '没时长就不夹，重复保留')
+})
+
+test('grabFrames：点了名却一个合法时刻都没有，就别悄悄退回随机', async () => {
+  // 悄悄退回随机最坏：她以为看的是自己点的那一秒，其实看的是别处
+  const root = await tmpRoot()
+  const r = await grabFrames({ bvid: BVID, root, client: fakeClient(), at: ['不是秒数'], ffmpeg: NO_SUCH_BIN })
+  assert.equal(r.ok, false)
+  assert.match(r.why, /时间点看不懂/)
+})
 
 test('grabFrames：不是 BV 号就直说，不去联网', async () => {
   const root = await tmpRoot()
@@ -221,6 +275,36 @@ test('grabFrames：帧与拼图都从 stdout 拿，mp4 在本地也能跑通（�
   // 旧实现会在 media/ 下留 tmp-* 临时帧目录；新实现不落中间文件
   const names = await readdir(dir)
   assert.equal(names.filter((x) => x.startsWith('tmp-')).length, 0, '不该再留下临时帧目录')
+})
+
+test('grabFrames：给了 at 就只取那几个时刻（真跑本地片）', async (t) => {
+  const ff = detectFfmpeg()
+  if (!ff.ok) {
+    t.skip(`本机没有 ffmpeg（${ff.why}），跳过`)
+    return
+  }
+  const root = await tmpRoot()
+  const src = join(root, 'clip.mp4')
+  const { spawnSync } = await import('node:child_process')
+  const mk = spawnSync(ff.bin, [
+    '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=15:duration=4',
+    '-pix_fmt', 'yuv420p', '-y', src,
+  ], { windowsHide: true, timeout: 60_000 })
+  if (mk.status !== 0) {
+    t.skip('造测试片失败，跳过')
+    return
+  }
+  await mkdir(await mediaDir(root), { recursive: true })
+  const client = fakeClient({
+    async view() { return { ok: true, data: { cid: 1, duration: 4, title: '点名看' } } },
+    async playurl() { return { ok: true, data: { url: src, duration: 4 } } },
+  })
+
+  const r = await grabFrames({ bvid: BVID, root, client, ffmpeg: ff, at: [1, 2.5] })
+  assert.equal(r.ok, true, `应成功，实际：${r.why}`)
+  assert.equal(r.shots, 2, '只取她点名的两个时刻')
+  assert.deepEqual(r.times, [1, 2.5], '要把实际取的时刻回给她')
 })
 
 test('grabFrames：拼图失败时不把 ffmpeg 的报错当成图落盘', async (t) => {

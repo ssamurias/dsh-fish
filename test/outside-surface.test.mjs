@@ -70,7 +70,7 @@ test('出门那条会话：fish:tools 段念的是那个工作区的工具，不
 
   // 家里那份先设成白名单版本，模拟生产上 registerToolRestrict 跑过一次。
   registerToolRestrict(fakeCtx(), { herDir, log: () => {} })
-  assert.match(currentToolSurface(), /只有这几样/)
+  assert.match(currentToolSurface(), /现在手边能碰到的是这些/)
 
   const { agent, calls } = sectionsAgent('D:/work/somewhere', {
     visibleNames: ['bash', 'read', 'write', 'growth_commit', 'her_recall'],
@@ -86,9 +86,9 @@ test('出门那条会话：fish:tools 段念的是那个工作区的工具，不
   assert.match(txt, /bash/)
   assert.match(txt, /write/)
   assert.match(txt, /read/)
-  // 绝不能是家里那份「只有这几样」+「那不是我的：别去调」
-  assert.doesNotMatch(txt, /只有这几样/)
-  assert.doesNotMatch(txt, /别去调/)
+  // 绝不能是家里那份「现在手边能碰到的是这些」+「认得出，但不冒充」
+  assert.doesNotMatch(txt, /现在手边能碰到的是这些/)
+  assert.doesNotMatch(txt, /认得出，但不冒充/)
   // 「出来是来干活的」必须说出来
   assert.match(txt, /干活/)
   // 唯一留下的禁令：不许伸手回自己屋子
@@ -111,7 +111,7 @@ test('在家里：仍然念家里那份白名单（收窄真的在下）', () =>
   const { agent, calls } = sectionsAgent(herDir, { visibleNames: ['growth_commit'] })
   attachIdentity(agent, root, { herDir })
   const txt = calls.find((c) => c.name === TOOLS_SECTION).text()
-  assert.match(txt, /只有这几样/, '家里就该说清「只有这几样」')
+  assert.match(txt, /现在手边能碰到的是这些/, '家里就该说清眼下这份家当')
   assert.doesNotMatch(txt, /出来就是来干活的/)
 })
 

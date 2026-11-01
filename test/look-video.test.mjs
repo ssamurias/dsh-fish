@@ -19,7 +19,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { lookOnce } from '../lib/look.js'
+import { lookOnce, registerLook } from '../lib/look.js'
 import { absorb } from '../lib/browse.js'
 import { createClient } from '../lib/bili.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
@@ -173,4 +173,61 @@ test('resolveUrl：跟随关了就从正文里抠，抠不到就说不是视频'
   const bad = await c2.resolveUrl('https://b23.tv/xyz')
   assert.equal(bad.ok, false)
   assert.equal(bad.code, 'NOT_VIDEO')
+})
+
+// ---------------------------------------------------------------- issue #16 第二半
+// 2026-11-01（用户 m03454）：「看一眼」也不能谁都能替她写。
+// 以前 bili_look 不查调用者，同机任何工作区加载这个插件都能写一条 looked:——
+// 而看过就是永久判决，按下判决的人不留名字。
+
+function fakeCtx() {
+  const tools = []
+  return { tools: { register: (t) => { tools.push(t); return { dispose() {} } } }, _tools: tools }
+}
+
+const callFrom = (cwd, id = 'session-x') => ({ agent: { session: { id, header: { id, cwd } } } })
+
+test('lookOnce：写下的 looked:/look: 带上是哪条会话让她看的', async () => {
+  await withRoot(async (root) => {
+    const cfg = normalizeConfig({ browse: { topN: 1, deepRead: 0 } })
+    const r = await lookOnce({
+      what: 'video',
+      bvid: 'BV1xx411c7mD',
+      cfg,
+      root,
+      client: fakeClient(),
+      events: [],
+      sessionId: 'session-abc',
+    })
+    assert.equal(r.ok, true, r.note)
+    const { events } = await readEvents(root)
+    const looked = events.filter((e) => String(e.text ?? '').startsWith('looked:'))
+    assert.ok(looked.length >= 1, '看过就要记一条')
+    assert.ok(looked.every((e) => e.sessionId === 'session-abc'), '每条都要记是谁看的')
+    const look = events.filter((e) => String(e.text ?? '').startsWith('look:'))
+    assert.ok(look.length >= 1 && look.every((e) => e.sessionId === 'session-abc'))
+  })
+})
+
+test('bili_look：不在这个家里的会话调不动它（不写事件、明说原因）', async () => {
+  await withRoot(async (root) => {
+    const ctx = fakeCtx()
+    registerLook(ctx, { root, client: fakeClient(), tenant: { herDir: join(root, 'her'), tenant: { ok: true } } })
+    const out = await ctx._tools[0].execute({ what: 'video', bvid: 'BV1xx411c7mD' }, callFrom(tmpdir()))
+    assert.equal(out.ok, false)
+    assert.match(out.note, /另一个家|没有落盘/, '要给她一句人话，不能静默')
+    const { events } = await readEvents(root)
+    assert.equal(events.filter((e) => String(e.text ?? '').startsWith('looked:')).length, 0)
+  })
+})
+
+test('bili_look：她自己那条会话（cwd 在这个家里）能正常看', async () => {
+  await withRoot(async (root) => {
+    const ctx = fakeCtx()
+    registerLook(ctx, { root, client: fakeClient(), tenant: { herDir: join(root, 'her'), tenant: { ok: true } } })
+    const out = await ctx._tools[0].execute({ what: 'video', bvid: 'BV1xx411c7mD' }, callFrom(join(root, 'her'), 'session-her'))
+    assert.equal(out.ok, true, out.note)
+    const { events } = await readEvents(root)
+    assert.ok(events.some((e) => String(e.text ?? '').startsWith('looked:') && e.sessionId === 'session-her'))
+  })
 })

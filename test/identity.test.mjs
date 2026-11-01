@@ -20,16 +20,20 @@ import fs from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
 import {
+  HOST_PERSONA_SECTION,
   IDENTITY_ORDER,
   IDENTITY_SECTION,
   TOOLS_ORDER,
   TOOLS_SECTION,
   WAKE_ORDER,
   WAKE_SECTION,
+  attachAssembleFix,
   attachIdentity,
   clearWakeSection,
   identityText,
+  mountedCount,
   registerIdentity,
+  reorderForHer,
   resetIdentityCache,
   setWakeSection,
 } from '../lib/identity.js'
@@ -174,4 +178,144 @@ test('say.js 不再把身份/工具说明塞进 user 消息（否则用户能在
   assert.ok(!say.includes('TOOL_BRIEF'), '工具说明由 system prompt 提供')
   assert.ok(!say.includes('personaLine'), '身份由 system prompt 提供')
   assert.ok(say.includes("const content = ['## 这次', '', ...parts]"))
+})
+
+// ---------------------------------------------------------------------------
+// 0.8.5（用户 m01579 拍板 B 案）：宿主的 "You are a coding agent…" 排在
+// 她的身份段前面七千多字，她先认下那句空话。改部署配置会影响所有 agent，
+// 所以只在她那条会话的组装链上整改：摘掉那一段、把身份段提到最前。
+// ---------------------------------------------------------------------------
+
+test('reorderForHer：摘掉宿主的 coding agent 段，身份段提到 harness:identity 之后', () => {
+  const assembly = {
+    sections: [
+      { name: 'harness:identity', order: -1000, text: 'You are an AI agent powered by DeepSeek Harness.' },
+      { name: HOST_PERSONA_SECTION, order: 0, text: 'You are a coding agent powered by the model.' },
+      { name: 'tool-bash', order: 1000, text: 'ops_bash 说明' },
+      { name: 'fish:tools', order: TOOLS_ORDER, text: '手边有什么' },
+      { name: IDENTITY_SECTION, order: IDENTITY_ORDER, text: '## 你是谁' },
+      { name: 'deliverable-file-references', order: 9000, text: '文件引用' },
+    ],
+  }
+  const out = reorderForHer(assembly)
+  const names = out.sections.map((s) => s.name)
+  assert.deepEqual(names, [
+    'harness:identity',
+    IDENTITY_SECTION,
+    'tool-bash',
+    'fish:tools',
+    'deliverable-file-references',
+  ])
+  // 那句 coding agent 必须消失
+  assert.ok(!out.sections.some((s) => s.name === HOST_PERSONA_SECTION))
+  assert.ok(!JSON.stringify(out.sections).includes('You are a coding agent'))
+  // 别的段一个不少，顺序也照旧（只是身份段被抽走了）
+  assert.equal(out.sections.length, 5)
+})
+
+test('reorderForHer：宿主的 harness:identity 不见了，身份段就排最前', () => {
+  const out = reorderForHer({
+    sections: [
+      { name: HOST_PERSONA_SECTION, order: 0, text: 'coding agent' },
+      { name: 'tool-read', order: 1100, text: 'read' },
+      { name: IDENTITY_SECTION, order: IDENTITY_ORDER, text: '## 你是谁' },
+    ],
+  })
+  assert.deepEqual(out.sections.map((s) => s.name), [IDENTITY_SECTION, 'tool-read'])
+})
+
+test('reorderForHer：没有她的身份段时只摘不走样（不抛、不乱排）', () => {
+  const out = reorderForHer({
+    sections: [
+      { name: 'harness:identity', order: -1000, text: 'h' },
+      { name: HOST_PERSONA_SECTION, order: 0, text: 'coding agent' },
+      { name: 'tool-bash', order: 1000, text: 'b' },
+    ],
+  })
+  assert.deepEqual(out.sections.map((s) => s.name), ['harness:identity', 'tool-bash'])
+})
+
+test('reorderForHer：拿到空/坏数据原样返回，不抛', () => {
+  assert.equal(reorderForHer(null), null)
+  assert.equal(reorderForHer(undefined), undefined)
+  const noSections = { variables: {} }
+  assert.equal(reorderForHer(noSections), noSections)
+  assert.equal(reorderForHer({ sections: 'x' }).sections, 'x')
+})
+
+test('attachAssembleFix：挂在 agent.ctx 上（不是全局），拿到 next() 的结果再整改', async () => {
+  let handler = null
+  let opts = null
+  const agent = {
+    ctx: {
+      on: (evt, fn, o) => {
+        assert.equal(evt, 'system-prompt/assemble')
+        handler = fn
+        opts = o
+        return () => {}
+      },
+    },
+  }
+  const off = attachAssembleFix(agent)
+  assert.equal(typeof off, 'function', '必须返回卸载函数，回家那一刻要能拆')
+  assert.equal(opts?.prepend, true, '排最外层先跑：别的插件加的段也一起整理')
+
+  // 模拟宿主：先跑我们的 handler，它内部 next() 拿到下层组装结果
+  const host = {
+    sections: [
+      { name: 'harness:identity', order: -1000, text: 'h' },
+      { name: HOST_PERSONA_SECTION, order: 0, text: 'You are a coding agent' },
+      { name: IDENTITY_SECTION, order: IDENTITY_ORDER, text: '## 你是谁' },
+    ],
+  }
+  const out = await handler({}, {}, async () => host)
+  assert.deepEqual(out.sections.map((s) => s.name), ['harness:identity', IDENTITY_SECTION])
+})
+
+test('attachAssembleFix：老宿主没有 ctx.on 时返回 undefined，不抛', () => {
+  assert.equal(attachAssembleFix({ ctx: {} }), undefined)
+  assert.equal(attachAssembleFix({}), undefined)
+  assert.equal(attachAssembleFix(undefined), undefined)
+  // ctx.on 自己抛也不能把挂身份这件事带塌
+  assert.equal(attachAssembleFix({ ctx: { on: () => { throw new Error('unsupported') } } }), undefined)
+})
+
+test('attachIdentity 顺手挂上组装钩子，且拆卸时一起拆', () => {
+  resetIdentityCache()
+  clearWakeSection()
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  fs.writeFileSync(selfDocPath(root), '我是她', 'utf8')
+
+  const calls = []
+  const hooks = []
+  const agent = {
+    ctx: {
+      systemPrompt: { section: (o) => { calls.push(o); return () => {} } },
+      on: (evt, fn, o) => { hooks.push({ evt, fn, o }); return () => {} },
+    },
+  }
+  const r = attachIdentity(agent, root)
+  assert.equal(r.ok, true)
+  assert.equal(calls.length, 3, 'assemble 钩子不是 system prompt 的段，不许占段位')
+  assert.equal(hooks.length, 1)
+  assert.equal(hooks[0].evt, 'system-prompt/assemble')
+  assert.equal(hooks[0].o?.prepend, true)
+  // mountedCount 只数段与守卫；钩子单独记，但回家时必须一起拆
+  assert.equal(mountedCount(agent), 3)
+})
+
+test('attachAssembleFix：整改过程炸了也必须原样放行（不能让她一整轮没有系统提示词）', async () => {
+  let handler = null
+  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } } }
+  attachAssembleFix(agent)
+  const frozen = Object.freeze({
+    sections: Object.freeze([
+      { name: 'harness:identity', order: -1000, text: 'h' },
+      { name: IDENTITY_SECTION, order: IDENTITY_ORDER, text: '## 你是谁' },
+    ]),
+  })
+  // sections 是冻结的，reorderForHer 里赋值会抛（严格模式）——钩子必须吞掉并原样返回
+  const out = await handler({}, {}, async () => frozen)
+  assert.equal(out, frozen, '抛了就把宿主原来那份原样交回去')
 })

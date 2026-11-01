@@ -203,6 +203,36 @@ test('seenBvids 只认 looked: 前缀', async () => {
   assert.deepEqual([...seenBvids(events)].sort(), ['BV1', 'BV2'])
 })
 
+// issue #16 第一半（2026-11-01，用户 m03454）：看过不是永久判决。
+test('seenBvids：过了时效的就放回去，别再永久封着', async () => {
+  const now = Date.parse('2026-11-01T12:00:00.000Z')
+  const day = 86400000
+  const events = [
+    { type: 'meta', text: 'looked:BVold', ts: new Date(now - 30 * day).toISOString() },
+    { type: 'meta', text: 'looked:BVnew', ts: new Date(now - 2 * day).toISOString() },
+    { type: 'meta', text: 'looked:BVedge', ts: new Date(now - 6.9 * day).toISOString() },
+  ]
+  assert.deepEqual([...seenBvids(events, { now })].sort(), ['BVedge', 'BVnew'])
+  // days<=0 是老行为（不过期），留给需要它的调用方
+  assert.deepEqual([...seenBvids(events, { now, days: 0 })].sort(), ['BVedge', 'BVnew', 'BVold'])
+  // 没有 ts 的老事件按「还算看过」处理，不能因为查不到时间就把刚看的又端回来
+  assert.deepEqual([...seenBvids([{ type: 'meta', text: 'looked:BVx' }], { now })], ['BVx'])
+})
+
+test('rankVideos：被「看过」摘掉几条要给得出数（stats.hiddenSeen）', () => {
+  const cfg = normalizeConfig({})
+  const list = [
+    { bvid: 'BV1', title: 'a', duration: 300, view: 1000 },
+    { bvid: 'BV2', title: 'b', duration: 300, view: 2000 },
+  ]
+  const stats = {}
+  const out = rankVideos(list, cfg, { seen: new Set(['BV1', 'BV2']), limit: 5, stats })
+  assert.deepEqual(out, [])
+  assert.equal(stats.hiddenSeen, 2)
+  // 不传 stats 时行为不变（返回值形状没变）
+  assert.deepEqual(rankVideos(list, cfg, { seen: new Set(['BV1']), limit: 5 }).map((v) => v.bvid), ['BV2'])
+})
+
 // ---------------------------------------------------------------- 一轮完整浏览
 
 test('gather：成功一轮 → 有素材、有 picks、记了 looked 与 browse', async () => {
