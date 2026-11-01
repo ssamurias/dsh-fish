@@ -148,6 +148,28 @@ test('saveOwner 传空 cookie 是「清除」，不是「没传」', async () =>
   }
 })
 
+// 2026-11-01：设置页多了「清除登录」按钮。只清 cookie 却把 account 留着，界面会显示
+// "已存，登录账号：小鱼"——一把已经不存在的钥匙配一个还在的名字，比不显示更糟。
+test('清除登录：cookie 和「登录的是谁」一起清，领养人那两格不动', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-ow4-'))
+  try {
+    await saveOwner({ mid: '999', nickname: '领养人', cookie: 'SESSDATA=s1; bili_jct=j1' }, root)
+    await saveAccount({ mid: 42, uname: '小鱼' }, root)
+    assert.equal((await readOwner(root)).account.name, '小鱼')
+
+    const r = await saveOwner({ cookie: '' }, root)
+    assert.equal(r.ok, true)
+    const ow = await readOwner(root)
+    assert.equal(ow.cookie, undefined)
+    assert.equal(ow.account, undefined, '登录账号也要清掉')
+    // 领养人是用户手填的，和「拿哪份 cookie 登录」是两件事
+    assert.equal(ow.mid, '999')
+    assert.equal(ow.nickname, '领养人')
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 /** 极简假 ctx：只提供 observe 需要的服务 */
 function fakeCtx() {
   const routes = []
