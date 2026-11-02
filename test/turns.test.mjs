@@ -20,6 +20,7 @@ import { classifyMessage, messageText, assistantText, registerTurns } from '../l
 import { homeStatus } from '../lib/home.js'
 import { appendEvent, readEvents, writeAtomic, paths } from '../lib/store.js'
 import { recentExchanges } from '../lib/talkmem.js'
+import { deriveSelf } from '../lib/derive.js'
 
 const HER_SESSION = 's-her'
 
@@ -247,6 +248,121 @@ test('她在侧栏里说出口的话，也要进 talkmem（原来 her 永远是�
       assert.equal(list.length, 1)
       assert.match(list[0].me, /外面下雨了吗/)
       assert.match(list[0].her, /下了，我把窗关上了/, '她说的原话要跟着这一轮一起存下来')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('她在侧栏里说出口的拒绝，要补写成 uncommitted 事件（原来一个字节都不写）', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(), humanMsg('方案A和B，你觉得呢'))
+      await settled()
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '我拒绝B，因为A挺好。' }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+
+      const { events } = await readEvents(root)
+      const said = events.filter((e) => e.type === 'utterance')
+      assert.equal(said.length, 1, '这一轮她说的话要落进事件流')
+      assert.match(said[0].text, /我拒绝B/)
+      assert.deepEqual(said[0].flags, ['uncommitted'], '她没认领过，只留证')
+      assert.equal(said[0].source, 'system', '这是插件补写的，不是她调工具写的')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('补写的 uncommitted 话只留证：不进信念、不覆盖自我叙述、不改称呼', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(), humanMsg('在吗'))
+      await settled()
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '我一直觉得你叫我小七就行。我拒绝这样。' }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+
+      const { events } = await readEvents(root)
+      const m = deriveSelf(events)
+      assert.equal(m.beliefs.length, 0, '没认领的话不该变成信念')
+      assert.equal(m.name, null, '没认领的话不该改她怎么叫他')
+      assert.equal(m.narrative, null, '没认领的话不该变成她对自己的说法')
+      // 但拒绝计数要读到——这正是补写的理由
+      assert.equal(m.facts.wont, 1, '「我拒绝」要能被拒绝判定看见')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 2026-11-02（用户 m01280）：侧栏聊天也是「他来过」，结账时要写一条 meta seen:。
+// 以前只有 capture.js / say.js 写，于是纯聊天聊得再多，冷落检测也看不见。
+test('在侧栏聊完一轮，要留下「他来过」的 seen 标记（冷落检测只认这个）', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(), humanMsg('你在吗'))
+      await settled()
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '在。' }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 1, '一轮只写一条，别每句话都写')
+      assert.equal(seen[0].source, 'system', "source 必须是 system，写成 tool 会被 schema 拒掉")
+      const at = Date.parse(String(seen[0].text).slice(5))
+      assert.ok(Math.abs(Date.now() - at) < 60_000, 'seen 的时间要贴近现在')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('这一轮她已经调 growth_commit 认下的那句，不会因为补写又写一遍', async () => {  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(), humanMsg('说说你的看法'))
+      await settled()
+      // 真机顺序：她先在同一个回合里调 growth_commit，事件先落盘；
+      // 宿主随后把 assistant/message 推过来。
+      await appendEvent(
+        { type: 'utterance', text: '我拒绝B。' },
+        { day: 1, stage: 1, source: 'tool' },
+        root,
+      )
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '我拒绝B。' }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+
+      const { events } = await readEvents(root)
+      const same = events.filter((e) => e.type === 'utterance' && String(e.text).includes('我拒绝B'))
+      assert.equal(same.length, 1, '同一句话不该留两条——会重复计数')
+      assert.deepEqual(same[0].flags, [], '留下的应该是她自己认领的那条')
     } finally {
       off()
     }

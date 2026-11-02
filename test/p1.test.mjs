@@ -270,3 +270,51 @@ test('lastSeenAt 取最大的 seen 时刻', () => {
   const at = lastSeenAt(evs)
   assert.equal(at, Date.parse(new Date(now - 1 * DAY).toISOString()))
 })
+
+// 2026-11-02（用户 m01280）：侧栏聊天那条路不写 seen:，冷落检测就看不见他来过。
+// 两处补上：turns.js 结账时写 seen:（主证据），lastSeenAt 认 heard（兜底）。
+
+test('lastSeenAt 也认 heard —— 她真说过话就是一种「他来过」', () => {
+  const now = Date.now()
+  const heard = { id: 'ev_h', type: 'heard', text: '他说过的某一句', ts: new Date(now - 1 * DAY).toISOString() }
+  const evs = [seenEvent(now - 5 * DAY), heard]
+  assert.equal(lastSeenAt(evs), Date.parse(heard.ts))
+})
+
+test('lastSeenAt 认 heard 但**不**认 utterance —— 唤醒里写的 utterance 不算他来过', () => {
+  const now = Date.now()
+  const evs = [
+    seenEvent(now - 5 * DAY),
+    { id: 'ev_u', type: 'utterance', text: '醒了，外面在下雨。', ts: new Date(now - 1000).toISOString() },
+  ]
+  assert.equal(lastSeenAt(evs), Date.parse(new Date(now - 5 * DAY).toISOString()), '只有 seen 那一条算数')
+})
+
+test('他真回来过时，同一份事件不再判冷落（heard 兜住旧档）', () => {
+  const now = Date.now()
+  const abs = { id: 'ev_a', type: 'absence', text: '他有 5 天没出现。', days: 5, ts: new Date(now - 4 * DAY).toISOString() }
+  const evs = [seenEvent(now - 10 * DAY), abs, { id: 'ev_h', type: 'heard', text: '嗯。', ts: new Date(now - 1 * DAY).toISOString() }]
+  assert.equal(assess(evs, now, { afterDays: 2 }).reason, 'returned')
+})
+
+test('absence-reject: 驳回掉的 absence 不再进派生（历史误记只靠追加排除）', () => {
+  const now = Date.now()
+  const seed = { id: 'ev_01J0000000000000000000000S', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1 }
+  const abs = {
+    id: 'ev_01M6ECRVNAR2F6ACX2FRV07YJW',
+    type: 'absence',
+    text: '那个人有 2 天没出现，也没说去哪。',
+    days: 2,
+    day: 8,
+    stage: 1,
+    ts: new Date(now - 1 * DAY).toISOString(),
+    refs: [], verdict: null, confidence: 0.5, flags: [], source: 'system',
+  }
+  const reject = { id: 'ev_r', type: 'meta', text: `absence-reject:${abs.id}`, ts: new Date(now - 1 * DAY).toISOString(), day: 8, stage: 1 }
+
+  assert.equal(deriveSelf([seed, abs]).absenceDays, 2, '没驳回时要算进去')
+
+  const m = deriveSelf([seed, abs, reject])
+  assert.equal(m.absenceDays, 0, '驳回之后不该再是「冷落 2 天」')
+  assert.equal(m.lastAbsence, null)
+})

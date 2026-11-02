@@ -441,8 +441,9 @@ test('规则卡：没有待裁决的申请时不渲染空态行，有申请才�
   }
 
   // 1) 有 pending 通道但没有申请：整行不渲染，也不该出现裁决按钮
-  //    rules 是组件里第 13 个 useState（0 基下标 12；0.7.6 请求事件插了 asks/askMsg，0.8.x 梦境实验又插了 dreams），数据来自 /rules，不在 /state 里。
-  let react = fakeReact({ 0: stateWith(), 12: idle })
+  //    rules 是组件里第 12 个 useState（0 基下标 11；0.7.6 请求事件插了 asks/askMsg，0.8.x 梦境实验又插了 dreams）。
+  //    2026-11-02（m00335）删掉了没人渲染的 `events` 状态，索引整体前移一位：12 → 11。
+  let react = fakeReact({ 0: stateWith(), 11: idle })
   let loaded = await loadClient({ react })
   react.resetCursor()
   let txt = textOf(loaded.exports.FishSection()).join(' ')
@@ -451,7 +452,7 @@ test('规则卡：没有待裁决的申请时不渲染空态行，有申请才�
   assert.ok(!txt.includes('这次不行'), '没有申请就不该有裁决按钮')
 
   // 2) 有申请：卡片 + 两个按钮都要出来
-  react = fakeReact({ 0: stateWith(), 12: { ...idle, pending: { why: '想自己决定要不要出门。' } } })
+  react = fakeReact({ 0: stateWith(), 11: { ...idle, pending: { why: '想自己决定要不要出门。' } } })
   loaded = await loadClient({ react })
   react.resetCursor()
   txt = textOf(loaded.exports.FishSection()).join(' ')
@@ -459,7 +460,7 @@ test('规则卡：没有待裁决的申请时不渲染空态行，有申请才�
   assert.ok(txt.includes('可以') && txt.includes('这次不行'), '两个裁决按钮都要在')
 
   // 3) 通道关着：并进卡片说明行，不单独占一行
-  react = fakeReact({ 0: stateWith(), 12: { ...idle, offersOn: false } })
+  react = fakeReact({ 0: stateWith(), 11: { ...idle, offersOn: false } })
   loaded = await loadClient({ react })
   react.resetCursor()
   txt = textOf(loaded.exports.FishSection()).join(' ')

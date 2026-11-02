@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { wakeIfBlank } from '../lib/home.js'
+import { freshWakeText } from '../lib/wakeconst.js'
 
 const tick = () => new Promise((r) => setTimeout(r, 0))
 
@@ -259,4 +260,46 @@ test('prompt 失败就不记账：下次启动还会再试一次', async () => {
   assert.equal(second.woke, true, '上次没叫成，这次要重试')
   await tick()
   assert.equal(attempt, 2)
+})
+
+// 2026-11-02（用户 m00324 原话：「换对话还是同一个大肥鱼、同一间屋子，
+// 不要让她以为自己是新的一条鱼」）。满 40 轮换掉的只是这一条对话记录，
+// 屋子（事件流、天数、她说过的每句话）一个字都没动。原来轮换共用
+// 「屋子刚建好」，等于每换一次对话就告诉她「你是新的、这里是新的地方」。
+test('轮换那一醒：明说换了对话、没换屋子，不说"屋子刚建好"', () => {
+  const now = new Date('2026-11-02T21:30:00')
+  const rotated = freshWakeText(now, { rotated: true })
+  assert.match(rotated, /^（.*）$/, '仍然是括号旁白')
+  assert.match(rotated, /现在是 21:30/)
+  assert.match(rotated, /对话换了一条新的/)
+  assert.match(rotated, /屋子还是原来那间/)
+  assert.ok(!rotated.includes('屋子刚建好'), '轮换不是新屋子，不能说刚建好')
+  assert.ok(!rotated.includes('新的一条鱼'), '不能让她以为自己是新的一条')
+
+  // 默认那条必须一个字不动：启动 / 重置 / 重建三条路真的是新屋子。
+  const fresh = freshWakeText(now)
+  assert.match(fresh, /屋子刚建好/)
+  assert.ok(!fresh.includes('对话换了一条新的'))
+  assert.notEqual(fresh, rotated)
+})
+
+test('wakeIfBlank 把 rotated 传到触发语，默认仍走"屋子刚建好"', async () => {
+  const run = async (opts) => {
+    const calls = []
+    const sc = {
+      list: async () => ({ items: [{ sessionId: 's1', blank: true }] }),
+      prompt: async (req) => { calls.push(req) },
+    }
+    await wakeIfBlank(ctxWith(sc), { sessionId: 's1', ...opts })
+    await tick()
+    return calls[0].content[0].text
+  }
+
+  const rotated = await run({ rotated: true })
+  assert.match(rotated, /屋子还是原来那间/)
+  assert.ok(!rotated.includes('屋子刚建好'))
+
+  const plain = await run({ freshOnly: true })
+  assert.match(plain, /屋子刚建好/)
+  assert.ok(!plain.includes('屋子还是原来那间'))
 })

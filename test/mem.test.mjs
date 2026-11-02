@@ -18,7 +18,7 @@ import { personaLine, assemble, foldOlderBeliefs, HARD_BANS, sleepPrompt } from 
 import { renderSelfDoc } from '../lib/selfdoc.js'
 import { addExchange, recentExchanges, renderCarry, TALK_KEEP } from '../lib/talkmem.js'
 import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS } from '../lib/home.js'
-import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT } from '../lib/recall.js'
+import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET } from '../lib/recall.js'
 import { normalizeConfig, DEFAULTS } from '../lib/settings.js'
 
 const DAY = 86_400_000
@@ -268,6 +268,33 @@ test('回忆：超长原文被截断，不给她整段历史', () => {
   const { rows } = searchEvents(events, '评论', { now })
   assert.ok(rows[0].text.length <= 200)
   assert.ok(rows[0].text.endsWith('…'))
+})
+
+test('回忆 brief 档：只报开头，但条数与 id 一个不少（2026-11-02 m00335）', () => {
+  const now = Date.now()
+  const long = '评论 ' + '这是一段很长的原文'.repeat(40)
+  const events = Array.from({ length: 6 }, (_, i) => ({
+    id: `b${i}`, type: 'utterance', ts: new Date(now - i * DAY).toISOString(), text: long,
+  }))
+
+  // 不传 brief：还是 200 字那段老口径
+  const full = searchEvents(events, '评论', { now })
+  assert.ok(full.rows.every((r) => r.text.length <= 200))
+  assert.ok(full.rows[0].text.length > 40)
+
+  // 传 brief：截到 40 字以内，条数不变
+  const brief = searchEvents(events, '评论', { now, snippet: RECALL_BRIEF_SNIPPET })
+  assert.equal(brief.rows.length, full.rows.length)
+  assert.ok(brief.rows.every((r) => r.text.length <= RECALL_BRIEF_SNIPPET), '每条都不超过 40 字')
+  assert.ok(brief.rows[0].text.endsWith('…'))
+
+  // 渲染层也要认这个档位：开头那句明说只报了开头，且 id 保留（她还得靠它去 revise）
+  const txt = renderRecall(brief.rows, { brief: true })
+  assert.ok(txt.startsWith('有这些（只报了开头'))
+  assert.ok(txt.includes('（b0）'), 'brief 也要给 id，否则她翻到了也用不了')
+  assert.ok(!txt.includes('你翻到的：'))
+  // 老口径不受影响
+  assert.ok(renderRecall(full.rows).startsWith('你翻到的：'))
 })
 
 // ---------------------------------------------------------------- 配置

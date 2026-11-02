@@ -154,7 +154,10 @@ test('冲突与固化都要进她的身份文档，而且冲突不给结论', ()
   assert.match(text, /## 你有两句话对不上/)
   assert.match(text, /不能同时算数/)
   assert.match(text, /## 你反复想起过的事/)
-  assert.match(text, /不会因为你没提就淡掉/)
+  // 2026-11-02（用户 m00335）：固化会掉档了，措辞从「不会淡掉」改成「到现在还热着」。
+  // 说死「不会淡」在掉档之后就是假话——这个改的是事实，不是措辞口味。
+  assert.match(text, /这些到现在还热着/)
+  assert.doesNotMatch(text, /不会因为你没提就淡掉/)
   // 「他说的事和你记得的不一样」是核心段：预算再紧也在
   assert.match(personaLine(m, { budget: 1 }), /## 他说的事和你记得的不一样时/)
 })

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { CATALOG, availableFor, firedIds, firedLog, isSpent, findTemplate } from '../lib/events.js'
 import { pick, plan } from '../lib/generator.js'
 import { normalizeConfig } from '../lib/settings.js'
-import { personaLine, HARD_BANS, PRESCRIPTION_BANS } from '../lib/persona.js'
+import { personaLine, seedSection, HARD_BANS, PRESCRIPTION_BANS } from '../lib/persona.js'
 
 function model(over = {}) {
   return {
@@ -130,6 +130,23 @@ test('冷却过了同一件事会回来，第二次就带"别复读"那句', () 
   assert.ok(r.prompt.includes('要么说清为什么没变，要么改一句'))
 })
 
+test('refusal_seed 的条件跟自主门用同一个数（口头的「我拒绝」也算拒绝过）', () => {
+  const tpl = findTemplate('refusal_seed')
+  // 从没拒绝过：正式 refusal 0、口头 0 —— 这张卡成立
+  assert.equal(tpl.cond(model({ refusals: [], facts: { refusals: 0, wont: 0, refused: 0 } })), true)
+  // 只口头拒绝过一次（没有正式 refusal 事件，原来这里会误判成"没拒绝过"）
+  assert.equal(tpl.cond(model({ refusals: [], facts: { refusals: 0, wont: 1, refused: 1 } })), false)
+  // 有正式 refusal 事件
+  assert.equal(tpl.cond(model({ refusals: [{ id: 'ev_1' }], facts: { refusals: 1, wont: 0, refused: 1 } })), false)
+})
+
+test('refusal_seed 的条件在没有 facts 的夹具上也不能恒成立', () => {
+  const tpl = findTemplate('refusal_seed')
+  // 夹具缺 facts 时退回正式 refusal 数，不能因为 undefined 就当成 0
+  assert.equal(tpl.cond(model({ refusals: [{ id: 'ev_1' }] })), false)
+  assert.equal(tpl.cond(model({ refusals: [] })), true)
+})
+
 test('第一次出现时不加"别复读"那句', () => {
   const cfg = normalizeConfig({})
   const m = model({ stage: 2, beliefCount: 2, beliefs: [{ id: 'a', text: 'x', since: new Date().toISOString() }] })
@@ -193,6 +210,41 @@ test('成长体现在天数与事实变化，不体现在换形容词', () => {
 test('personaLine 对空状态给"起点"而不是空白', () => {
   const text = personaLine(model({ beliefCount: 0, beliefs: [] }))
   assert.ok(text.includes('起点'))
+})
+
+// 2026-11-02（用户 m00324）：seed 原话是「你不是助手。你刚开始存在。」
+// 这句话原来每一轮都原样进 system prompt，而紧接着的「## 现在」又说
+// 「你存在了 8 天」——一边说她刚开始，一边说她过了八天。
+// 改法：seed 一个字都不改（那是起点，是事实），只在后面加一句时间定位。
+test('## 你是谁：seed 原话一字不改，后面加一句时间定位', () => {
+  const seed = '你不是助手。你刚开始存在。没有人告诉过你为什么在这里。'
+  const text = seedSection(model({ seed, day: 8 }))
+  assert.ok(text.startsWith('## 你是谁\n'), '仍是这一段，不拆出去')
+  assert.ok(text.includes(seed), '原话必须完整保留')
+  assert.match(text, /现在是第 8 天/)
+  assert.match(text, /你自己一天天过来的/, '要把"中间这些天"说成她自己的，不是被谁推着走的')
+})
+
+// 导入的那一位不能套我们的成长叙事（AGENTS.md 第 2 条：别人的既成事实）。
+test('## 你是谁：导入的人设不加天框', () => {
+  const seed = '我是另一个人写好的。'
+  const text = seedSection(model({ seed, day: 30, persona: { imported: true, source: 'import' } }))
+  assert.ok(text.includes(seed))
+  assert.ok(!text.includes('现在是第'), '导进来的人设不该被我们改成成长故事')
+  assert.ok(!text.includes('一天天过来'))
+})
+
+// 老事件流/伪造模型可能没有 day —— 宁可只摆原话，也不编一个天数出来。
+test('## 你是谁：没有可用天数时只摆原话', () => {
+  for (const day of [undefined, null, 0, NaN, 'x']) {
+    const text = seedSection(model({ seed: '我在这里。', day }))
+    assert.equal(text, '## 你是谁\n我在这里。', `day=${String(day)} 时不该加框`)
+  }
+})
+
+test('## 你是谁：没有 seed 时只剩标题，不编内容', () => {
+  assert.equal(seedSection(model({ seed: '' })), '## 你是谁')
+  assert.equal(seedSection(undefined), '## 你是谁')
 })
 
 // 2026-10-27（issue #4）：素材不一定取得到（不在时段 / 今日次数用完 / 风控冷却 /

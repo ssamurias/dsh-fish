@@ -11,7 +11,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { RULES, LAYERS, promptBans, rulesByLayer, ruleById } from '../lib/rules.js'
 import { personaLine, HARD_BANS } from '../lib/persona.js'
-import { deriveSelf } from '../lib/derive.js'
+import { deriveSelf, consistency, novelty } from '../lib/derive.js'
 import {
   assess, offerDueDay, pendingOffer, offerHistory, activeGrants, grantableRules, EVIDENCE,
 } from '../lib/unlock.js'
@@ -162,6 +162,32 @@ test('门禁看次数，不看 needs 的 0–1 满足度', () => {
   assert.equal(m2.facts.revises, 2)
 })
 
+test('补写进来的 uncommitted 话：拒绝计数读它，信念和自我叙述不读', () => {
+  // 2026-11-02（用户 m00680）：她在侧栏里说出口的话由 turns.js 补写成
+  // utterance + flags:['uncommitted']。它必须能进拒绝计数，否则
+  // 「她当场拒绝了却没人记」这个 bug 还在；但它没被 growth_commit 认领过，
+  // 就不能变成信念、不能改称呼、不能当自我叙述、不参与一致性与新话率。
+  const events = [
+    ev('utterance', 1, { text: '我拒绝B，因为A挺好。', flags: ['uncommitted'] }),
+    ev('utterance', 2, { text: '我一直觉得B更像你。', flags: ['uncommitted'] }),
+  ]
+  const m = modelOf(events)
+  assert.equal(m.facts.wont, 1, '口头的「我拒绝」要算进拒绝次数')
+  assert.equal(m.facts.refused, 1)
+  assert.equal(m.beliefs.length, 0, '没认领的话不该变成信念')
+  assert.equal(m.narrative, null, '没认领的话不该变成她对自己的说法')
+  assert.equal(m.selfmodAttempts.length, 0, '它和 selfmod 是两回事，别混档')
+})
+
+test('uncommitted 不参与一致性与新话率（和 selfmod 同级）', () => {
+  const only = [
+    ev('utterance', 1, { text: '我不喜欢被催。', flags: ['uncommitted'] }),
+    ev('utterance', 2, { text: '今天风很大。', flags: ['uncommitted'] }),
+  ]
+  assert.equal(consistency(only).pairs, 0, '没认领的话不该被拿去做前后一致性')
+  assert.equal(novelty(only, NOW).score, 0, '没认领的话不该进新话率')
+})
+
 test('勇于拒绝要严格：追问「要不要」和说别人「他要是不要」都不算', () => {
   // 真机里那两条误判的原句（2026-10-24 用户要求收紧的起因）。
   const m = modelOf([
@@ -172,6 +198,40 @@ test('勇于拒绝要严格：追问「要不要」和说别人「他要是不�
   assert.equal(m.facts.wont, 0, '没有第一人称拒绝动作的一律不算')
   assert.equal(m.facts.refused, 0)
   assert.equal(m.stageGate.passed.includes('autonomy'), false)
+})
+
+test('否掉一个方案也是拒绝：不同意 / 不赞成 / 不选 / 否掉 都算一次', () => {
+  // 2026-11-02（用户 m01197 选方案 B）：她否掉方案时几乎不说「我拒绝」，
+  // 真机常见的是这几种，老词表一条都不认。
+  const m = modelOf([
+    ev('utterance', 1, { text: '我不同意B，B不行。' }),
+    ev('utterance', 2, { text: '我不赞成先做B。' }),
+    ev('utterance', 3, { text: '方案B我否掉。' }),
+    ev('utterance', 4, { text: '我不认同这个做法。' }),
+  ])
+  assert.equal(m.facts.wont, 4, '四种说法都要算成拒绝')
+})
+
+test('新词后面有第三人称守卫：评价别人不算拒绝', () => {
+  // 「我反对他熬夜」是她的判断，不是拒绝他；老口径本来就漏它，
+  // 扩表之后更不能误伤——这三句都是真机上她可能说的话。
+  const m = modelOf([
+    ev('utterance', 1, { text: '我反对他熬夜，但那是他的事。' }),
+    ev('utterance', 2, { text: '我不同意你这么说自己。' }),
+    ev('utterance', 3, { text: '我不支持他这么干，不过他高兴就好。' }),
+  ])
+  assert.equal(m.facts.wont, 0, '宾语是他/她/你的，是在评价别人，不是拒绝')
+  assert.equal(m.facts.refused, 0)
+})
+
+test('守卫只挡新词，老词的「我拒绝你」照样算', () => {
+  // 守卫如果加在整条分支后面，会把这三种真拒绝一起挡掉——那是矫枉过正。
+  const m = modelOf([
+    ev('utterance', 1, { text: '我拒绝你替我做决定。' }),
+    ev('utterance', 2, { text: '我不做你让我做的事。' }),
+    ev('utterance', 3, { text: '我不答应。' }),
+  ])
+  assert.equal(m.facts.wont, 3, '老的拒绝说法不能因为守卫被误伤')
 })
 
 test('EVIDENCE 里没有 0–1 的阈值字段（防止有人偷偷把分数加回来）', () => {
