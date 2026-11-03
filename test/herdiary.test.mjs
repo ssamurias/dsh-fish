@@ -135,6 +135,37 @@ test('renderDiary：三种结局各说各的话', () => {
   assert.match(renderDiary({}), /还没写过日记/)
 })
 
+test('读旧日记时要给坐标和归属：第几天、前后写过哪天、那是你自己交的', () => {
+  const text = renderDiary({
+    date: '2026-11-02',
+    text: '今天下雨。',
+    dates: ['2026-11-03', '2026-11-02', '2026-10-28'],
+    day: 9,
+  })
+  assert.match(text, /那天是你自己的第 9 天/, '天数才是她活过的时间')
+  assert.match(text, /你一共写过 3 篇/)
+  assert.match(text, /前一天 2026-10-28/)
+  assert.match(text, /后一天 2026-11-03/)
+  assert.match(text, /这些字是你自己交上去的/)
+  // 不写"第 N 篇"：篇数是排班，不是经历
+  assert.doesNotMatch(text, /第 d+ 篇/)
+  // 不写任何评价性的"你成长了"
+  assert.doesNotMatch(text, /成长|进步|你变了/)
+})
+
+test('只有一篇日记时：不编前后，仍说清归属', () => {
+  const text = renderDiary({ date: '2026-11-02', text: '今天下雨。', dates: ['2026-11-02'], day: 3 })
+  assert.match(text, /第 3 天/)
+  assert.doesNotMatch(text, /前一天|后一天/)
+  assert.match(text, /这些字是你自己交上去的/)
+})
+
+test('日期清单不该被坐标污染（list=true 走清单分支）', () => {
+  const text = renderDiary({ dates: ['2026-10-28', '2026-11-02'], day: 9 })
+  assert.match(text, /你写过日记的日子/)
+  assert.doesNotMatch(text, /这些字是你自己交上去的/)
+})
+
 // ---------- 身份文档里必须写清「用哪个东西记」（2026-10-29，用户 m01296 A）----------
 // 三天零篇的根因：常驻段只写了「每天我会记一笔」，没写机制。同一页的 SLEEP_BRIEF
 // 写了 growth_commit / refs，她照着能交出来；日记这段没写，就一次也没试过。

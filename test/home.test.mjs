@@ -31,10 +31,13 @@ async function tmpRoot() {
 }
 
 /** 假宿主：只有 workspaceRegistry + sessionController */
-function fakeCtx({ hasRegistry = true, registry = {}, presetReject = false } = {}) {
+function fakeCtx({ hasRegistry = true, registry = {}, presetReject = false, indexLag = false } = {}) {
   const created = []
   const renamed = []
   const sessions = new Map() // wsId -> { id, sessionIds: [], title }
+  // 宿主自己的会话列表。indexLag=true 时模拟「sc.create 已经成功、工作区索引还没跟上」：
+  // 会话在这里有，ws.sessionIds 里没有（0.8.7 用户 m01775 报的那个状态）。
+  const listed = []
 
   const reg = {
     list: () => (registry.list ? registry.list() : [...sessions.values()]),
@@ -55,9 +58,11 @@ function fakeCtx({ hasRegistry = true, registry = {}, presetReject = false } = {
         if (registry.createSession) return registry.createSession({ workspaceId, sessionId, cwd })
         const ws = sessions.get(workspaceId)
         const id = `ses-${created.length}`
-        if (ws) ws.sessionIds.push(id)
+        listed.push(id)
+        if (ws && !indexLag) ws.sessionIds.push(id)
         return { sessionId: id, ...(agentPreset ? { agentPreset } : {}) }
       },
+      list: async () => ({ items: listed.map((id) => ({ sessionId: id })) }),
       rename: async (arg) => { renamed.push(arg) },
     },
     logger: { info() {}, warn() {}, error() {} },
@@ -67,7 +72,7 @@ function fakeCtx({ hasRegistry = true, registry = {}, presetReject = false } = {
       return ctx[key]
     },
   }
-  return { ctx, created, renamed, sessions, reg }
+  return { ctx, created, renamed, sessions, reg, listed }
 }
 
 test('宿主没有 workspaceRegistry：明确返回 ok:false，不假装成功', async () => {
@@ -190,6 +195,31 @@ test('刚建出来的会话：宿主索引还没列出来也先复用（10 分�
     const ses = await ensureTalkSession(ctx, { root, wsId: a.wsId })
     assert.equal(ses.ok, true, ses.why)
     assert.equal(ses.sessionId, a.sessionId, '宽限期内必须复用，不能每条重启都新建一条')
+    assert.equal(ses.reused, true)
+    assert.equal(created.length, 1, '不该多建一条')
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('过了宽限期、工作区索引还是没跟上：去问宿主自己那条列表，认回来（0.8.7）', async () => {
+  // 用户 m01775：换会话后插件用 API 建了一条新会话，工作区索引迟迟不收录，
+  // 于是每一次唤醒都判它「死了」，退回旧会话 —— 人看到的就是「醒一醒还在旧对话里」。
+  // 判活不能只看工作区索引：宿主自己的会话列表才是准的。
+  const root = await tmpRoot()
+  try {
+    const { ctx, sessions, created } = fakeCtx({ indexLag: true })
+    const a = await bootstrapHome(ctx, { root })
+    assert.equal(a.ok, true, a.why)
+
+    // 索引里没有它，而且 createdAt 已经过去很久（宽限期内复用那条路走不到）
+    const ws = sessions.get(a.wsId)
+    ws.sessionIds = []
+    const home = JSON.parse(await readFile(join(root, 'home.json'), 'utf8'))
+    home.createdAt = new Date(Date.now() - 60 * 60_000).toISOString()
+    await writeFile(join(root, 'home.json'), JSON.stringify(home, null, 2))
+
+    const ses = await ensureTalkSession(ctx, { root, wsId: a.wsId })
+    assert.equal(ses.ok, true, ses.why)
+    assert.equal(ses.sessionId, a.sessionId, '宿主列表里有它，就必须认回来，不能新建一条空壳')
     assert.equal(ses.reused, true)
     assert.equal(created.length, 1, '不该多建一条')
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }

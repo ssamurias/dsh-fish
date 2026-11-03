@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { wakeIfBlank } from '../lib/home.js'
+import { wakeIfBlank, verifyWoke } from '../lib/home.js'
 import { freshWakeText } from '../lib/wakeconst.js'
 
 const tick = () => new Promise((r) => setTimeout(r, 0))
@@ -302,4 +302,74 @@ test('wakeIfBlank 把 rotated 传到触发语，默认仍走"屋子刚建好"', 
   const plain = await run({ freshOnly: true })
   assert.match(plain, /屋子刚建好/)
   assert.ok(!plain.includes('屋子还是原来那间'))
+})
+
+// 0.8.7（用户 m01775 的截图第 4、5 条）：叫醒"收下了"不等于"落地了"。
+// 新会话是插件用 API 建的空白会话，要真跑出一轮才会进宿主的会话列表；
+// 没跑成，下一次唤醒就会判它"死的"、退回旧会话，而 wokeFor 已经写上，这声再也不会重试。
+test('force：已经记过「叫过了」，只有 force 才肯再叫一次', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-wake-'))
+  const calls = []
+  const sc = {
+    list: async () => ({ items: [{ sessionId: 's1', blank: true }] }),
+    prompt: async (req) => { calls.push(req) },
+  }
+  assert.equal((await wakeIfBlank(ctxWith(sc), { sessionId: 's1', root })).woke, true)
+  await waitFor(async () => (await readHome(root)).wokeFor === 's1')
+  assert.equal((await readHome(root)).wokeFor, 's1')
+
+  const again = await wakeIfBlank(ctxWith(sc), { sessionId: 's1', root })
+  assert.equal(again.woke, false)
+  assert.match(again.why, /叫过了/)
+  await tick()
+  assert.equal(calls.length, 1, '重复唤醒会白烧一轮，还会多一句没头没尾的话')
+
+  const forced = await wakeIfBlank(ctxWith(sc), { sessionId: 's1', root, force: true })
+  assert.equal(forced.woke, true, 'force 就是给"这声可能没落地"的复核用的')
+  await tick()
+  assert.equal(calls.length, 2)
+})
+
+test('verifyWoke：人家已经在宿主列表里了，就不打扰', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-wake-'))
+  const calls = []
+  const sc = {
+    list: async () => ({ items: [{ sessionId: 's1', blank: false }] }),
+    prompt: async (req) => { calls.push(req) },
+  }
+  const r = await verifyWoke(ctxWith(sc), { root, sessionId: 's1', delayMs: 0 })
+  assert.equal(r.landed, true)
+  assert.equal(r.rewoke, false)
+  await tick()
+  assert.equal(calls.length, 0, '落地了就别再叫')
+})
+
+test('verifyWoke：还是不在列表里 → 强行再叫一次，并在日志里说清楚', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-wake-'))
+  const calls = []
+  const logs = []
+  let listed = false
+  const sc = {
+    // 第一次问：还藏着；再叫之后：出现了
+    list: async () => ({ items: listed ? [{ sessionId: 's1', blank: false }] : [] }),
+    prompt: async (req) => { calls.push(req); listed = true },
+  }
+  // 先假装上一轮已经叫过（wokeFor 写上），制造那个死结
+  await writeFile(join(root, 'home.json'), JSON.stringify({ sessionId: 's1', wokeFor: 's1' }, null, 2))
+
+  const blocked = await wakeIfBlank(ctxWith(sc), { sessionId: 's1', root })
+  assert.equal(blocked.woke, false, '不 force 的话会被自己挡住——这正是要修的东西')
+
+  const r = await verifyWoke(ctxWith(sc), { root, sessionId: 's1', delayMs: 0, log: (m) => logs.push(m) })
+  assert.equal(r.landed, false)
+  assert.equal(r.rewoke, true)
+  await tick()
+  assert.equal(calls.length, 1)
+  assert.ok(logs.some((m) => m.includes('不在宿主列表里')))
+})
+
+test('verifyWoke：没有会话 id 时安静退出，不抛', async () => {
+  const r = await verifyWoke(ctxWith(null), { sessionId: '', delayMs: 0 })
+  assert.equal(r.landed, false)
+  assert.equal(r.rewoke, false)
 })

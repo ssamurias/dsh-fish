@@ -162,12 +162,16 @@ test('index.js：先写身份文本、再注册身份段、最后才建屋子', 
   assert.ok(!/身份文件：宿主每轮会重读它/.test(INDEX), '旧注释里「宿主每轮重读」已经不成立')
 })
 
-test('默认预算 1200 → 1800，且三处（配置、常量、界面）一致', () => {
-  assert.equal(DEFAULTS.memory.docBudget, 1800)
-  assert.equal(SELF_DOC_BUDGET, 1800)
-  assert.ok(CLIENT.includes('useState(1800)'), '界面初始值要跟着改')
-  assert.ok(CLIENT.includes("cfg.memory?.docBudget ?? 1800"))
+test('默认预算 1200 → 1800 → 2400，且三处（配置、常量、界面）一致', () => {
+  // 2026-11-03（用户 m00998）：1800 / 2000 都挤掉「你被打脸过」，2200 反而挤掉
+  // 「你对自己的说法」（更糟），2400 才一段不丢。三个数必须一起动，否则界面里
+  // 显示的和真正用的不是一个数。
+  assert.equal(DEFAULTS.memory.docBudget, 2400)
+  assert.equal(SELF_DOC_BUDGET, 2400)
+  assert.ok(CLIENT.includes('useState(2400)'), '界面初始值要跟着改')
+  assert.ok(CLIENT.includes("cfg.memory?.docBudget ?? 2400"))
   assert.ok(!CLIENT.includes('useState(1200)'), '旧的 1200 不许残留')
+  assert.ok(!CLIENT.includes('useState(1800)'), '旧的 1800 不许残留')
   // 判断区仍固定 3 条：这一条是「像工作记忆」，与预算无关
   assert.equal(BELIEF_SHOWN, 3)
 })

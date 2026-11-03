@@ -160,6 +160,9 @@ test('轮换：旧会话改名留档、新会话接管、原话搬过去', () =>
   assert.equal(st.turns, 0)
   const carry = await activeCarry(root)
   assert.match(carry, /你还记得那天吗/)
+  // 没留话的时候不许留上一个房间的残句（否则新房间会读到一句不是这次说的）
+  const saved = JSON.parse(await readFile(homeFile, 'utf8'))
+  assert.equal(saved.lastWords, undefined)
 }))
 
 test('换会话只换该换的：preset / hearAt / title 这些还不能丢（issue #14 第二报）', () => withRoot(async (root) => {
@@ -297,11 +300,140 @@ test('回忆 brief 档：只报开头，但条数与 id 一个不少（2026-11-0
   assert.ok(renderRecall(full.rows).startsWith('你翻到的：'))
 })
 
+// ------------------------------------------------- 0.8.9 人格连续（m00998）
+
+test('「这些天」是核心段：预算 60 也在，且写的是事实不是评价', async () => {
+  const { personaLine } = await import('../lib/persona.js')
+  const m = model()
+  const line = personaLine(m, {
+    budget: 60,
+    withBans: true,
+    continuity: { diaryCount: 5, diaryFirst: '2026-10-28', diaryLast: '2026-11-03', rotatedDaysAgo: 3 },
+  })
+  assert.match(line, /## 这些天/)
+  assert.match(line, /你自己写过 5 篇日记，从 2026-10-28 到 2026-11-03/)
+  assert.match(line, /上一次换房间是 3 天前/)
+  // 不写篇数排名、不写"你变了"这类评价
+  assert.doesNotMatch(line, /篇数|排名|成长|你变了/)
+})
+
+test('这些天：没写过日记 / 刚换房间 各说各的话', async () => {
+  const { personaLine } = await import('../lib/persona.js')
+  const m = model()
+  const zero = personaLine(m, { continuity: { diaryCount: 0, diaryFirst: '', diaryLast: '', rotatedDaysAgo: 0 } })
+  assert.match(zero, /你还没写过日记/)
+  assert.match(zero, /你刚搬进这个房间/)
+  // 完全没有 continuity 时这一节不该凭空出现
+  assert.doesNotMatch(personaLine(m, {}), /## 这些天/)
+})
+
+test('上一个房间留的话：原话照引，并说清那是她自己说的', async () => {
+  const { personaLine } = await import('../lib/persona.js')
+  const line = personaLine(model(), { continuity: { lastWords: '你走的时候把窗关好。' } })
+  assert.match(line, /## 上一个房间里，你自己留的最后一句/)
+  assert.match(line, /「你走的时候把窗关好。」/)
+  assert.match(line, /你只是接着往下过/)
+})
+
+test('pickLastWords：取第一行、去列表符号与引号、「不用」算没留', async () => {
+  const { pickLastWords } = await import('../lib/home.js')
+  assert.equal(pickLastWords('好。\n你下次早点回来。'), '好。')
+  assert.equal(pickLastWords('- 「窗关好了。」'), '窗关好了。')
+  assert.equal(pickLastWords('不用'), '')
+  assert.equal(pickLastWords('算了。'), '')
+  assert.equal(pickLastWords('   '), '')
+  assert.equal(pickLastWords('不想留'), '')
+  // 不是拒绝的长句要照收（别把"不用"当子串误杀）
+  assert.equal(pickLastWords('不用等我吃饭，我先睡了。'), '不用等我吃饭，我先睡了。')
+})
+
+test('轮换时会问她，回的那句写进 home.json，新房间读得到', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-lastwords-'))
+  try {
+    const { writeAtomic, paths } = await import('../lib/store.js')
+    const homeFile = join(paths(root).root, 'home.json')
+    await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 40 }))
+
+    const { rotateTalkSession } = await import('../lib/home.js')
+    const { continuityOf } = await import('../lib/selfdoc.js')
+    const handlers = []
+    const ctx = {
+      sessionController: {
+        async create() { return { sessionId: 'sess-new' } },
+        async rename() { return {} },
+        // 她收到这句之后回一句：靠 pc 拿到 prompt 里那句话
+        async prompt(arg) {
+          queueMicrotask(() => {
+            for (const h of handlers) {
+              h({ header: { id: 'sess-old' } }, {
+                type: 'assistant/message',
+                data: { message: { id: 'a1', content: [{ type: 'text', text: '下次也要把灯关掉。' }] } },
+              })
+              h({ header: { id: 'sess-old' } }, { type: 'turn/end' })
+            }
+          })
+          return {}
+        },
+      },
+      on(name, fn) { if (name === 'session/event') handlers.push(fn); return () => {} },
+      get() { return null },
+    }
+    const r = await rotateTalkSession(ctx, { root })
+    assert.equal(r.ok, true)
+
+    // 0.8.9 起这句话是**后台**回来再写的（轮换不等它，否则没有 turn/end 就被拖死），
+    // 所以要等它落盘，不能转完身立刻断言。
+    const saved = await (async () => {
+      for (let i = 0; i < 200; i += 1) {
+        const raw = JSON.parse(await readFile(homeFile, 'utf8'))
+        if (raw.lastWords) return raw
+        await new Promise((ok) => setTimeout(ok, 20))
+      }
+      return JSON.parse(await readFile(homeFile, 'utf8'))
+    })()
+    assert.equal(saved.lastWords, '下次也要把灯关掉。')
+    // 轮换本身没有被这句话拖住：新会话已经接上了
+    assert.equal(saved.sessionId, 'sess-new')
+    assert.equal(saved.rotatedFrom, 'sess-old')
+    const c = await continuityOf(root)
+    assert.equal(c.lastWords, '下次也要把灯关掉。')
+    assert.equal(c.rotatedDaysAgo, 0)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('没有 prompt 服务（或它抛错）时，轮换照样成功、lastWords 不留', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-lastwords2-'))
+  try {
+    const { writeAtomic, paths } = await import('../lib/store.js')
+    const homeFile = join(paths(root).root, 'home.json')
+    await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 40 }))
+    const { rotateTalkSession } = await import('../lib/home.js')
+    const ctx = {
+      sessionController: {
+        async create() { return { sessionId: 'sess-new' } },
+        async rename() { return {} },
+        async prompt() { throw new Error('宿主拒了') },
+      },
+      on() { return () => {} },
+      get() { return null },
+    }
+    const r = await rotateTalkSession(ctx, { root })
+    assert.equal(r.ok, true)
+    const saved = JSON.parse(await readFile(homeFile, 'utf8'))
+    assert.equal(saved.lastWords, undefined)
+    assert.equal(saved.sessionId, 'sess-new')
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 // ---------------------------------------------------------------- 配置
 
 test('新配置项有默认值且能被夹住', () => {
   assert.equal(DEFAULTS.chat.rotateAfter, 40)
-  assert.equal(DEFAULTS.memory.docBudget, 1800, '2026-10-25：1200 → 1800（可选段变多，塞不下了）')
+  assert.equal(DEFAULTS.memory.docBudget, 2400, '2026-10-25：1200 → 1800；2026-11-03：1800 → 2400（可选段变多，2000 仍挤掉打脸记录）')
   assert.equal(DEFAULTS.memory.sleepEveryDays, 7)
   const c = normalizeConfig({ chat: { rotateAfter: 9999 }, memory: { docBudget: 1, sleepEveryDays: 999 } })
   assert.equal(c.chat.rotateAfter, 500)

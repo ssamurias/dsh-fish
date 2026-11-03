@@ -153,7 +153,7 @@ async function settled() {
   await new Promise((r) => setTimeout(r, 80))
 }
 
-test('来源判据：真人 / 插件 / 上下文 分得清', () => {
+test('来源判据：真人 / 插件 / 上下文 / 外渠道 分得清', () => {
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'uuid-1', clientTimeZone: 'Asia/Shanghai' } }), 'human')
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'wake-abc' } }), 'plugin')
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'say-abc' } }), 'plugin')
@@ -163,6 +163,27 @@ test('来源判据：真人 / 插件 / 上下文 分得清', () => {
   assert.equal(classifyMessage({}), 'context')
   // 老客户端 / 别的插件灌的：没有时区，分不清就不算——宁可少算一轮
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'uuid-2' } }), 'unknown')
+
+  // 2026-11-03（issue #18）：外渠道注入的消息是他打的字，不能当上下文吞掉。
+  // 宿主的 v4 校验不限制 kind 取值（非空、≠'plugin' 即可），所以只能做机器侧黑名单：
+  // 表里没有的 kind 一律当人，否则每接一个桥就漏一个。
+  assert.equal(classifyMessage({ source: { kind: 'qq' } }), 'human')
+  assert.equal(classifyMessage({ source: { kind: 'telegram' } }), 'human')
+  assert.equal(classifyMessage({ source: { kind: 'some-future-bridge' } }), 'human')
+  // 认得的机器侧 kind 仍要挡掉（schedule 另有 schedule.test.mjs 钉着）
+  assert.equal(classifyMessage({ source: { kind: 'schedule' } }), 'context')
+  assert.equal(classifyMessage({ source: { kind: 'system-prompt' } }), 'context')
+  assert.equal(classifyMessage({ source: { kind: 'tool' } }), 'context')
+  assert.equal(classifyMessage({ source: { kind: 'plugin:whatever' } }), 'context')
+
+  // 2026-11-03（多间房）：群聊里的字不是"他来找过你"。
+  // 桥注入时把场次写在 source.scene 上，判据在 kind 之后立刻认它——
+  // 先于 human，否则群里几百句会把轮数与冷落检测一起冲掉。
+  assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'group' } }), 'group')
+  assert.equal(classifyMessage({ source: { kind: 'user', scene: 'group' } }), 'group')
+  // 私聊与书房仍算人：私聊就是"融合"那个选项，不能因为带 scene 就不算
+  assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'private' } }), 'human')
+  assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'uuid-5', clientTimeZone: 'Asia/Shanghai', scene: 'desk' } }), 'human')
 })
 
 test('正文提取：真机 content 数组、老宿主 data.text 都兜得住', () => {
@@ -447,6 +468,121 @@ test('不是她屋里那个会话，不记', async () => {
       ctx.emit('session/event', session('s-other'), TURN_END)
       await settled()
       assert.equal((await homeStatus(root)).turns, 0)
+      // 2026-11-03（issue #18）：屋子不搬，但「他来过」必须记下来——
+      // 否则外渠道（QQ 桥自己建会话）聊一个月，冷落检测还是落一条「他有 N 天没出现」。
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 1, '别的会话里说话，只留一条「他来过」，不进这一轮的记忆')
+      assert.equal(seen[0].source, 'system')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 2026-11-03（github:ssamurias/dsh-fish#18）：QQ 桥之类外渠道注进来的消息，
+// source.kind 不是 'user'，原来第一道判据就当 context 吞掉——turns 恒为 1、
+// heard 只有一条、冷落检测到点就误记。判据改成机器黑名单后，这条路要真的通。
+test('外渠道（qq）注入的消息：算他来过，但不冒充她屋里那一轮', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      // 桥自己建的会话，不是 home.json 那条
+      const qqMsg = {
+        type: 'user/message',
+        data: {
+          id: 'qq-1',
+          role: 'user',
+          content: [{ type: 'text', text: '在 qq 上跟你说句话' }],
+          source: { kind: 'qq' },
+        },
+      }
+      ctx.emit('session/event', session('s-qq'), qqMsg)
+      ctx.emit('session/event', session('s-qq'), TURN_END)
+      await settled()
+
+      // 屋子不动、轮数不涨：那是她的家事，外渠道不该改
+      assert.equal((await homeStatus(root)).turns, 0, '外渠道不涨轮数——轮数是「她屋里聊了几轮」')
+      assert.equal((await homeStatus(root)).sessionId, HER_SESSION, '别把她的家搬到 qq 那条会话里')
+      assert.deepEqual(await recentExchanges(root), [], '外渠道的话不进 talkmem')
+
+      // 但「他来过」必须记上，否则冷落检测是瞎的
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 1, '外渠道说话也要留一条 seen:，这是冷落检测唯一的证据')
+      assert.equal(seen[0].source, 'system')
+      const at = Date.parse(String(seen[0].text).slice(5))
+      assert.ok(Math.abs(Date.now() - at) < 60_000, 'seen 的时间要贴近现在')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('群聊里的话：既不算他来过，也不进这一轮', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      const groupMsg = {
+        type: 'user/message',
+        data: {
+          id: 'g-1',
+          role: 'user',
+          content: [{ type: 'text', text: '群里有人说了句话' }],
+          // 桥注入时把场次写在 source 上（AGENTS.md §7.2 第 1 条）
+          source: { kind: 'qq', scene: 'group' },
+        },
+      }
+      ctx.emit('session/event', session('s-group'), groupMsg)
+      ctx.emit('session/event', session('s-group'), TURN_END)
+      await settled()
+
+      assert.equal((await homeStatus(root)).turns, 0, '群聊不涨轮数')
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      // 这条是这轮改动里最容易被改坏的一条：群里一天几百句，
+      // 只要有一句写了 seen，他一周不露面面板还显示「今天聊过」，冷落检测就废了。
+      assert.equal(seen.length, 0, '群里的话不算他来找过你——一条 seen 都不能写')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('认识不出来的来源，日志里要留一行（别静默丢消息）', async () => {
+  const root = await tmpRoot()
+  const lines = []
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: (...a) => lines.push(a.join(' ')) })
+    try {
+      const mystery = {
+        type: 'user/message',
+        data: {
+          id: 'm-1',
+          role: 'user',
+          content: [{ type: 'text', text: '不知道谁发的' }],
+          // kind='user' 但没有时区：老客户端 / 别的插件灌的，判不出来
+          source: { kind: 'user', rpcId: 'uuid-9' },
+        },
+      }
+      ctx.emit('session/event', session(), mystery)
+      await settled()
+      assert.equal((await homeStatus(root)).turns, 0)
+      assert.ok(
+        lines.some((l) => l.includes('认不出来源')),
+        '认不出来源时必须留一行日志，否则用户只能去读源码才知道哪一步断了（issue #18 现场就是这样）',
+      )
     } finally {
       off()
     }
@@ -515,11 +651,14 @@ test('换会话之后要叫醒新会话，不然人看不见它（issue #14 第�
         return raw.wokeFor === 's-new-1' ? raw : null
       })
       assert.equal(saved.wokeFor, 's-new-1')
-      assert.equal(prompted.length, 1, '只该叫一声')
-      assert.equal(prompted[0].sessionId, 's-new-1')
-      assert.equal(prompted[0].mode, 'queue')
+      // 0.8.9 起轮换时还会发一条 `carry-ask-`（问她留不留一句话给下一个房间），
+      // 那条不是叫醒。叫醒只认别的。
+      const wakes = prompted.filter((p) => !String(p.requestId ?? '').startsWith('carry-'))
+      assert.equal(wakes.length, 1, '只该叫一声')
+      assert.equal(wakes[0].sessionId, 's-new-1')
+      assert.equal(wakes[0].mode, 'queue')
       // 叫醒文本要能让她知道"屋子刚建好"，别是一句空白
-      assert.match(String(prompted[0].content?.[0]?.text ?? ''), /醒一醒/)
+      assert.match(String(wakes[0].content?.[0]?.text ?? ''), /醒一醒/)
     } finally {
       off()
     }

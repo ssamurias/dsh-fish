@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -145,6 +145,36 @@ test('叫醒准备的几秒里她刚好开始了别的一轮：等那一轮说�
       await s.tick()
       assert.equal(h.prompts.length, 1)
       assert.match(h.prompts[0].section, /叫醒你的信号/, '叫的时候处境还在，没被那一轮的 turn/end 收走')
+    } finally {
+      s.dispose()
+    }
+  })
+})
+
+// ---- 叫醒必须跟着「屋子现在那条会话」走，不能跟着启动那一刻的快照 ----
+// 2026-11-03（用户 m01596 与随后一条补充反馈）：满 40 轮自动换会话之后，
+// 自动醒一醒还发进旧对话，手动点一次却会落到新对话。
+// 差别就在落点怎么定：wakeNow 一直是现取 talkSessionId()，wake() 却先看
+// deps.sessionId——那是 index.js 启动时抄下来的 home.json 快照，轮换之后过期了。
+test('换过会话之后，自动醒一醒也要落到新会话（不是启动时那份快照）', async () => {
+  await withRoot(async (root) => {
+    // home.json 已经指向新房间（轮换后的样子），而调度器手里还是旧 id
+    await writeFile(join(root, 'home.json'), JSON.stringify({
+      wsId: 'ws-1',
+      sessionId: 's-new-room',
+      title: '跟大肥鱼说话',
+      createdAt: new Date().toISOString(),
+      turns: 0,
+      rotatedFrom: 's-main',
+      rotatedAt: new Date().toISOString(),
+    }, null, 2))
+
+    const h = fakeHost()
+    const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
+    try {
+      await s.tick()
+      assert.equal(h.prompts.length, 1, '该醒一次')
+      assert.equal(h.prompts[0].req.sessionId, 's-new-room', '落在屋子现在那条，不是启动时的 s-main')
     } finally {
       s.dispose()
     }

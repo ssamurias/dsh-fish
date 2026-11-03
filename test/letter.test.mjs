@@ -202,6 +202,37 @@ test('buildInbox 在没有留话时不冒出 letters 字段值（0，不是 unde
   assert.equal(box.rows[0].letter, false)
 })
 
+// 2026-11-03（github:ssamurias/dsh-fish#19）：事件流里的 ts 是 UTC，
+// 原来直接 `String(ts).slice(0,16)`，东八区看小纸条永远早 8 小时，
+// 而正文里她自己写的本地时间又是对的——用户看到的就是两边打架。
+test('inbox.md 里的小标题时间用本地钟，不是 UTC', async () => {
+  await withRoot(async (root) => {
+    const { appendEvent } = await import('../lib/store.js')
+    // 钉一个固定的 UTC 时刻：2026-11-03T14:16:00Z（东八区是 22:16）
+    const ev = await appendEvent(
+      { type: 'utterance', text: '我留一句话。', ts: '2026-11-03T14:16:00.000Z' },
+      { day: 1, stage: 1, source: 'tool' },
+      root,
+    )
+    // 信箱只收「留话」，靠 meta 打标认出来（见 lib/letter.js 的 letterMark）
+    await appendEvent(
+      { type: 'meta', text: letterMark(dateKey(), ev.id) },
+      { day: 1, stage: 1, source: 'system' },
+      root,
+    )
+    await writeInboxFile(root)
+    const md = await readFile(join(paths(root).root, 'inbox.md'), 'utf8')
+
+    // 期望值由本地钟算出来，不写死时区：CI 在哪台机器上跑都对
+    const d = new Date('2026-11-03T14:16:00.000Z')
+    const pad = (n) => String(n).padStart(2, '0')
+    const want = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+    assert.match(md, new RegExp(`## ${want} · `), '小标题要用本地时间印')
+    // 把 UTC 串原样切出来的那个错法，在这一刻必须是错的
+    if (want !== '2026-11-03 14:16') assert.doesNotMatch(md, /## 2026-11-03 14:16 · /)
+  })
+})
+
 // ---------------------------------------------------------------- 工具面
 
 test('registerLetter 注册 her_leave，参数是合法 object schema', () => {
