@@ -459,3 +459,33 @@ test('quotesOf 只取 HER_TYPES 且只取当天', () => {
   const q = quotesOf(events, '2026-10-22')
   assert.deepEqual(q.map((x) => x.text), ['a', 'd'])
 })
+
+// 2026-11-04（群反馈第一条）：日报曾经把聊天原话也当成「她说了什么」罗列。
+// turns.js 的 settle() 会把一轮里她说过的话补写成 utterance 并打
+// flags:['uncommitted']（只留证、不当信念），日报不看 flags，于是聊得越多的那天
+// 日报越像流水账。这里钉住：聊天原话不进「她说了什么」，但也不能被说成「什么都没说」。
+test('日报：聊天里说的不罗列，但要如实交代有几句', () => {
+  const events = [
+    { type: 'utterance', ts: '2026-11-04T10:10:00.000Z', text: '聊天里随口说的', flags: ['uncommitted'] },
+    { type: 'utterance', ts: '2026-11-04T10:10:00.000Z', text: '聊天里的第二句', flags: ['uncommitted'] },
+  ]
+  const dk = dateKey(new Date('2026-11-04T10:10:00.000Z'))
+  // 一条都不该进 quotesOf
+  assert.deepEqual(quotesOf(events, dk), [])
+  const md = buildReport({ dateKey: dk, items: [], events })
+  assert.ok(!md.includes('聊天里随口说的'), '聊天原话不该被当众罗列')
+  assert.match(md, new RegExp(`只在对话里说过 2 句`), '得说清有几句，不能说成什么都没说')
+  assert.ok(!md.includes('今天她什么都没说'), '她明明说了两句，说「什么都没说」是假话')
+})
+
+test('日报：认领过的话照常印，聊天原话不混进去', () => {
+  const events = [
+    { type: 'utterance', ts: '2026-11-04T09:00:00.000Z', text: '这是我自己记下的。' },
+    { type: 'utterance', ts: '2026-11-04T10:10:00.000Z', text: '这是聊天里说的。', flags: ['uncommitted'] },
+  ]
+  const dk = dateKey(new Date('2026-11-04T09:00:00.000Z'))
+  const md = buildReport({ dateKey: dk, items: [], events })
+  assert.match(md, /这是我自己记下的/)
+  assert.ok(!md.includes('这是聊天里说的'), '同一天有认领的话时，聊天原话也不该混进来')
+  assert.ok(!md.includes('只在对话里说过'), '有人认领过就不该走那条兜底文案')
+})

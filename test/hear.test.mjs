@@ -189,3 +189,75 @@ test('回忆：条数上限是 8', () => {
   }))
   assert.equal(searchEvents(events, '评论', { now }).rows.length, RECALL_LIMIT)
 })
+
+// ---------------------------------------------------------------- 2026-11-04 群反馈第二、三条
+
+test('回忆：时间到分钟，不再只有日期', () => {
+  const rows = [{
+    id: 'ev_1', date: '2026-11-04', clock: '18:10', ago: 0, type: 'utterance', text: '今天下雨。',
+  }]
+  const out = renderRecall(rows)
+  assert.match(out, /- 2026-11-04 18:10｜今天下雨。/)
+})
+
+test('回忆：同一天的两句话分得出先后', () => {
+  const now = Date.now()
+  const t0 = now - 3_600_000
+  const t1 = now - 60_000
+  const events = [
+    { id: 'early', type: 'utterance', ts: new Date(t0).toISOString(), text: '这句在后' },
+    { id: 'late', type: 'utterance', ts: new Date(t1).toISOString(), text: '这句在前' },
+  ]
+  const { rows } = searchEvents(events, '这句', { now, weigh: false })
+  assert.ok(rows[0].clock && rows[1].clock, '每条都要有时分')
+  assert.notEqual(rows[0].clock, rows[1].clock)
+})
+
+test('回忆：改口关系要写出来，别让她翻到 revise 跟普通一句长得一样', () => {
+  const rows = [{
+    id: 'ev_9', date: '2026-11-04', clock: '09:00', ago: 0, type: 'revise',
+    text: '我之前说错了。', verdict: 'refuted', refs: ['ev_1'],
+  }]
+  const out = renderRecall(rows)
+  assert.match(out, /推翻了 ev_1/)
+  assert.match(out, /那是更早说的/)
+  // refined 用另一套说法
+  const refined = renderRecall([{ ...rows[0], verdict: 'refined' }])
+  assert.match(refined, /修正了 ev_1/)
+})
+
+test('回忆：聊天里说的要标出来，跟她自己写下的分开', () => {
+  const rows = [
+    { id: 'a', date: '2026-11-04', clock: '10:00', ago: 0, type: 'utterance', text: '这是我记下的。' },
+    { id: 'b', date: '2026-11-04', clock: '10:10', ago: 0, type: 'utterance', text: '这是随口说的。', chatOnly: true },
+  ]
+  const out = renderRecall(rows)
+  assert.match(out, /- 2026-11-04 10:00｜这是我记下的。/)
+  assert.match(out, /- 2026-11-04 10:10｜这是随口说的。｜聊天里说的/)
+  assert.ok(!out.includes('这是我记下的。｜聊天里说的'), '认领过的不该被标成聊天里说的')
+})
+
+test('回忆：认领过的排在聊天原话前面（同样字面命中）', () => {
+  const now = Date.now()
+  const events = [
+    // 聊天原话更新，但没认领
+    { id: 'chat', type: 'utterance', ts: at(0), text: '评论这件事', flags: ['uncommitted'] },
+    // 认领过的更旧
+    { id: 'mine', type: 'utterance', ts: at(5), text: '评论这件事' },
+  ]
+  const { rows } = searchEvents(events, '评论', { now })
+  assert.equal(rows[0].id, 'mine', '认领过的那个要先出来')
+})
+
+test('回忆：认领的 +4 不能盖过字面命中差很多的情况', () => {
+  const now = Date.now()
+  const q = '判断 视频 记录 评论 天气 出门'
+  const events = [
+    // 六个词全中，但是聊天原话（六片各 +1 = 6）
+    { id: 'chat', type: 'utterance', ts: at(0), text: '判断 视频 记录 评论 天气 出门', flags: ['uncommitted'] },
+    // 只中一片，但认领过（1 + 4 = 5）
+    { id: 'mine', type: 'utterance', ts: at(5), text: '判断' },
+  ]
+  const { rows } = searchEvents(events, q, { now })
+  assert.equal(rows[0].id, 'chat', '字面命中差得多的时候，认领的加权不该盖过它')
+})
