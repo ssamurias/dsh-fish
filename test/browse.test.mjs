@@ -24,7 +24,7 @@ import {
 import { normalizeConfig, dateKey } from '../lib/settings.js'
 import { lookOnce } from '../lib/look.js'
 import { readEvents, appendEvent } from '../lib/store.js'
-import { buildReport, flushReport, quotesOf, listReports } from '../lib/report.js'
+import { buildReport, flushReport, quotesOf, listReports, REPORT_CHAT_LINES, REPORT_CHAT_CHARS } from '../lib/report.js'
 
 async function withRoot(fn) {
   const root = await mkdtemp(join(tmpdir(), 'fish-p2-'))
@@ -389,6 +389,69 @@ test('buildReport：只有事实与原话，没有总结', () => {
   assert.ok(!md.includes('wake:2026-10-22'))
   // 没有"她了解了/可以看出"这类代码替她做的总结
   for (const w of ['可以看出', '今天她了解了', '说明她']) assert.ok(!md.includes(w))
+})
+
+// 用本地时间造时刻：quotesOf 按本地日期比较，写死 UTC 在 UTC 以西的时区会算到前一天。
+const localTs = (h, m = 0) => new Date(2026, 9, 22, h, m).toISOString()
+
+test('buildReport：记下来的话和聊天时说的分开放（2026-11-04）', () => {
+  const events = [
+    { type: 'utterance', ts: localTs(9), text: '这句是我记下来的。', flags: [] },
+    { type: 'utterance', ts: localTs(10), text: '这句只是聊天时\n顺口说的。', flags: ['uncommitted'] },
+    { type: 'utterance', ts: localTs(11), text: '老事件没有 flags。' },
+  ]
+  const md = buildReport({ dateKey: '2026-10-22', events })
+  const [said, chat] = md.split('## 聊天时说过的')
+  assert.ok(said.includes('> 这句是我记下来的。'))
+  assert.ok(said.includes('> 老事件没有 flags。'))
+  assert.ok(!said.includes('顺口说的'))
+  assert.ok(chat.includes('- 10:00 这句只是聊天时 顺口说的。'), '换行压成空格，一段一行')
+  assert.ok(!chat.includes('这句是我记下来的'))
+  // quotesOf 的口径不变：两种都是她当天说的
+  assert.equal(quotesOf(events, '2026-10-22').length, 3)
+})
+
+test('buildReport：一天只有聊天时，不说「什么都没说」，也不替她说她没记什么（2026-11-04）', () => {
+  const chat = [{ type: 'utterance', ts: localTs(10), text: '顺口一句', flags: ['uncommitted'] }]
+  const md = buildReport({ dateKey: '2026-10-22', events: chat })
+  assert.ok(!md.includes('今天她什么都没说'))
+  assert.ok(md.includes('这一节今天是空的'))
+  assert.ok(!md.includes('特意'), '代码不说她的意图')
+  assert.ok(!md.includes('没有记下'), '同一句她可能既说过也记下了')
+  assert.ok(md.includes('顺口一句'))
+  const quiet = buildReport({ dateKey: '2026-10-22', events: [] })
+  assert.ok(quiet.includes('今天她什么都没说'))
+  assert.ok(!quiet.includes('## 聊天时说过的'))
+  // 写了日记的一天：日记那节照旧，上面那句也不算假话
+  const diary = buildReport({ dateKey: '2026-10-22', events: chat, diary: '今天的日记', diaryVisible: true })
+  assert.ok(diary.includes('这一节今天是空的'))
+  assert.ok(diary.includes('## 她的日记'))
+})
+
+test('buildReport：聊天太多只列最近的，并说清一共几段（2026-11-04）', () => {
+  const chatLines = (n) => Array.from({ length: n }, (_, i) => ({
+    type: 'utterance',
+    flags: ['uncommitted'],
+    ts: localTs(9, i),
+    text: `第${i}段`.padEnd(REPORT_CHAT_CHARS + 30, '长'),
+  }))
+  const n = REPORT_CHAT_LINES + 5
+  const section = buildReport({ dateKey: '2026-10-22', events: chatLines(n) }).split('## 聊天时说过的')[1]
+  const lines = section.split('\n').filter((l) => l.startsWith('- '))
+  assert.equal(lines.length, REPORT_CHAT_LINES)
+  assert.ok(lines[0].includes('第5段'), '留下的是最近的')
+  assert.ok(lines.at(-1).includes(`第${n - 1}段`))
+  assert.ok(lines.every((l) => l.endsWith('…') && l.length <= REPORT_CHAT_CHARS + 8))
+  assert.ok(section.includes(`今天一共 ${n} 段`))
+  // 正好列满时不多说一句
+  const exact = buildReport({ dateKey: '2026-10-22', events: chatLines(REPORT_CHAT_LINES) })
+  assert.ok(!exact.includes('今天一共'))
+})
+
+test('buildReport：截断不把 emoji 切成半个（2026-11-04）', () => {
+  const text = '好'.repeat(REPORT_CHAT_CHARS - 2) + '😀'.repeat(10)
+  const md = buildReport({ dateKey: '2026-10-22', events: [{ type: 'utterance', flags: ['uncommitted'], ts: localTs(9), text }] })
+  assert.ok(md.isWellFormed())
 })
 
 test('buildReport：日记默认不出现，visible 才出现', () => {
