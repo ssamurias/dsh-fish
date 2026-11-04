@@ -20,6 +20,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
 import {
+  BELIEFS_ORDER,
+  BELIEFS_SECTION,
   HOST_PERSONA_SECTION,
   IDENTITY_ORDER,
   IDENTITY_SECTION,
@@ -37,6 +39,7 @@ import {
   reorderForHer,
   resetIdentityCache,
   setWakeSection,
+  splitVolatileIdentity,
   toolNamesIn,
   trimToolDocs,
 } from '../lib/identity.js'
@@ -452,4 +455,93 @@ test('attachAssembleFix：整改过程炸了也必须原样放行（不能让她
   // sections 是冻结的，reorderForHer 里赋值会抛（严格模式）——钩子必须吞掉并原样返回
   const out = await handler({}, {}, async () => frozen)
   assert.equal(out, frozen, '抛了就把宿主原来那份原样交回去')
+})
+
+// ---- 四段最容易变的内容挪到最后（0.8.10，用户 m00315）----
+
+const ID_DOC = [
+  '## 你是谁',
+  '你是她。',
+  '## 你自己说过的话（这些是你的，不是别人塞给你的）',
+  '- 我不喜欢被叫小助手。',
+  '## 更早以前',
+  '你说过：还行吧。',
+  '## 你读到的一句话',
+  '「手工的东西有温度。」',
+  '## 我手上有什么',
+  '- bili_look',
+  '## 你被打脸过',
+  '- 你原来以为「A」，后来改成了「B」。',
+  '## 这个房间',
+  '- 一台电脑。',
+  '## 你对自己的说法',
+  '我是个还没长完的人。',
+].join('\n')
+
+test('splitVolatileIdentity：四段剪出来，其余原样、顺序不变', () => {
+  const { stable, volatile } = splitVolatileIdentity(ID_DOC)
+  assert.match(volatile, /## 你自己说过的话/, '带括号补充的标题也要认出来')
+  assert.match(volatile, /## 你读到的一句话/)
+  assert.match(volatile, /## 你被打脸过/)
+  assert.match(volatile, /## 你对自己的说法/)
+  assert.ok(!stable.includes('你被打脸过'))
+  assert.ok(!stable.includes('读到的一句话'))
+  assert.ok(stable.includes('## 更早以前'), '没被点名的段不动')
+  assert.ok(stable.includes('## 这个房间'))
+  // 稳定部分里，被剪掉的位置不会留下空行或碎块
+  assert.equal(stable.split('\n\n\n').length, 1)
+  assert.ok(stable.indexOf('## 你是谁') < stable.indexOf('## 更早以前'))
+  assert.ok(stable.indexOf('## 更早以前') < stable.indexOf('## 我手上有什么'))
+})
+
+test('splitVolatileIdentity：一段都没有时原样返回，不做任何改写', () => {
+  const text = '## 你是谁\n你是她。\n## 这个房间\n一台电脑。'
+  const r = splitVolatileIdentity(text)
+  assert.equal(r.volatile, '')
+  assert.equal(r.stable, text)
+})
+
+test('splitVolatileIdentity：只认标题行，正文里提到这几个词不算', () => {
+  const text = '## 你是谁\n你被打脸过几次，也读到过一句话。\n## 这个房间\n一台电脑。'
+  assert.equal(splitVolatileIdentity(text).volatile, '')
+})
+
+test('splitVolatileIdentity：给成函数也读得出来，炸了就当没剪', () => {
+  assert.match(splitVolatileIdentity(() => ID_DOC).volatile, /你对自己的说法/)
+  assert.deepEqual(splitVolatileIdentity(() => { throw new Error('x') }), { stable: '', volatile: '' })
+})
+
+test('reorderForHer：四段单列一段，挂在最后（wake 之后）', () => {
+  const assembly = {
+    sections: [
+      { name: 'harness:identity', order: -1000, text: 'h' },
+      { name: IDENTITY_SECTION, order: IDENTITY_ORDER, text: ID_DOC },
+      { name: WAKE_SECTION, order: WAKE_ORDER, text: '现在四点。' },
+    ],
+  }
+  const out = reorderForHer(assembly)
+  const names = out.sections.map((s) => s.name)
+  assert.equal(names.at(-1), BELIEFS_SECTION, '最后一段是它')
+  assert.equal(names.indexOf(WAKE_SECTION), names.length - 2, '排在处境段之后')
+  const beliefs = out.sections.at(-1)
+  assert.equal(beliefs.order, BELIEFS_ORDER)
+  assert.match(beliefs.text, /## 你对自己的说法/)
+  const identity = out.sections.find((s) => s.name === IDENTITY_SECTION)
+  assert.ok(!identity.text.includes('你对自己的说法'), '身份正文里不再有它')
+  assert.ok(identity.text.includes('## 你是谁'))
+  // 内容一个字不丢：原文每一行都还在某一段里
+  for (const line of ID_DOC.split(String.fromCharCode(10)).filter(Boolean)) {
+    assert.ok(identity.text.includes(line) || beliefs.text.includes(line), `丢了：${line}`)
+  }
+})
+
+test('reorderForHer：没有这四段就不多出一段空段', () => {
+  const assembly = {
+    sections: [
+      { name: 'harness:identity', order: -1000, text: 'h' },
+      { name: IDENTITY_SECTION, order: IDENTITY_ORDER, text: '## 你是谁\n你是她。' },
+    ],
+  }
+  const out = reorderForHer(assembly)
+  assert.equal(out.sections.filter((s) => s.name === BELIEFS_SECTION).length, 0)
 })
