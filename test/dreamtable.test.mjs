@@ -109,11 +109,13 @@ test('拼出来的只陈述事实：有 id、有间隔、没有「梦」也没�
   assert.equal(/可以|应该|请你|记一句/.test(text), false)
 })
 
-test('tableFor 的三道门：今天记过梦不摆、不是今天第一次醒不摆、间隔不够不摆', () => {
+test('tableFor 的三道门：今天记过梦不摆、今天已经摆过不摆、间隔不够不摆', () => {
   const rows = rowsOf(4)
   assert.ok(tableFor({ rows, gapHours: GAP_HOURS }).length > 0)
   assert.equal(tableFor({ rows, gapHours: GAP_HOURS - 0.5 }), '')
-  assert.equal(tableFor({ rows, gapHours: 20, firstWakeToday: false }), '')
+  // 第一次醒来如果间隔不够，这一天不该就此作废：晚一点那次仍可摆（2026-11-05 晚改）。
+  assert.equal(tableFor({ rows, gapHours: 20 }), tableFor({ rows, gapHours: 20, shownToday: false }))
+  assert.equal(tableFor({ rows, gapHours: 20, shownToday: true }), '')
   assert.equal(tableFor({ rows, gapHours: 20, dreamedToday: true }), '')
 })
 

@@ -393,13 +393,12 @@ test('唤醒消息只剩一句触发语，处境走 system prompt 段不进对�
     assert.equal(prompts.length, 1)
     const text = prompts[0].content[0].text
 
-    // 2026-11-04（用户 m00428）：触发语从「（醒一醒）」改成一个空格，来源换掉。
-    // 老做法走 `sessionController.prompt()`，宿主内部写死 `source.kind='user'`，
-    // 于是这句话在前端就是一句「他打的字」，用户怎么都能看见；她还会去猜
-    // 「谁跟我说『醒一醒』」。现在走 `agent.followup()` + `source.kind='fish-wake'`，
-    // 前端把非 user 来源画成一张默认收起的折叠条，正文也就没必要再写人话。
+    // 2026-11-05（用户 m01262）：正文改成「她自己开口 05:12」+ `form:'notice'`。
+    // 这句话是**第三人称的陈述**（谁起的头），不是对他说的、也不是对她说的语气；
+    // 前端拿它画提示条，纯文本渠道（QQ 桥）转发时它就自动降级成这一行。
     assert.equal(prompts[0].source.kind, 'fish-wake', '来源必须是 fish-wake，否则前端又画成用户气泡')
-    assert.equal(text.trim(), '', `对话里不该再留任何字，现在是：${text.slice(0, 80)}`)
+    assert.equal(prompts[0].source.form, 'notice', '带 form 才会画成提示条')
+    assert.match(text, /^她自己开口 \d{2}:\d{2}$/, `正文只该是那一行，现在是：${text.slice(0, 80)}`)
     // 2026-10-26（用户 m00507）：原来是「……」，她当成用户发来的一句话去猜，
     // 侧栏标题还被生成成「Error」。
     assert.ok(!text.includes('……'), '不能再拿省略号当触发语')

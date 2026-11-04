@@ -16,6 +16,9 @@ import assert from 'node:assert/strict'
 import {
   FISH_SOURCE_KIND,
   WAKE_PING,
+  NOTICE_FORM,
+  CHIP_LABEL,
+  chipText,
   fishMessage,
   resolveLiveAgent,
   deliverWake,
@@ -62,6 +65,25 @@ test('正文是空的：她不该看见一句可被解读的话', () => {
   assert.equal(fishMessage(undefined).content[0].text, WAKE_PING)
 })
 
+test('胶囊：她自己起头的那一条带 form=notice，字是「她自己开口 HH:MM」', () => {
+  assert.equal(NOTICE_FORM, 'notice')
+  assert.equal(CHIP_LABEL, '她自己开口')
+  assert.equal(chipText(new Date(2026, 10, 5, 5, 7)), '她自己开口 05:07')
+  assert.equal(chipText(new Date(2026, 10, 5, 23, 4)), '她自己开口 23:04')
+
+  const m = fishMessage(chipText(new Date(2026, 10, 5, 5, 7)), { rpcId: 'proactive-1', form: NOTICE_FORM })
+  assert.equal(m.source.form, 'notice')
+  assert.equal(m.source.kind, FISH_SOURCE_KIND, '换了画法也不许改来源名，否则记账就断')
+  assert.equal(m.content[0].text, '她自己开口 05:07', '提示条显示的就是正文；纯文本渠道也读这一行')
+  assert.equal(classifyMessage({ source: m.source }), 'context', '带 form 也还是机器消息')
+})
+
+test('不传 form 就一个字段都不多加：老路径的形状不变', () => {
+  const plain = fishMessage(' ', { rpcId: 'wake-2' })
+  assert.equal('form' in plain.source, false)
+  assert.deepEqual(Object.keys(plain.source).sort(), ['kind', 'rpcId'])
+})
+
 test('来源名落在机器消息那一档：她自己醒来的话不算「他来过」', () => {
   assert.equal(classifyMessage({ source: { kind: FISH_SOURCE_KIND } }), 'context')
 })
@@ -78,6 +100,21 @@ test('投递：走 followup，并立刻 flush 一次', async () => {
   assert.equal(agent.got[0].source.rpcId, 'wake-1')
   assert.equal(flushed.length, 1, 'followup 之后必须显式 flush，否则卡片要等宿主下一拍')
   assert.equal(flushed[0], agent.session, 'flush 的对象是 agent 上那条会话')
+})
+
+test('投递：form 一路透传到 source，正文按给的写', async () => {
+  const agent = fakeAgent({ id: 'session-1' })
+  const ctx = { sessions: { flush: async () => true } }
+  const label = chipText(new Date(2026, 10, 5, 5, 7))
+
+  const out = await deliverWake(ctx, fakeSc({ agent }), 'session-1', {
+    text: label,
+    rpcId: 'proactive-1',
+    form: NOTICE_FORM,
+  })
+  assert.equal(out.ok, true)
+  assert.equal(agent.got[0].source.form, 'notice')
+  assert.equal(agent.got[0].content[0].text, '她自己开口 05:07')
 })
 
 test('flush 抛错不影响投递结论：消息已经进了收件箱', async () => {
