@@ -42,6 +42,13 @@ test('桌上有东西：冲动把「该醒」提前（但封顶 0.3）', () => {
   assert.ok(Math.abs(half.boosts - DRIVE.boostGap) < 1e-9)
 })
 
+test('兴趣回灌：手上有惦记的事，也算一笔冲动', () => {
+  const base = driveOf({ events: [spend(4.5)], now: NOW })
+  const fav = driveOf({ events: [spend(4.5)], now: NOW, desk: { favorite: true } })
+  assert.equal(fav.boosts, DRIVE.boostInterest)
+  assert.ok(fav.value > base.value)
+})
+
 test('上次开口没人接：底噪打折', () => {
   const events = [
     { type: 'meta', text: 'proactive-turn:2026-11-05:1', ts: NOW - 5 * HOUR },
