@@ -569,13 +569,31 @@ test('手动唤醒：隔得够久就照常叫（间隔不是把按钮关掉）',
   })
 })
 
-test('她的会话 cwd 是她自己的空房间，不是状态库根目录', async () => {
+// 2026-11-05（用户 m03265）：这条原来断言 `creates.length === 1`，即每次叫醒都
+// `sc.create({ sessionId, cwd: herDir })` 一次。那个 create 的语义是「我要用这一条」，
+// 宿主对跑过 turn 的会话给不出来，于是静默另开一条空白会话 —— 每叫醒一次多一条空壳。
+// 现在会话活着就**不建**，所以这里改成正向断言「一条都不建」；
+// 那条「cwd 必须是 herDir」的约束挪到下面「探活失败才退回建」的用例里。
+test('叫醒时不建会话：会话活着就只探活，不再堆空白会话', async () => {
+  await withRoot(async (root) => {
+    await writeConfig(normalizeConfig({}), root)
+    const { ctx, creates, prompts } = fakeCtx()
+    const r = await wakeNow(ctx, { root })
+    assert.equal(r.ok, true, JSON.stringify(r))
+    assert.equal(prompts.length, 1, '叫醒该照常递出去')
+    assert.equal(creates.length, 0, `会话还活着就不该再建，实际建了 ${JSON.stringify(creates)}`)
+  })
+})
+
+test('探活失败才退回建会话，且 cwd 是她自己的空房间（不是状态库根）', async () => {
   await withRoot(async (root) => {
     await writeConfig(normalizeConfig({}), root)
     const { ctx, creates } = fakeCtx()
+    // 模拟「宿主说这条会话已经没了」——只有这种情况才该退回 create
+    ctx.sessionController.resolveAgent = async () => ({ error: new Error('session not found') })
     const r = await wakeNow(ctx, { root })
     assert.equal(r.ok, true, JSON.stringify(r))
-    assert.equal(creates.length, 1)
+    assert.equal(creates.length, 1, '探活失败时必须退回建一条，否则叫不醒')
     const { cwd } = creates[0]
     assert.equal(cwd, paths(root).herDir, 'cwd 必须指向 herDir')
     assert.notEqual(cwd, root, 'cwd 不能就是状态库根——否则她 cat 一下就读到全部历史')

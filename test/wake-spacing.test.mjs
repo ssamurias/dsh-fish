@@ -65,13 +65,19 @@ function fakeHost(onCreate) {
     },
     sessionController: {
       create: async () => { await onCreate?.(); throw new Error('exists') },
-      resolveAgent: async (sessionId) => ({
-        agent: {
-          followup: (message) => {
-            prompts.push({ req: { sessionId, message }, text: message?.content?.[0]?.text, section: getWakeSection() })
+      resolveAgent: async (sessionId) => {
+        // 2026-11-05（用户 m03265）：叫醒不再靠 `create({ sessionId })` 探会话在不在，
+        // 改成 resolveAgent 探活。所以「准备叫醒的这几秒里她刚好开始了别的一轮」
+        // 这个时机要挂在探活上 —— 挂 create 上的话那条用例就永远不触发了。
+        await onCreate?.()
+        return {
+          agent: {
+            followup: (message) => {
+              prompts.push({ req: { sessionId, message }, text: message?.content?.[0]?.text, section: getWakeSection() })
+            },
           },
-        },
-      }),
+        }
+      },
     },
   }
   const emit = (type) => { for (const fn of [...listeners]) fn({ id: 's-main' }, { type }) }
