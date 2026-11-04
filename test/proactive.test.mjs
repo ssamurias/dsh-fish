@@ -22,6 +22,11 @@ import {
   proactiveState,
   turnsToday,
   lastTurnAt,
+  silentToday,
+  lastSilentAt,
+  SILENT_MARK,
+  SILENT_MAX_PER_DAY,
+  SILENT_QUIET_HOURS,
   idleHoursOf,
   countsForIdle,
   looseEnds,
@@ -336,4 +341,40 @@ test('meta:watched 也不刷新 idle：她看了条视频，不等于她说过�
   assert.equal(countsForIdle(ev({ type: 'meta', text: `seen:${new Date(now).toISOString()}` })), true, 'seen: 算他来过')
   assert.equal(countsForIdle(ev({ type: 'meta', text: `diary:2026-10-31` })), false, 'diary 不算')
   assert.equal(countsForIdle(ev({ type: 'meta', text: `sched:2026-11-01` })), false, 'sched 不算')
+})
+
+test('醒来后没开口的那几次：不占当天额度，但单独限次数、单独隔时间（2026-11-05，用户 m00803）', () => {
+  const now = Date.now()
+  const dk = dateKey(new Date(now))
+  const quiet = [ev({ ts: new Date(now - 10 * 3_600_000).toISOString() })]
+  const silent = (h, id = `ev_s${h}`) => ev({
+    id,
+    type: 'meta',
+    text: `${SILENT_MARK}${dk}:${now + h * 3_600_000}`,
+    ts: new Date(now + h * 3_600_000).toISOString(),
+  })
+
+  // 三次静默、proactive-turn 一次都没有 → 当天的额度一个都没被扣。
+  const three = [...quiet, silent(-5), silent(-4), silent(-3)]
+  assert.equal(turnsToday(three, dk), 0, '静默不许记成空手回合，否则「醒着没话说」会吃掉额度')
+  assert.equal(silentToday(three, dk), 3)
+  assert.equal(lastSilentAt(quiet), 0, '没静默过就是 0')
+  assert.equal(lastSilentAt(three), now - 3 * 3_600_000)
+  // 上一次静默在 3 小时前（超过 SILENT_QUIET_HOURS）→ 放行，额度仍在。
+  const ok = proactiveState({ config: ON, events: three, now })
+  assert.equal(ok.ok, true, `静默过也不该挡住下一次开口：${ok.why}`)
+
+  // 刚静默过 30 分钟：先隔一会儿，别让「醒来」变成机械动作。
+  const justNow = [...quiet, ev({ id: 'ev_s', type: 'meta', text: `${SILENT_MARK}${dk}:${now}`, ts: new Date(now - 30 * 60_000).toISOString() })]
+  assert.match(proactiveState({ config: ON, events: justNow, now }).why, /没开口/)
+
+  // 今天已经静默满 SILENT_MAX_PER_DAY 次：停，但仍然没动 proactive-turn 的额度。
+  const full = [
+    ...quiet,
+    ...Array.from({ length: SILENT_MAX_PER_DAY }, (_, i) => silent(-(i + 3), `ev_f${i}`)),
+  ]
+  assert.equal(turnsToday(full, dk), 0)
+  assert.equal(proactiveState({ config: ON, events: full, now }).why.length > 0, true)
+  assert.match(proactiveState({ config: ON, events: full, now }).why, /太多次/)
+  assert.ok(SILENT_QUIET_HOURS >= 1, '静默间隔至少一小时，不然她会连着醒、连着不说')
 })
