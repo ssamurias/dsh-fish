@@ -423,6 +423,7 @@ P2（她真的会刷 B 站并写报告）：`lib/bili.js` 只读客户端 + `lib
 
 - **@吴晓观**（交流群 1 群群友）—— 记忆机制这一块的思路起点来自他。0.8.6 里「固化下来的认知也会随时间退下去」「翻旧事可以先只给清单再给全文」「记忆相关的数字要说得清它数的是什么」这几条，最初都是他在群里讲的。落进本插件时全部重新实现了一遍，没有代码或文字的直接搬运；具体的取舍与改法记在 [CHANGELOG](CHANGELOG.md) 的 0.8.6 一节。
 - **@Bacon-01** —— 0.8.6 的 B 站手机扫码登录（含自写的零依赖二维码编码器 `lib/qr.js`）由他贡献，见 [PR #17](https://github.com/ssamurias/dsh-fish/pull/17)。
+- **@BBleae**（晴猫）—— 从 0.8.6 起先后提了五个 PR：三个直接合入（[#10](https://github.com/ssamurias/dsh-fish/pull/10) 匿名 buvid3、[#11](https://github.com/ssamurias/dsh-fish/pull/11) 叫醒间隔、[#15](https://github.com/ssamurias/dsh-fish/pull/15) 叫醒那一轮不记成「他来过」）；[#23](https://github.com/ssamurias/dsh-fish/pull/23) 的复现与改法落进 0.8.8（日报/回忆分三种话、被推翻的话不再排第一）；[#26](https://github.com/ssamurias/dsh-fish/pull/26) 修掉回忆 `brief` 档的两处显示问题（0.8.9，未发布）。
 
 原理页里引用的 Kolb / Piaget / Bowlby / Festinger / Bartlett / Dewey / Schön，只是思想引用（页底标了作者与年份），不含他人代码或文字。
 
