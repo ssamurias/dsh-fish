@@ -13,7 +13,6 @@ import { rememberKnownTools } from '../lib/restrict.js'
 import { dateKey } from '../lib/settings.js'
 import { writeSelfDoc } from '../lib/selfdoc.js'
 import { clearWakeSection, getWakeSection } from '../lib/identity.js'
-import { WAKE_TRIGGER } from '../lib/wakeconst.js'
 import { logFile, logLine } from '../lib/log.js'
 
 async function withRoot(fn) {
@@ -51,6 +50,21 @@ function fakeCtx({ allow = true, promptImpl } = {}) {
     sessionController: {
       async create({ sessionId, cwd }) { creates.push({ sessionId, cwd }); if (sessions.has(sessionId)) throw new Error('exists'); sessions.add(sessionId) },
       async prompt(payload) { prompts.push(payload); if (promptImpl) await promptImpl(payload) },
+      // 2026-11-04（用户 m00428）：叫醒不再走 prompt()——它内部写死 source.kind='user'，
+      // 那条消息在前端永远是一句「他打的字」。现在走 resolveAgent() → agent.followup()。
+      // 这里把 followup 收到的东西记成 { sessionId, content } 的形状，
+      // 跟原来 prompt(payload) 的 payload 兼容，下面那些断言不用改写。
+      async resolveAgent(sessionId) {
+        return {
+          agent: {
+            followup(message) {
+              const record = { sessionId, content: message?.content, source: message?.source, id: message?.id }
+              prompts.push(record)
+              if (promptImpl) return promptImpl(record)
+            },
+          },
+        }
+      },
     },
     logger: { info() {}, warn() {}, error() {} },
     on() {},
@@ -379,11 +393,17 @@ test('唤醒消息只剩一句触发语，处境走 system prompt 段不进对�
     assert.equal(prompts.length, 1)
     const text = prompts[0].content[0].text
 
-    // 对话里只剩一句：不许再出现处境、身份、禁令、工具手册
-    assert.equal(text, WAKE_TRIGGER, `对话里只该剩触发语，现在是：${text.slice(0, 80)}`)
+    // 2026-11-04（用户 m00428）：触发语从「（醒一醒）」改成一个空格，来源换掉。
+    // 老做法走 `sessionController.prompt()`，宿主内部写死 `source.kind='user'`，
+    // 于是这句话在前端就是一句「他打的字」，用户怎么都能看见；她还会去猜
+    // 「谁跟我说『醒一醒』」。现在走 `agent.followup()` + `source.kind='fish-wake'`，
+    // 前端把非 user 来源画成一张默认收起的折叠条，正文也就没必要再写人话。
+    assert.equal(prompts[0].source.kind, 'fish-wake', '来源必须是 fish-wake，否则前端又画成用户气泡')
+    assert.equal(text.trim(), '', `对话里不该再留任何字，现在是：${text.slice(0, 80)}`)
     // 2026-10-26（用户 m00507）：原来是「……」，她当成用户发来的一句话去猜，
-    // 侧栏标题还被生成成「Error」。现在触发语是括号旁白，且必须**不是**省略号。
+    // 侧栏标题还被生成成「Error」。
     assert.ok(!text.includes('……'), '不能再拿省略号当触发语')
+    assert.ok(!text.includes('醒一醒'), '触发语本身也不该出现——她读到的就是一句莫名其妙的话')
     assert.ok(!text.includes('## 你是谁'), '身份段不该出现在会话消息里')
     assert.ok(!text.includes('## 不能做的'), '禁令段不该出现在会话消息里')
     assert.ok(!text.includes('撒娇'), '禁令正文不该出现在会话消息里')
@@ -496,6 +516,56 @@ test('手动唤醒：当天次数已经用满，仍然拒绝（配额不因手�
     assert.equal(r.ok, false, JSON.stringify(r))
     assert.match(String(r.why), /今日事件已满/, `拒绝理由要说配额，不是说没卡：${r.why}`)
     assert.equal(prompts.length, 0)
+  })
+})
+
+// 2026-11-04（用户 m01466）：设置页那个按钮点多少次就投多少次。
+//
+// 真机事故：13:32:38 叫醒一次，11 秒后又被点一次（两次都是 test_first 模板）。
+// 第一轮跑完 17 秒 → turn/end 把 fish:wake 处境清掉；第二次投出去时已经没处境了，
+// 系统提示里一个字都没有，她只能回「这一轮没有新的事，我不再往下续」——
+// 白烧一轮，而且在对话里留下一条她自己都觉得莫名其妙的回复。
+//
+// 根因：`WAKE_MIN_GAP_MS` 只写在 `nextWakeAt()` 里，而它只服务定时器那条路，
+// 手动这条路一次间隔检查都没有（`wakeNow` 只把当天 counts 清零）。
+test('手动唤醒：刚叫过就再点，第二次被最小间隔挡住', async () => {
+  await withRoot(async (root) => {
+    await writeConfig(normalizeConfig({ browse: { enabled: false } }), root)
+    // 20 分钟前刚醒过一次（记录落在今天的 wake: 行上）。
+    await appendEvent(
+      { type: 'meta', text: `wake:${dateKey()} test_first`, ts: new Date(Date.now() - 20 * 60_000).toISOString() },
+      { day: 1, stage: 1, source: 'timer' },
+      root,
+    )
+    const { ctx, prompts } = fakeCtx()
+    const r = await wakeNow(ctx, { root })
+    assert.equal(r.ok, false, `20 分钟前刚叫过，不该再叫：${JSON.stringify(r)}`)
+    assert.match(String(r.why), /刚叫过/, `要说清是间隔挡的，不是没卡：${r.why}`)
+    assert.match(String(r.why), /20 分钟前/, '要带上隔了多久，不然用户以为按钮坏了')
+    assert.match(String(r.why), /45 分钟/, '要说出等多久才够')
+    assert.equal(prompts.length, 0, '一条消息都不许投出去')
+    assert.ok(r.lastAt > 0, '要被挡住时把上一次的时间一起带回去，方便排查')
+
+    // force 是给测试和「我就是要现在叫」留的口子，但它得真的能用。
+    const forced = await wakeNow(ctx, { root, force: true })
+    assert.equal(forced.ok, true, JSON.stringify(forced))
+  })
+})
+
+test('手动唤醒：隔得够久就照常叫（间隔不是把按钮关掉）', async () => {
+  await withRoot(async (root) => {
+    await writeConfig(normalizeConfig({ browse: { enabled: false } }), root)
+    // 昨天醒过：`lastWakeAt()` 只认今天那一行，昨天的既不清配额也不挡间隔。
+    const yesterday = new Date(Date.now() - 26 * 3_600_000)
+    await appendEvent(
+      { type: 'meta', text: `wake:${dateKey(yesterday)} test_first` },
+      { day: 1, stage: 1, source: 'timer' },
+      root,
+    )
+    const { ctx, prompts } = fakeCtx()
+    const r = await wakeNow(ctx, { root })
+    assert.equal(r.ok, true, `昨天的唤醒不该挡今天的：${JSON.stringify(r)}`)
+    assert.equal(prompts.length, 1)
   })
 })
 

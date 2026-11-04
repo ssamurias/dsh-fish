@@ -235,9 +235,27 @@ test('事件流变长后 deriveSelf 不是二次增长（issue #3）', () => {
   assert.ok(deriveSelf(small, { growthDays: 30 }).beliefs.length > 0, '合成数据要真长出判断，否则测不到热点')
   best(small, 1)
   best(big, 1) // 预热
-  const t1 = best(small)
-  const t2 = best(big)
-  assert.ok(t2 < t1 * 8 + 50, `200 条 ${t1.toFixed(1)}ms → 800 条 ${t2.toFixed(1)}ms，增长超过线性`)
+  // 2026-11-05：判据一个字没动（仍是「4 倍事件不该涨到 16 倍」），改的是**取样方式**。
+  //
+  // 原来先取 small 的最小值、再取 big 的最小值，两次取样隔着几百毫秒；整套测试并行跑时
+  // 机器负载在这段时间里会变，于是 small 取到空闲时的 7ms、big 取到拥挤时的 127ms，
+  // 判据两头同时被推向红（本地整套连跑 5 次红了 1 次，CI 的 2 核 runner 更容易撞上）。
+  //
+  // 现在**交替取样**：每一轮紧挨着量 small 和 big，噪音对两个数字的影响大致相同，
+  // 再取「余量最大」的那一轮来判断。真出现二次增长时，同一轮的比值会稳定冲到 16 倍，
+  // 交替取样不会把它洗掉——它压的是抖动，不是增长。
+  let bestSlack = -Infinity
+  let detail = ''
+  for (let i = 0; i < 5; i++) {
+    const t1 = best(small, 1)
+    const t2 = best(big, 1)
+    const slack = t1 * 8 + 50 - t2
+    if (slack > bestSlack) {
+      bestSlack = slack
+      detail = `200 条 ${t1.toFixed(1)}ms → 800 条 ${t2.toFixed(1)}ms`
+    }
+  }
+  assert.ok(bestSlack > 0, `${detail}，增长超过线性`)
 })
 
 test('stability 对同一批事件只算一次（issue #3 缓存）', () => {

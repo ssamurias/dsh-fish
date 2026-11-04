@@ -16,7 +16,7 @@ import { join } from 'node:path'
 
 import {
   PROACTIVE_MAX,
-  PROACTIVE_TRIGGER,
+  PROACTIVE_PING,
   proactiveConfig,
   proactiveSection,
   proactiveState,
@@ -26,13 +26,6 @@ import {
   countsForIdle,
   looseEnds,
   recentMaterial,
-  findTriggerSeq,
-  hideTrigger,
-  sweepTriggers,
-  openTurnOf,
-  flushPendingHides,
-  pendingHidesOf,
-  resetPendingHides,
   registerProactive,
   writeSay,
 } from '../lib/proactive.js'
@@ -119,6 +112,90 @@ test('概率随「多久没说话」上升，但有上限；配置读进来会�
   assert.equal(clamped.baseChance, 1)
 })
 
+// ---- 节奏随成长变（2026-11-04，用户 m01466）----
+//
+// 用户原话：「这个自己开口的出口不该是恒温的」。之前 `proactiveState()` 的签名里
+// 根本没有 model，于是第 3 天和第 27 天算出来的 chance 一个数都不差——成长只影响
+// `plan()` 派哪张卡（被叫醒时手里拿什么），完全不影响她多久才自己想开口一次。
+//
+// 三个杠杆都从已有事件推出来：不写盘、不加配置项、不让她看见任何数值（不撞 no-read-self）。
+
+test('不传 model 时与改动前一字不差（老调用方的行为不许漂）', () => {
+  const now = Date.now()
+  const old = new Date(now - 7 * 3_600_000).toISOString()
+  const events = [ev({ ts: old })]
+  const noModel = proactiveState({ config: ON, events, now })
+  const explicitNull = proactiveState({ config: ON, events, now, model: null })
+  const cfg = proactiveConfig(ON)
+  // 基础概率 0.15 + (7-6)*0.05 = 0.20，这是 2026-11-04 之前的算式。
+  assert.equal(noModel.chance, 0.2, `恒温算式被改动了：${noModel.chance}`)
+  assert.deepEqual(explicitNull, noModel, 'model=null 必须等于不传')
+  assert.equal(noModel.chance, Math.min(cfg.maxChance, cfg.baseChance + 1 * cfg.gainPerHour))
+})
+
+test('阶段越高，同样的安静时长里越容易自己开口', () => {
+  const now = Date.now()
+  const events = [ev({ ts: new Date(now - 7 * 3_600_000).toISOString() })]
+  const at = (stage) => proactiveState({ config: ON, events, now, model: { stage } })
+  const s1 = at(1)
+  const s2 = at(2)
+  const s4 = at(4)
+  assert.equal(s1.chance, 0.2, '阶段 1 = 配置原值')
+  assert.ok(s2.chance > s1.chance, '阶段 2 要比阶段 1 更主动')
+  assert.ok(s4.chance > s2.chance, '阶段 4 要比阶段 2 更主动')
+  // 封顶 0.80：再高就不是「她想不想」，而是「几乎一定」。
+  const far = proactiveState({ config: ON, events: [ev({ ts: new Date(now - 99 * 3_600_000).toISOString() })], now, model: { stage: 4 } })
+  assert.ok(far.chance <= 0.8, `阶段 4 的封顶没生效：${far.chance}`)
+})
+
+test('刚推翻过自己的话：24 小时内更容易开口（revise 抬基础概率）', () => {
+  const now = Date.now()
+  // 都要安静够 minIdleHours（默认 6 小时）才轮得到概率这一段，
+  // 所以两条用例的「上一次说话」都摆在同一时刻，只差那条 revise。
+  const tenHoursAgo = new Date(now - 10 * 3_600_000).toISOString()
+  const quiet = [ev({ ts: tenHoursAgo })]
+  const revised = [
+    ev({ id: 'ev_r', type: 'revise', text: '我改口', ts: tenHoursAgo, refs: ['ev_x'] }),
+    ev({ ts: tenHoursAgo }),
+  ]
+  const plain = proactiveState({ config: ON, events: quiet, now, model: { stage: 1 } })
+  const after = proactiveState({ config: ON, events: revised, now, model: { stage: 1 } })
+  assert.equal(plain.ok, true, plain.why)
+  assert.equal(after.ok, true, after.why)
+  assert.ok(after.chance > plain.chance, '刚改过口的人有话没说完')
+  assert.ok(Math.abs(after.chance - (plain.chance + 0.1)) < 1e-9)
+
+  // 超过 24 小时的 revise 不再抬——不然一次改口能被记一辈子。
+  const old = [
+    ev({ id: 'ev_r2', type: 'revise', text: '我改口', ts: new Date(now - 30 * 3_600_000).toISOString(), refs: ['ev_x'] }),
+    ev({ ts: tenHoursAgo }),
+  ]
+  assert.equal(proactiveState({ config: ON, events: old, now, model: { stage: 1 } }).chance, plain.chance)
+})
+
+test('刚有人跟她说过话：余温还在，冷却从 4 小时缩到 2 小时', () => {
+  const now = Date.now()
+  const spoke = (h) => ev({ id: `ev_t_${h}`, type: 'meta', text: `proactive-turn:${dateKey(new Date(now - h * 3_600_000))}:1`, ts: new Date(now - h * 3_600_000).toISOString() })
+  const heard = ev({ id: 'ev_h', type: 'heard', text: '他说了一句', ts: new Date(now - 10 * 3_600_000).toISOString() })
+  const events = [heard, spoke(3)]
+
+  // 3 小时前刚开过口：默认冷却 4 小时 → 挡着。
+  const blocked = proactiveState({ config: ON, events, now })
+  assert.equal(blocked.ok, false)
+  assert.match(blocked.why, /冷却/)
+
+  // 10 小时前有人跟她说过话（24 小时内）→ 冷却缩到 2 小时 → 放行。
+  const warm = proactiveState({ config: ON, events, now, model: { stage: 1 } })
+  assert.equal(warm.ok, true, `余温没起作用：${warm.why}`)
+
+  // 冷透了（heard 超过 24 小时）还是 4 小时。
+  const cold = [
+    ev({ id: 'ev_h2', type: 'heard', text: '很久以前', ts: new Date(now - 30 * 3_600_000).toISOString() }),
+    spoke(3),
+  ]
+  assert.match(proactiveState({ config: ON, events: cold, now, model: { stage: 1 } }).why, /冷却/)
+})
+
 test('空手回合的正文只说事实和许可，不写「你应该」', () => {
   const text = proactiveSection({ now: Date.now(), state: { idleHours: 9.5, chance: 0.3 }, material: [{ id: 'ev_a', type: 'utterance', text: '今天有点累' }], loose: [{ id: 'ev_b', text: '你问过一件事，还没答复。' }] })
   assert.match(text, /没有人跟你说话/)
@@ -128,8 +205,11 @@ test('空手回合的正文只说事实和许可，不写「你应该」', () =>
   assert.match(text, /1–6 条/)
   assert.doesNotMatch(text, /你应该/)
   assert.match(text, /\[ev_a\]/)
-  assert.equal(PROACTIVE_TRIGGER.includes('应该'), false, '触发句不布置任务')
-  assert.match(PROACTIVE_TRIGGER, /没有人跟你说话/)
+  // 2026-11-04（用户 m00428）：触发语从「（现在没有人跟你说话。）」改成一个空格。
+  // 那句话被宿主按真人发言画成用户气泡，用户怎么都能看见；现在这条消息走
+  // `source.kind='fish-wake'`，前端画成收起的折叠条，正文越空越好 ——
+  // 以前那句「没有人跟你说话」还会被她在 reasoning 里当成「谁发了这句话给我」去解释。
+  assert.equal(PROACTIVE_PING.trim(), '', '投递信号不许带正文，否则她又会去猜这句话是谁说的')
 })
 
 test('材料只取她自己的话与听见的东西，悬着的事只列未答的 ask', () => {
@@ -256,227 +336,4 @@ test('meta:watched 也不刷新 idle：她看了条视频，不等于她说过�
   assert.equal(countsForIdle(ev({ type: 'meta', text: `seen:${new Date(now).toISOString()}` })), true, 'seen: 算他来过')
   assert.equal(countsForIdle(ev({ type: 'meta', text: `diary:2026-10-31` })), false, 'diary 不算')
   assert.equal(countsForIdle(ev({ type: 'meta', text: `sched:2026-11-01` })), false, 'sched 不算')
-})
-
-test('触发语收尾：回合结束后能把那条 user/message 换成空节点（用户 m05007）', () => {
-  const events = [
-    { seq: 1, type: 'turn/start', data: { turn: 7 } },
-    { seq: 2, type: 'step/start', data: { step: 2 } },
-    {
-      seq: 3,
-      type: 'user/message',
-      data: { role: 'user', content: [{ type: 'text', text: '（现在没有人跟你说话。）' }], source: { kind: 'user', rpcId: 'proactive-1793372588185' } },
-    },
-  ]
-  assert.equal(findTriggerSeq(events, 'proactive-1793372588185'), 3)
-  assert.equal(findTriggerSeq(events, 'proactive-别的'), 0)
-
-  const session = {
-    appended: null,
-    snapshotEvents: () => events,
-    append(type, data, opts) {
-      this.appended = { type, data, opts }
-    },
-  }
-  assert.equal(hideTrigger(session, { rpcId: 'proactive-1793372588185' }), true)
-  assert.equal(session.appended.type, 'system/message')
-  // 空 content 才不投影任何消息；id 必须是非空字符串——宿主 v4 的
-  // assertV4SystemMessageFields 会查它，缺了整批写盘会抛、并把会话置成 drainPaused。
-  assert.equal(session.appended.data.message.role, 'system')
-  assert.deepEqual(session.appended.data.message.content, [])
-  assert.equal(typeof session.appended.data.message.id, 'string', '替换节点必须带 id（2026-11-01 真机：缺 id 会让整条会话写不下去）')
-  assert.ok(session.appended.data.message.id.length > 0)
-  // source.kind 必须是宿主认的 producer-owned 类型（2026-11-02 用户 m01140 真机：
-  // 缺 source 的那条会话加载期直接 SessionFormatError，整条对话打不开）。
-  assert.equal(session.appended.data.message.source?.kind, 'system-prompt', '替换节点必须带 source.kind，否则会话加载期整条打不开')
-  assert.deepEqual(session.appended.opts.surfaceOp, { op: 'replace', startSeq: 3, endSeq: 3 })
-  assert.deepEqual(session.appended.opts.sourceEventSeqs, [3], '要带 sourceEventSeqs，宿主才知道替的是哪条')
-  assert.equal(session.appended.data.turn, 7, 'turn 取触发语所在回合，不伪造')
-  assert.equal(session.appended.data.step, 2)
-
-  // 回合已经结束（或根本还没开）时**不许写**：宿主要求 system/message 的
-  // turn/step 正好等于此刻开着的那个，写进去就是坏节点，加载期整条对话打不开
-  // （2026-11-02 用户 m01418 真机：`system/message does not match an open turn and step`）。
-  // 这时只记账，等下一轮 step/start 由 flushPendingHides 补收。
-  resetPendingHides()
-  const closed = {
-    appended: null,
-    snapshotEvents: () => [
-      { seq: 1, type: 'turn/start', data: { turn: 5 } },
-      { seq: 2, type: 'step/start', data: { step: 1 } },
-      { seq: 3, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '（现在没有人跟你说话。）' }], source: { kind: 'user', rpcId: 'proactive-closed' } } },
-      { seq: 4, type: 'turn/end', data: { turn: 5 } },
-    ],
-    append(type, data, opts) {
-      this.appended = { type, data, opts }
-    },
-  }
-  assert.equal(hideTrigger(closed, { rpcId: 'proactive-closed' }), false, '回合外必须返回 false')
-  assert.equal(closed.appended, null, '回合外一条都不许写进会话')
-  assert.deepEqual(pendingHidesOf().rpcIds, ['proactive-closed'], '要记下来等下一轮')
-
-  // 下一轮开起来之后补收：turn/step 用**当下**开着的那个（3/1），不是目标消息所在的 5/1。
-  const reopened = {
-    appended: null,
-    snapshotEvents: () => [
-      { seq: 1, type: 'turn/start', data: { turn: 5 } },
-      { seq: 2, type: 'step/start', data: { step: 1 } },
-      { seq: 3, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '（现在没有人跟你说话。）' }], source: { kind: 'user', rpcId: 'proactive-closed' } } },
-      { seq: 4, type: 'turn/end', data: { turn: 5 } },
-      { seq: 5, type: 'turn/start', data: { turn: 6 } },
-      { seq: 6, type: 'step/start', data: { step: 1 } },
-    ],
-    append(type, data, opts) {
-      this.appended = { type, data, opts }
-    },
-  }
-  assert.equal(flushPendingHides(reopened), 1)
-  assert.equal(reopened.appended.data.turn, 6, 'turn 用当下开着的这一轮')
-  assert.equal(reopened.appended.data.step, 1)
-  assert.deepEqual(reopened.appended.opts.surfaceOp, { op: 'replace', startSeq: 3, endSeq: 3 })
-  assert.deepEqual(pendingHidesOf().rpcIds, [], '收掉之后要从队列里去掉')
-
-  // 找不到、没会话、没 rpcId 都不该抛，也不该乱写。
-  assert.equal(hideTrigger(session, { rpcId: 'proactive-别的' }), false)
-  assert.equal(hideTrigger(null, { rpcId: 'proactive-1793372588185' }), false)
-  assert.equal(hideTrigger(session, {}), false)
-})
-
-test('openTurnOf：只有 turn 和 step 都开着才算「能写」（宿主 requireStep 的判据）', () => {
-  assert.deepEqual(openTurnOf([]), { open: false, turn: 0, step: 0 })
-  assert.deepEqual(openTurnOf(null), { open: false, turn: 0, step: 0 })
-  // 只有 turn/start，没有 step/start → 还是不能写
-  assert.deepEqual(openTurnOf([{ type: 'turn/start', data: { turn: 2 } }]), { open: false, turn: 2, step: 0 })
-  // 都开着
-  assert.deepEqual(
-    openTurnOf([{ type: 'turn/start', data: { turn: 2 } }, { type: 'step/start', data: { step: 3 } }]),
-    { open: true, turn: 2, step: 3 },
-  )
-  // step/end 之后不能写
-  assert.equal(
-    openTurnOf([
-      { type: 'turn/start', data: { turn: 2 } },
-      { type: 'step/start', data: { step: 3 } },
-      { type: 'step/end', data: { step: 3 } },
-    ]).open,
-    false,
-  )
-  // turn/end 之后不能写，且下一轮重置 step
-  assert.deepEqual(
-    openTurnOf([
-      { type: 'turn/start', data: { turn: 2 } },
-      { type: 'step/start', data: { step: 3 } },
-      { type: 'turn/end', data: { turn: 2 } },
-      { type: 'turn/start', data: { turn: 3 } },
-    ]),
-    { open: false, turn: 3, step: 0 },
-  )
-})
-
-test('守卫拒绝时必须当场返回，不能「日志说拒了、事件流照样多一条」（用户 m05007 真机）', () => withRoot(async (root) => {
-  line(root, ev({ id: 'ev_mat', text: '一件真实发生过的事' }))
-  const registered = []
-  const ctx = { tools: { register: (t) => registered.push(t) } }
-  registerProactive(ctx, {
-    root,
-    tenant: { root, herDir: '', tenant: { ok: true, instanceId: '', why: '' } },
-    log: () => {},
-  })
-  const tool = registered[0]
-  const before = (await readEvents(root)).events.length
-
-  // 从别的工作区调用：不在这个家 → 守卫拒 → 不许落盘
-  const out = await tool.execute(
-    { text: '这句不该写进去', refs: ['ev_mat'] },
-    { session: { header: { id: 'session-elsewhere', cwd: 'D:/somewhere-else' } } },
-  )
-  assert.equal(out.ok, false)
-  assert.match(out.note, /没有落盘|另一个家/)
-  assert.equal((await readEvents(root)).events.length, before, '拒绝时事件数不能变')
-
-  // 同一份 tenant，换回她自己的会话 → 放行
-  const okOut = await tool.execute(
-    { text: '这句可以写', refs: ['ev_mat'] },
-    { session: { header: { id: 'session-26cbdc5e', cwd: join(root, 'home') } } },
-  )
-  assert.equal(okOut.ok, true)
-  assert.equal((await readEvents(root)).events.length, before + 2, '写一条 utterance + 一条 meta')
-}))
-
-test('补扫：历史里遗留的触发语也要收走，但别误伤她复述这句话（用户 m05031）', () => {
-  resetPendingHides()
-  const events = [
-    { seq: 1, type: 'turn/start', data: { turn: 3 } },
-    { seq: 2, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '（现在没有人跟你说话。）' }] } },
-    { seq: 3, type: 'assistant/message', data: {} },
-    { seq: 4, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '（现在没有人跟你说话。）这句不是我写的' }] } },
-    { seq: 5, type: 'turn/start', data: { turn: 4 } },
-    { seq: 6, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '（现在没有人跟你说话。）' }] } },
-    // 补扫时得有个回合开着才写得进去（宿主 requireStep），这里补上 step/start。
-    { seq: 7, type: 'step/start', data: { step: 1 } },
-  ]
-  const appended = []
-  const session = {
-    snapshotEvents: () => events,
-    append(type, data, opts) {
-      appended.push({ type, data, opts })
-    },
-  }
-  assert.equal(sweepTriggers(session), 2, '两条完全相等的收走；她复述的那条留着')
-  assert.deepEqual(appended.map((a) => a.opts.surfaceOp.startSeq), [2, 6])
-  assert.deepEqual(appended.map((a) => a.opts.sourceEventSeqs), [[2], [6]])
-  // turn/step 用**当下开着**的那个（4/1），不是各自目标消息所在的回合：
-  // 往已关闭的回合里写会被宿主 `requireStep` 拒，而那条错在加载期炸，整条对话打不开。
-  assert.deepEqual(appended.map((a) => a.data.turn), [4, 4])
-  assert.deepEqual(appended.map((a) => a.data.step), [1, 1])
-
-  // 每条替换节点都得有自己的 id，不能复用
-  const ids = appended.map((a) => String(a.data.message.id ?? ''))
-  assert.equal(ids.filter((id) => id.length > 0).length, 2, '两条都要带 id')
-  assert.notEqual(ids[0], ids[1], '两条替换节点不能共用一个 id')
-  // 补扫写出来的节点同样要带 source（2026-11-02 用户 m01140 真机事故：缺 source 会让整条会话打不开）
-  assert.deepEqual(appended.map((a) => a.data.message.source?.kind), ['system-prompt', 'system-prompt'])
-
-  // 已收过的再扫不会再叠：把 replace 节点也放进事件流里
-  events.push({ seq: 8, type: 'system/message', data: { surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, message: { id: 'sys-2', role: 'system', content: [] } } })
-  events.push({ seq: 9, type: 'system/message', data: { surfaceOp: { op: 'replace', startSeq: 6, endSeq: 6 }, message: { id: 'sys-6', role: 'system', content: [] } } })
-  appended.length = 0
-  assert.equal(sweepTriggers(session), 0)
-})
-
-test('补扫：回合没开着就一条都不写，攒到下一轮再说（2026-11-02 用户 m01418 真机事故）', () => {
-  resetPendingHides()
-  const events = [
-    { seq: 1, type: 'turn/start', data: { turn: 3 } },
-    { seq: 2, type: 'step/start', data: { step: 1 } },
-    { seq: 3, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '（现在没有人跟你说话。）' }] } },
-    { seq: 4, type: 'turn/end', data: { turn: 3 } },
-  ]
-  const appended = []
-  const session = {
-    snapshotEvents: () => events,
-    append(type, data, opts) {
-      appended.push({ type, data, opts })
-    },
-  }
-  assert.equal(sweepTriggers(session), 0, '回合外不许写')
-  assert.equal(appended.length, 0, '一条都不能落盘——那正是让整条会话打不开的东西')
-  assert.deepEqual(pendingHidesOf().seqs, [3], '要记住这条，等下一轮再收')
-
-  // 下一轮开起来之后 flush 把它收掉（走 sweepTriggers 那条路，turn/step 用当下的）。
-  const live = {
-    snapshotEvents: () => [
-      ...events,
-      { seq: 5, type: 'turn/start', data: { turn: 4 } },
-      { seq: 6, type: 'step/start', data: { step: 1 } },
-    ],
-    append(type, data, opts) {
-      appended.push({ type, data, opts })
-    },
-  }
-  assert.equal(flushPendingHides(live), 1)
-  assert.equal(appended.length, 1, '攒着的那条这时才写')
-  assert.deepEqual(appended[0].opts.surfaceOp, { op: 'replace', startSeq: 3, endSeq: 3 })
-  assert.equal(appended[0].data.turn, 4, '用当下开着的这一轮')
-  assert.deepEqual(pendingHidesOf().seqs, [], '收掉之后队列要清空')
 })

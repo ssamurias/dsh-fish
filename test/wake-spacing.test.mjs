@@ -42,6 +42,18 @@ test('nextWakeAt：今天还没醒过不拦；醒过之后把剩下的摊到时�
 
 // ---- 真的跑 tick：假宿主 + 临时状态库，时间用 Date.now 偏移推进 ----
 
+/**
+ * 假宿主。
+ *
+ * 2026-11-04（用户 m00428）起，叫醒不再走 `sessionController.prompt()` ——
+ * 宿主的 `prompt()` 内部写死 `source.kind = 'user'`，那条消息在前端永远是一句
+ * 「他打的字」，我们怎么盖都盖不掉（详见 `lib/deliver.js` 顶部注释）。
+ * 现在走 `resolveAgent()` → `agent.followup(message)`，所以这个假宿主必须
+ * 同时提供这两步，否则每次叫醒都会在 deliver.js 里抛「宿主没有 resolveAgent」。
+ *
+ * `prompts` 记的仍然是「这一次递进去的东西」：`req.sessionId` 是拿 agent 用的那个 id，
+ * `text` 是正文，`section` 是递进来的那一刻的处境段（正是 wake() 刚挂上去的那份）。
+ */
 function fakeHost(onCreate) {
   const listeners = []
   const prompts = []
@@ -53,7 +65,13 @@ function fakeHost(onCreate) {
     },
     sessionController: {
       create: async () => { await onCreate?.(); throw new Error('exists') },
-      prompt: async (req) => { prompts.push({ req, section: getWakeSection() }) },
+      resolveAgent: async (sessionId) => ({
+        agent: {
+          followup: (message) => {
+            prompts.push({ req: { sessionId, message }, text: message?.content?.[0]?.text, section: getWakeSection() })
+          },
+        },
+      }),
     },
   }
   const emit = (type) => { for (const fn of [...listeners]) fn({ id: 's-main' }, { type }) }
@@ -234,7 +252,8 @@ test('turn/end 一直不来、她也不在忙：兜底把窗口和处境一起�
 test('消息没送进去：窗口当场关上', async () => {
   await withRoot(async (root) => {
     const h = fakeHost()
-    h.ctx.sessionController.prompt = async () => { throw new Error('host down') }
+    // 使唤不动宿主：拿不到 agent（比「投递时抛错」更早失败，正是真机上最常见的一种）
+    h.ctx.sessionController.resolveAgent = async () => ({ error: new Error('host down') })
     const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
     try {
       await s.tick()
