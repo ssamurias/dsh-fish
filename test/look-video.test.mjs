@@ -72,7 +72,19 @@ test('what=video：按 BV 号看指定的那一条，详情只取一次', async 
     const { events } = await readEvents(root)
     const texts = events.filter((e) => e.type === 'meta').map((e) => String(e.text ?? ''))
     assert.ok(texts.includes(`looked:${v().bvid}`))
-    assert.ok(texts.includes(`look:${dateKey()} ${v().bvid}`))
+    // 2026-11-04（用户 m02464）：look: 现在要把展示信息一起落下来，
+    // 否则日报「翻到过什么」里由 look: 来的条目全是「(无标题)」。
+    const look = texts.find((t) => t.startsWith(`look:${dateKey()} ${v().bvid}`))
+    assert.ok(look, 'look: 这一行必须落下来')
+    assert.match(look, /\{"title":/)
+    const info = JSON.parse(look.slice(look.indexOf('{')))
+    // what=video 这条路上标题来自详情接口（`标题 BV…`），不是列表里那份——
+    // 断言成「跟 picks 里给她看的那份一致」比钉死某个字面更稳。
+    // 详情接口不带时长/播放量，所以那两个字段允许缺省成 0（展示层会跳过）。
+    assert.equal(info.title, r.picks[0].title)
+    assert.equal(info.up, r.picks[0].up)
+    assert.equal(typeof info.duration, 'number')
+    assert.equal(typeof info.view, 'number')
   })
 })
 
