@@ -161,7 +161,7 @@ test('落点之后不再一分钟一个地连着叫；第二次等时间到、�
 })
 
 test('叫醒准备的几秒里她刚好开始了别的一轮：等那一轮说完再挂处境', async () => {
-  await withRoot(async (root) => {
+  await withRoot(async (root, { sleep }) => {
     let h
     h = fakeHost(async () => { h.emit('turn/start'); setTimeout(() => h.emit('turn/end'), 60) })
     const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
@@ -169,9 +169,26 @@ test('叫醒准备的几秒里她刚好开始了别的一轮：等那一轮说�
       await s.tick()
       assert.equal(h.prompts.length, 1)
       assert.match(h.prompts[0].section, /叫醒你的信号/, '叫的时候处境还在，没被那一轮的 turn/end 收走')
+      // 那一轮的 turn/end 是 60ms 后才来的：等它落地再收摊。
+      // 以前这里一断言完就 dispose，监听被摘掉、busy 表里这条会话永远算「在忙」，
+      // 兜底定时器就一直重排，进程级的叫醒窗口跟着泄漏到下一个用例。
+      await sleep(90)
     } finally {
       s.dispose()
     }
+  })
+})
+
+test('调度器收摊之后兜底不再重排：叫醒窗口当场关上', async () => {
+  await withRoot(async (root, { sleep }) => {
+    const h = fakeHost()
+    const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
+    await s.tick()
+    assert.equal(h.prompts.length, 1)
+    assert.equal(inWake(), true)
+    s.dispose()
+    await sleep(30)
+    assert.equal(inWake(), false, '收摊之后窗口不许一直开着')
   })
 })
 
