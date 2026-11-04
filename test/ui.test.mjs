@@ -190,3 +190,37 @@ test('工具分组：被挡过的名字不在别的组里重复出现', async ()
   assert.ok(src.includes('!blockedSet.has(n)'), 'known 那组要排掉被挡过的')
   assert.ok(src.includes('const ownList = (toolsOwnLayer ?? []).filter((n) => !blockedSet.has(n))'), 'own 那组同理')
 })
+
+// 2026-11-04 用户反馈：真机一百多个胶囊全摊开，等于没有界面。
+test('工具分组：名字多的那一组默认收着，点一下才展开', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+  // 默认收起——状态初始值不能是 true
+  assert.ok(src.includes('const [toolsOpenFams, setToolsOpenFams] = useState({})'), '展开状态初值要是空对象（即全收着）')
+  assert.match(src, /const famOpen = \(fam\) => toolsOpenFams\[fam\] === true/, '没点过的一律按收起算')
+  // 折叠条要真的能点，且展开后才渲染这一族的胶囊
+  assert.ok(src.includes("h('span', { className: 'famcaret' }"), '折叠条要有箭头，不然看不出能点')
+  assert.match(src, /famOpen\(g\.fam\)\s*\n?\s*\? h\('div', \{ key: `chips:\$\{g\.fam\}`, className: 'chips' \}/, '展开才渲染这一族的名字')
+  assert.ok(src.includes("famOpen('__loose')\n              ? h('div', { key: 'chips:__loose', className: 'chips' }"), '零散那一族同理')
+  // 归类只按名字前缀，不许猜「这个工具是干什么的」
+  assert.match(src, /const famOf = \(name\) => \{[\s\S]{0,160}indexOf\('_'\)/, '按第一个下划线切前缀')
+  // 只有一只的别单独占一行标题
+  assert.match(src, /if \(f && names\.length >= 2\) fams\.push/, '一族里至少两只才算一族')
+})
+
+test('工具分组：点名字只是起草，说明里必须写明还要按保存', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+  assert.ok(src.includes("h('div', { className: 'chipsnote' }"), '要有显眼的说明块，不能只写在角落小字里')
+  const noteAt = src.indexOf("className: 'chipsnote'")
+  const note = src.slice(noteAt, noteAt + 700)
+  assert.ok(note.includes('还没生效'), '要说清点一下还没生效')
+  assert.ok(note.includes('保存设置'), '要说清还得按保存')
+  assert.ok(note.includes('重启'), '要说清重启才真的放开')
+})
+
+test('工具分组：全部展开/全部收起不会把外层那一块也收起来', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+  const at = src.indexOf('const toggleAllFams = () =>')
+  assert.ok(at > 0)
+  const body = src.slice(at, at + 400)
+  assert.ok(body.includes('...prev'), '要基于上一份状态改，别整个覆盖（否则外层 __other 被清掉，点一次反而整块收起）')
+})
