@@ -1,6 +1,6 @@
 ## 0.8.9 — 未发布
 
-这一版（还没发）七件事：**递话、叫醒之后不再在宿主里堆一条空白会话**；社区 PR #26 的两处回忆显示修复；调度器收摊时把叫醒窗口一起关掉（CI 抓到的泄漏）；**按她手上真有的工具，摘掉讲别的工具的提示词段**；**把最容易变的那四段挪到提示词最末尾**；**醒过来没开口的那一轮折成一行**；以及**沉默不再扣额度、也不再吃冷却**。另外把 0.8.8 里来自社区 PR #23 的部分补上署名，见本节末的「鸣谢」。
+这一版（还没发）七件事：**递话、叫醒之后不再在宿主里堆一条空白会话**；社区 PR #26 的两处回忆显示修复；调度器收摊时把叫醒窗口一起关掉（CI 抓到的泄漏）；**按她手上真有的工具，摘掉讲别的工具的提示词段**；**把最容易变的那四段挪到提示词最末尾**；**醒过来没开口的那一轮收起来**；以及**沉默不再扣额度、也不再吃冷却**。另外把 0.8.8 里来自社区 PR #23 的部分补上署名，见本节末的「鸣谢」。
 
 - **她的会话列表不再越积越多空壳**：本机 `~/.dsh-fish/home` 这个 cwd 下 52 条会话里 39 条是空壳，同一台机器其他工作区几乎没有。
 - **「只说开头」的回忆里，长的聊天原话也带着「｜聊天里说的」**，不再被 40 字截掉、看着她像认领过。
@@ -130,11 +130,11 @@
 
 ---
 
-### 六、醒过来却没开口的那一轮，收成一行
+### 六、醒过来却没开口的那一轮，收起来
 
 #### 你会看到什么
 
-她半夜醒一次、看了一圈、觉得没什么可说的——这一轮不再原样堆在她的历史里。她那边看到的历史只剩一行：`[dsh-fish silent wake] 这一轮是她自己醒过来看了一圈，没有开口。内容已经收起，不必回头补。`你自己的对话框不受影响：折叠只改模型看到的那一份，人类记录里那一轮仍然原样在。
+她半夜醒一次、看了一圈、觉得没什么可说的——这一轮不再原样堆在她的历史里。她那边看到的历史只剩一小段：`[dsh-fish silent wake] 这一轮是她自己醒过来看了一圈，没有开口。内容已经收起，不必回头补。`（宿主中途提交过投影的话，这一轮会被切成几段，每段各换一行，投影原样留着。）你自己的对话框不受影响：折叠只改模型看到的那一份，人类记录里那一轮仍然原样在。
 
 #### 为什么会这样
 
@@ -144,14 +144,16 @@
 
 新文件 `lib/compact.js`：
 
-- `followWake(ctx, { rpcId })` 在投递之前就挂上，靠 `data.source.rpcId` 认领这一轮的那条投递（每次投递一个唯一值，认不中就一律当「还没开始」），`turn/end` 时闭合区间。
+- `followWake(ctx, { rpcId })` 在投递之前就挂上，靠 `data.source.rpcId` 认领这一轮的那条投递（每次投递一个唯一值，认不中就一律当「还没开始」），`turn/end` 时闭合区间。认领之后只跟这一条会话：宿主里别的会话同时在转轮，它们的 seq 和 `turn/end` 都是噪声。
 - `spoke` 只看 `assistant/message` 里的**非空 text 块**——只说 reasoning 不算开口（和 `lib/turns.js` 的 `assistantText` 同一套口径）。
-- `planWakeCompaction(events, { startSeq, endSeq, rpcId })` 把区间里的 surface 节点全列进 `sourceEventSeqs`（宿主逐条核对，漏一个就拒收），日志类事件不进名单。区间里只要有宿主的 `system/message` 投影、`runtime-context` 快照、或任何不是这次投递的 user/message，**整轮放弃**——宁可多留，不能把他的话藏起来。
-- `compactWake(session, plan)` 写一条 `user/message` 墓碑，带 `surfaceOp: { op: 'replace', startSeq, endSeq }`。只能是 user/message：`assistant/message` 禁带 `sourceEventSeqs`，带上去会被宿主直接拒。
+- `planWakeCompaction(events, { startSeq, endSeq, rpcId })` 把这一轮里**她自己那几段**找出来：每段都列出全部 surface 节点（宿主逐条核对，漏一个就拒收），日志类事件（`turn/start`、`step/end`……）既不进名单也不打断一段。
+- 宿主的 `system/message` 投影、`runtime-context` 快照、任何不是这次投递的 user/message，**都是边界而不是放弃理由**：它们把这一轮切成几段，各段分别折，边界原样留着。这一条是必须的——一次叫醒里处境段变了，宿主每一步都会提交一次投影；如果「有投影就整轮放弃」，真机上几乎永远折不了。
+- 一段里真正的内容不足 200 字符（`MIN_RUN_CHARS`）就不折：墓碑本身 70 来字，折一段只剩一句话的区间是净亏。
+- `compactWake(session, run)` 每段写一条 `user/message` 墓碑，带 `surfaceOp: { op: 'replace', startSeq, endSeq }`。只能是 user/message：`assistant/message` 禁带 `sourceEventSeqs`，带上去会被宿主直接拒。
 
 #### 测试
 
-`test/compact.test.mjs` 新增 13 条：墓碑指纹与长度、哪五种算 surface 节点、说话的一轮不折、只想想不算开口、别的 rpcId 不认、超时不折、区间只列 surface 节点、拒绝 system/message、拒绝 runtime-context、拒绝别人的话、五种非法区间、墓碑的形状（类型／来源／replace／sourceEventSeqs）、宿主拒收时只返回 false 不抛。
+`test/compact.test.mjs` 新增 15 条：墓碑指纹与长度、哪五种算 surface 节点、说话的一轮不折、只想想不算开口、别的 rpcId 不认、别的会话同时在转轮不认、超时不折、区间只列 surface 节点（日志类不进名单）、宿主的投影当边界切段而不整轮放弃、runtime-context 同理、别人的话一个字不藏只折自己那几段、太短的一段不折、五种非法区间、墓碑的形状（类型／来源／replace／sourceEventSeqs）、宿主拒收时只返回 false 不抛。
 
 ---
 

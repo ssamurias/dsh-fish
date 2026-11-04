@@ -150,6 +150,22 @@ test('别的投递/别的话一律不认：rpcId 对不上就当没开始', asyn
   assert.equal(out.spoke, false)
 })
 
+test('别的会话在同一条插件里转轮：不认，别把它的 seq 折进来', async () => {
+  const ctx = fakeCtx()
+  const other = { id: 'session-2', header: { id: 'session-2' } }
+  const follow = followWake(ctx, { rpcId: RID })
+  ctx.emit(SESSION, ping(10))
+  // 她在叫醒的同时，用户在另一条会话里说话：那边的 turn/end 不能把这一轮提前收掉。
+  ctx.emit(other, logOnly('turn/start', 11))
+  ctx.emit(other, logOnly('turn/end', 12))
+  ctx.emit(SESSION, thinking(13))
+  ctx.emit(SESSION, logOnly('turn/end', 14))
+  const out = await follow.done
+  assert.equal(out.ok, true)
+  assert.equal(out.endSeq, 13)
+  assert.deepEqual(out.events.map((e) => e.seq), [10, 13])
+})
+
 test('超时：没有 turn/end 就给 ok:false，只记账不折', async () => {
   const ctx = fakeCtx()
   const follow = followWake(ctx, { rpcId: RID, timeoutMs: 20 })
@@ -162,43 +178,73 @@ test('超时：没有 turn/end 就给 ok:false，只记账不折', async () => {
   assert.equal(ctx.size, 0)
 })
 
+/** 够长的一段内容：`MIN_RUN_CHARS` 之下不值得折，测试里得给出真实体量。 */
+const LONG = '想'.repeat(400)
+const fat = (seq) => ({
+  type: 'assistant/message',
+  seq,
+  time: 2,
+  surfaceOp: 'append',
+  data: { message: { id: `m${seq}`, role: 'assistant', content: [{ type: 'reasoning', text: LONG }] } },
+})
+const fatSaid = (seq) => said(seq, LONG)
+
 test('折叠区间：只列 surface 节点，日志类事件（turn/start、step/end）不进名单', () => {
   const events = [
     logOnly('turn/start', 9),
     ping(10),
     logOnly('step/start', 11),
-    thinking(12),
+    fat(12),
     { type: 'tool/result', seq: 13, time: 2, surfaceOp: 'append', data: { message: { role: 'tool' } } },
-    said(14, '嗯'),
+    fatSaid(14),
     logOnly('step/end', 15),
   ]
   const plan = planWakeCompaction(events, { startSeq: 10, endSeq: 15, rpcId: RID })
   assert.ok(plan)
-  assert.deepEqual(plan.sourceEventSeqs, [10, 12, 13, 14])
+  assert.equal(plan.runs.length, 1)
+  assert.deepEqual(plan.runs[0].sourceEventSeqs, [10, 12, 13, 14])
+  assert.equal(plan.runs[0].startSeq, 10)
+  // 区间右端是 turn/end−1：`step/end` 这类日志事件不该把尾巴撑开。
+  assert.equal(plan.runs[0].endSeq, 14)
   assert.equal(plan.shadowed, 4)
-  assert.equal(plan.startSeq, 10)
-  assert.equal(plan.endSeq, 15)
 })
 
-test('宿主的 system/message 投影：一律放弃（盖了它会触发整份快照重发）', () => {
-  const events = [ping(10), system(11), said(12, '嗯')]
-  assert.equal(planWakeCompaction(events, { startSeq: 10, endSeq: 12, rpcId: RID }), null)
+test('宿主的 system/message 投影：不盖，但把它当边界切成两段，不整轮放弃', () => {
+  const events = [ping(10), system(11), fat(12), fatSaid(13)]
+  const plan = planWakeCompaction(events, { startSeq: 10, endSeq: 13, rpcId: RID })
+  assert.ok(plan, '有投影不等于整轮不折：真机上几乎每轮都有投影')
+  assert.equal(plan.runs.length, 1)
+  assert.deepEqual(plan.runs[0].sourceEventSeqs, [12, 13])
+  assert.ok(!plan.runs[0].sourceEventSeqs.includes(11), '投影节点绝不能被盖')
 })
 
-test('runtime-context 快照：一律放弃', () => {
+test('runtime-context 快照：当边界，不盖', () => {
   const events = [
     ping(10),
     { type: 'user/message', seq: 11, time: 2, surfaceOp: 'append', data: { id: 'ctx', role: 'user', content: [{ type: 'text', text: '上下文' }], source: { kind: 'runtime-context' } } },
-    said(12, '嗯'),
+    fat(12),
+    fatSaid(13),
   ]
-  assert.equal(planWakeCompaction(events, { startSeq: 10, endSeq: 12, rpcId: RID }), null)
+  const plan = planWakeCompaction(events, { startSeq: 10, endSeq: 13, rpcId: RID })
+  assert.ok(plan)
+  assert.deepEqual(plan.runs[0].sourceEventSeqs, [12, 13])
+  assert.ok(!plan.runs[0].sourceEventSeqs.includes(11))
 })
 
-test('区间里有别人的话（他打的、别的插件注入的）：不折，一个字都不藏', () => {
+test('区间里有别人的话（他打的、别的插件注入的）：那一条不藏，只折自己那几段', () => {
   const human = { type: 'user/message', seq: 11, time: 2, surfaceOp: 'append', data: { id: 'u1', role: 'user', content: [{ type: 'text', text: '你在吗' }], source: { kind: 'user', rpcId: 'x' } } }
-  assert.equal(planWakeCompaction([ping(10), human, said(12, '嗯')], { startSeq: 10, endSeq: 12, rpcId: RID }), null)
-  // 同一种 kind 但 rpcId 不是这次投递 —— 也不折（宁可多留）。
-  assert.equal(planWakeCompaction([ping(10), ping(11, { rpcId: 'proactive-别的' }), said(12, '嗯')], { startSeq: 10, endSeq: 12, rpcId: RID }), null)
+  const plan = planWakeCompaction([ping(10), human, fat(12), fatSaid(13)], { startSeq: 10, endSeq: 13, rpcId: RID })
+  assert.ok(plan)
+  assert.deepEqual(plan.runs[0].sourceEventSeqs, [12, 13])
+  assert.ok(!plan.runs[0].sourceEventSeqs.includes(11), '他说的话一个字都不藏')
+  // 同一种 kind 但 rpcId 不是这次投递 —— 同样当边界。
+  const plan2 = planWakeCompaction([ping(10), ping(11, { rpcId: 'proactive-别的' }), fat(12), fatSaid(13)], { startSeq: 10, endSeq: 13, rpcId: RID })
+  assert.ok(plan2)
+  assert.deepEqual(plan2.runs[0].sourceEventSeqs, [12, 13])
+})
+
+test('太短的一段不值得折：只剩一句话就不折', () => {
+  assert.equal(planWakeCompaction([ping(10), said(11, '嗯')], { startSeq: 10, endSeq: 11, rpcId: RID }), null)
 })
 
 test('非法区间 / 没节点：返回 null，不抛', () => {
