@@ -13,7 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { HER_TOOLS, currentToolSurface, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf } from '../lib/restrict.js'
+import { HER_TOOLS, currentToolSurface, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
 
 /** 一个够用的假插件 ctx：能 on('agent/created')，也能被我们主动触发。 */
 function fakeCtx() {
@@ -581,4 +581,84 @@ test('visibleToolsOf：优先 visible；老宿主没有 visible 才退回 restri
   // 两条路都拿不到 = null（「不知道」不能当成「一样都没有」）
   assert.equal(visibleToolsOf({ ctx: {} }), null)
   assert.equal(visibleToolsOf(undefined), null)
+})
+
+// ---------------------------------------------------------------------------
+// 被挡下来的调用要记账（2026-11-04，issue #20）
+//
+// 以前 guard 拦下只写一行日志、返回「这件事我做不到」——用户看到她在拒绝，
+// 却没有任何线索说「白名单少了个名字」。issue 里那位翻了四小时日志才查出来。
+// 现在每次拦截都按名字归并进 blockedTools()，设置页与自检直接拿它说话。
+// ---------------------------------------------------------------------------
+
+test('guard 拦下谁就记下谁：按名字归并、次数累加', () => {
+  forgetBlockedTools()
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
+  const a = fakeAgent('C:\\h')
+  ctx.emit('agent/created', { agent: a.agent })
+  const guard = a.guards[0]
+
+  guard({ name: 'vision_describe', args: { path: 'a.png' } })
+  guard({ name: 'vision_describe', args: { path: 'b.png' } })
+  guard({ name: 'ops_bash' })
+
+  const got = blockedTools()
+  assert.deepEqual(got.map((b) => b.name).sort(), ['ops_bash', 'vision_describe'])
+  const v = got.find((b) => b.name === 'vision_describe')
+  assert.equal(v.count, 2, '同一只手够两次要记两次')
+  assert.ok(v.first && v.last, '第一次与最近一次都留着')
+  assert.ok(typeof v.first === 'string' && v.first.endsWith('Z'))
+})
+
+test('放行的调用不进账本（别把正常用工具也记成"被挡"）', () => {
+  forgetBlockedTools()
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
+  const a = fakeAgent('C:\\h')
+  ctx.emit('agent/created', { agent: a.agent })
+  const guard = a.guards[0]
+
+  assert.equal(guard({ name: 'growth_commit' }), undefined)
+  assert.equal(guard({ name: 'read_image' }), undefined)
+  assert.deepEqual(blockedTools(), [])
+})
+
+test('账本按"最近被挡"倒序：刚撞的那只排最前', () => {
+  forgetBlockedTools()
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
+  const a = fakeAgent('C:\\h')
+  ctx.emit('agent/created', { agent: a.agent })
+  const guard = a.guards[0]
+
+  guard({ name: 'team_task_list' })
+  guard({ name: 'workflow' })
+  assert.equal(blockedTools()[0].name, 'workflow', '后撞的那只要排最前')
+})
+
+test('往账本里灌 200 个不同名字不会失控（上限 50）', () => {
+  forgetBlockedTools()
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
+  const a = fakeAgent('C:\\h')
+  ctx.emit('agent/created', { agent: a.agent })
+  const guard = a.guards[0]
+
+  for (let i = 0; i < 200; i += 1) guard({ name: `spam_tool_${i}` })
+  // 上限是给界面看的，不许因为一个失控的循环把内存吃满
+  assert.ok(blockedTools().length <= 50, `实际 ${blockedTools().length} 个`)
+  assert.ok(blockedTools().length > 0)
+  forgetBlockedTools()
+})
+
+test('forgetBlockedTools 清空：重启后有没有被挡是新问题，不该带上一局的账', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
+  const a = fakeAgent('C:\\h')
+  ctx.emit('agent/created', { agent: a.agent })
+  a.guards[0]({ name: 'run_code' })
+  assert.equal(blockedTools().length, 1)
+  forgetBlockedTools()
+  assert.deepEqual(blockedTools(), [])
 })

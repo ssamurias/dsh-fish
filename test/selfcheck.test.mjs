@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 
 import { runChecks } from '../lib/selfcheck.js'
+import { registerToolRestrict, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
 import { writeOwner } from '../lib/store.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -116,4 +117,65 @@ test('源码守门：/owner POST 只认登录账号，不许覆盖领养人', as
     false,
     '不许再把登录账号写进领养人那两格',
   )
+})
+
+// ---------------------------------------------------------------------------
+// 自检要说出「她被白名单挡住了」（2026-11-04，issue #20）
+//
+// 以前她被挡下只留一行日志：用户看到的是她答「这件事我做不到」，
+// 却不知道白名单少了个名字。现在自检单列一项，并且只在**确实拦过**时才出。
+// ---------------------------------------------------------------------------
+
+/** 挂一道真 guard，再撞它一下，制造一条真实的「被挡」记录。 */
+function tripGuard(name) {
+  const listeners = new Map()
+  const guards = []
+  const ctx = {
+    on: (ev, fn) => { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(fn); return () => {} },
+    emit: (ev, payload) => { for (const fn of listeners.get(ev) ?? []) fn(payload) },
+  }
+  registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
+  ctx.emit('agent/created', {
+    agent: {
+      session: { header: { cwd: 'C:\\h' } },
+      ctx: { tools: { restrict: () => () => {}, guard: (fn) => { guards.push(fn); return () => {} } }, effect: () => {} },
+    },
+  })
+  guards[0]({ name })
+}
+
+test('撞过白名单之后，自检里多出一项「被白名单挡住的调用」', async () => {
+  forgetBlockedTools()
+  tripGuard('vision_describe')
+  tripGuard('vision_describe')
+  await withRoot(async (root) => {
+    const r = await runChecks({ root, net: false, host: {}, peers: [] })
+    const it = ITEM(r, 'tools-blocked')
+    assert.ok(it, '拦过东西就必须有一条')
+    assert.equal(it.ok, false, '这不是绿：她确实伸手够过、也确实被挡了')
+    assert.match(it.detail, /vision_describe/)
+    assert.match(it.detail, /2 次/, '次数要如实说，一次手滑和十次缺东西不是一回事')
+    assert.match(it.detail, /白名单/, '要说清是白名单没放行，不是她坏了')
+    assert.match(it.fix, /重启/, '改了白名单要重启才生效，得提前讲')
+  })
+  forgetBlockedTools()
+})
+
+test('没撞过就不出这一项（不许拿绿条占地方）', async () => {
+  forgetBlockedTools()
+  await withRoot(async (root) => {
+    const r = await runChecks({ root, net: false, host: {}, peers: [] })
+    assert.equal(ITEM(r, 'tools-blocked'), undefined)
+  })
+})
+
+test('自检这一项的话术里没有系统词：不是"权限不足"，是"白名单没放行"', async () => {
+  forgetBlockedTools()
+  tripGuard('ops_bash')
+  await withRoot(async (root) => {
+    const it = ITEM(await runChecks({ root, net: false, host: {}, peers: [] }), 'tools-blocked')
+    assert.doesNotMatch(it.detail, /权限|禁止|违规|没有授权/)
+    assert.ok(blockedTools().length === 1)
+  })
+  forgetBlockedTools()
 })

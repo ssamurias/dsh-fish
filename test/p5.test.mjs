@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os'
 import { normalizeConfig, inWindow, DEFAULTS } from '../lib/settings.js'
 import { lookBeforeWake } from '../lib/scheduler.js'
 import { registerObserve } from '../lib/observe.js'
-import { HER_TOOLS, rememberFromView } from '../lib/restrict.js'
+import { HER_TOOLS, rememberFromView, registerToolRestrict, forgetBlockedTools } from '../lib/restrict.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CLIENT = join(HERE, '..', 'lib', 'client.js')
@@ -361,6 +361,63 @@ test('整张表全是坏名字时也只是白名单清空，不报错', async ()
     assert.deepEqual(out.config.tools.allow, [])
     assert.deepEqual(out.droppedTools, ['delete', 'remove'])
   } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// /tools 要把「被挡过什么」「她自己本来就有什么」也一起交出来（2026-11-04，issue #20）
+//
+// 以前设置页只知道「这台机器上有哪些工具名字」：能核对拼写，说不清
+// 「这两只她本来就有，加白名单只是让守卫放行」，更看不见「她伸手够过、被挡了」。
+// ---------------------------------------------------------------------------
+
+test('/tools 多给三样：herTools 只读清单、blocked 被挡记录、ownLayer 照旧', async () => {
+  forgetBlockedTools()
+  const root = await mkdtemp(join(tmpdir(), 'fish-p5f-'))
+  try {
+    rememberFromView({
+      restrictableNames: new Set([...HER_TOOLS, 'vision_describe']),
+      visible: new Map([...HER_TOOLS.map((n) => [n, {}]), ['ops_bash', {}]]),
+    })
+    const ctx = fakeCtx(root)
+    ctx.cfg.connection = { requestRejection: () => null }
+    registerObserve(ctx, { root })
+
+    // 制造一条真的「被挡」：挂守卫、撞它
+    const listeners = new Map()
+    const guards = []
+    const gctx = {
+      on: (ev, fn) => { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(fn); return () => {} },
+      emit: (ev, p) => { for (const fn of listeners.get(ev) ?? []) fn(p) },
+    }
+    registerToolRestrict(gctx, { herDir: 'C:\\h', log: () => {} })
+    gctx.emit('agent/created', {
+      agent: {
+        session: { header: { cwd: 'C:\\h' } },
+        ctx: { tools: { restrict: () => () => {}, guard: (fn) => { guards.push(fn); return () => {} } }, effect: () => {} },
+      },
+    })
+    guards[0]({ name: 'vision_describe' })
+
+    const tools = ctx.routes.find((r) => String(r.path || '').endsWith('/tools'))
+    let payload = null
+    await tools.handler({ method: 'GET', url: '/dsh-fish/tools', headers: {} }, {
+      writeHead: () => {},
+      end: (s) => { payload = JSON.parse(s || '{}') },
+      setHeader: () => {},
+    })
+
+    assert.deepEqual(payload.herTools, [...HER_TOOLS], '她自己那几件要能原样交代给界面')
+    assert.ok(payload.herTools.includes('growth_commit'))
+    assert.deepEqual(payload.ownLayer, ['ops_bash'], 'ownLayer 的语义不能变（老界面靠它解释白名单）')
+    assert.equal(payload.blocked.length, 1)
+    assert.equal(payload.blocked[0].name, 'vision_describe')
+    assert.equal(payload.blocked[0].count, 1)
+    // 第三方工具在 known 里看得见：名字本身不重要，能被放行才是重点
+    assert.ok(payload.known.includes('vision_describe'))
+  } finally {
+    forgetBlockedTools()
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })

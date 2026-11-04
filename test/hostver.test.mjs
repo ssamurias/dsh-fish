@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { SUPPORTED_RANGE, readHostVersion, parseRange, checkHost } from '../lib/hostver.js'
+import { SUPPORTED_RANGE, readHostVersion, readHostVersionFromAsar, parseRange, checkHost } from '../lib/hostver.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pkgFile = join(here, '..', 'package.json')
@@ -99,6 +99,59 @@ test('package.json 的 engines.dsh 与代码常量一致（不许分叉）', () 
   assert.equal(pkg.dsh?.compatibility?.dsh, SUPPORTED_RANGE)
   assert.ok(Array.isArray(pkg.dsh?.compatibility?.profiles))
   assert.ok(pkg.dsh.compatibility.profiles.includes('desktop'))
+})
+
+// ---------------------------------------------------------------------------
+// 桌面版把宿主装进 app.asar（2026-11-04，issue #20 第 ④ 条）
+//
+// 往上找 node_modules 这条路在桌面版永远扑空，于是自检一直说「读不到宿主版本号」。
+// 真机核过：resources/app.asar/dsh/package.json 用普通 fs 读得到。
+// 只在往上找失败后才退到这条路，而且只认 @deepseek-ai/dsh* 的包名——
+// 位置被别的应用占了时，读出别人家的版本号比读不到更糟。
+// ---------------------------------------------------------------------------
+
+test('readHostVersion：往上找不到就退到 app.asar（桌面版）', () => {
+  const dir = tempTree({
+    'resources/app.asar/dsh/package.json': { name: '@deepseek-ai/dsh-desktop-runtime', version: '0.2.1-rc.5' },
+  })
+  const got = readHostVersion({ start: join(dir, 'no-such-place'), resourcesPath: join(dir, 'resources') })
+  assert.equal(got?.version, '0.2.1-rc.5')
+  assert.equal(got?.pkg, '@deepseek-ai/dsh-desktop-runtime')
+})
+
+test('readHostVersion：正常树里找得到时，不去碰 app.asar', () => {
+  const dir = tempTree({
+    'node_modules/@deepseek-ai/dsh/package.json': { name: '@deepseek-ai/dsh', version: '0.2.1-rc.3' },
+    'resources/app.asar/dsh/package.json': { name: '@deepseek-ai/dsh-desktop-runtime', version: '0.2.1-rc.5' },
+  })
+  const got = readHostVersion({ start: join(dir, 'node_modules', 'dsh-fish'), resourcesPath: join(dir, 'resources') })
+  assert.equal(got?.version, '0.2.1-rc.3', '就近的那份才算数')
+})
+
+test('readHostVersionFromAsar：不认识的名字不认（宁可 unknown，也不能张冠李戴）', () => {
+  const dir = tempTree({
+    'resources/app.asar/dsh/package.json': { name: 'some-other-app', version: '9.9.9' },
+  })
+  assert.equal(readHostVersionFromAsar({ resourcesPath: join(dir, 'resources') }), null)
+  // 整条路一起看：读不到就是 null，交给 checkHost 报 unknown
+  assert.equal(readHostVersion({ start: join(dir, 'x'), resourcesPath: join(dir, 'resources') }), null)
+})
+
+test('readHostVersionFromAsar：没 resourcesPath、坏 json、文件不存在，都不抛', () => {
+  assert.equal(readHostVersionFromAsar({}), null)
+  assert.equal(readHostVersionFromAsar({ resourcesPath: '' }), null)
+  const dir = tempTree({ 'resources/app.asar/dsh/package.json': '{ 这不是 json' })
+  assert.equal(readHostVersionFromAsar({ resourcesPath: join(dir, 'resources') }), null)
+})
+
+test('桌面版那条路读到的版本号能直接判成 supported（不是 unknown）', () => {
+  const dir = tempTree({
+    'resources/app.asar/dsh/package.json': { name: '@deepseek-ai/dsh-desktop-runtime', version: '0.2.1-rc.5' },
+  })
+  const got = readHostVersion({ start: join(dir, 'x'), resourcesPath: join(dir, 'resources') })
+  const r = checkHost({ version: got?.version ?? '' })
+  assert.equal(r.status, 'supported')
+  assert.equal(r.ok, true)
 })
 
 test('dshReleases 里每个键都是合法版本号，值只允许三种', () => {
