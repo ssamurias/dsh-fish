@@ -13,7 +13,7 @@
  * 这里守三件事：
  *   1. lib/ 里不许再 import 宿主的 dsh-tools；
  *   2. `defineTool(spec)` 就是恒等（注册时直接交 JSON Schema）；
- *   3. 七个工具定义都长成宿主认的形状（parameters 是 object-rooted JSON Schema、
+ *   3. 八个工具定义都长成宿主认的形状（parameters 是 object-rooted JSON Schema、
  *      output.schema 也是、render / execute 是函数）。
  */
 
@@ -32,6 +32,7 @@ import { registerRecall } from '../lib/recall.js'
 import { registerHerDiary } from '../lib/herdiary.js'
 import { registerSpeak } from '../lib/speak.js'
 import { registerWatch } from '../lib/watch.js'
+import { registerNote } from '../lib/note.js'
 import { FISH_TOOLS, HER_TOOLS } from '../lib/restrict.js'
 import { runChecks } from '../lib/selfcheck.js'
 
@@ -78,8 +79,9 @@ test('八个工具定义都长成宿主认的形状', () => {
   registerHerDiary(ctx, deps)
   registerSpeak(ctx, deps)
   registerWatch(ctx, deps)
+  registerNote(ctx, deps)
 
-  assert.equal(ctx.defs.length, 7, '我们自己的工具是 7 个（第 8 个 read_image 是宿主的）')
+  assert.equal(ctx.defs.length, 8, '我们自己的工具是 8 个（第 9 个 read_image 是宿主的）')
   const names = ctx.defs.map((d) => d.name)
   for (const n of names) assert.ok(FISH_TOOLS.includes(n), `${n} 不在 FISH_TOOLS 里`)
 

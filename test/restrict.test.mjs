@@ -66,9 +66,9 @@ function fakeAgent(cwd, { withRestrict = true, withGuard = true } = {}) {
 }
 
 test('清单里她该有的工具都在，且不含危险口子', () => {
-  // 八个是她自己的（0.7.6 加了 ask_owner），外加 read_image。
+  // 九个是她自己的（0.7.6 加了 ask_owner，0.8.9 补 her_note），外加 read_image。
   // 定时工具默认不放（m04504），要放由用户自己加白名单——这里不许出现。
-  for (const name of ['growth_commit', 'her_recall', 'her_diary', 'her_leave', 'bili_look', 'bili_watch', 'bili_speak', 'ask_owner', 'read_image']) {
+  for (const name of ['growth_commit', 'her_recall', 'her_diary', 'her_leave', 'her_note', 'bili_look', 'bili_watch', 'bili_speak', 'ask_owner', 'read_image']) {
     assert.ok(HER_TOOLS.includes(name), `清单里少了 ${name}`)
   }
   // 这几个一旦放进去，收窄就白做了
