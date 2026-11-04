@@ -318,3 +318,76 @@ test('absence-reject: 驳回掉的 absence 不再进派生（历史误记只靠�
   assert.equal(m.absenceDays, 0, '驳回之后不该再是「冷落 2 天」')
   assert.equal(m.lastAbsence, null)
 })
+
+// 2026-11-04（issue #24）：冷落是否结束，derive 与 absence.js 口径必须一致。
+//
+// 以前 derive 只认 reunion 事件，而 absence.js 的 assess() 认 seen / heard。
+// 结果是他明明回来了（甚至刚说过话），persona 还是每天念「他有 N 天没出现」，
+// 而且除了她恰好写一条 reunion 之外没有任何自动恢复路径。
+test('absence 之后他来过（seen）就不再算冷落（issue #24）', () => {
+  const now = Date.now()
+  const seed = { id: 'ev_s', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1, source: 'system' }
+  const abs = {
+    id: 'ev_a24', type: 'absence', text: '那个人有 2 天没出现。', days: 2,
+    ts: new Date(now - 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
+  }
+  assert.equal(deriveSelf([seed, abs], { now }).absenceDays, 2, '他确实没回来时要算冷落')
+
+  const seen = {
+    id: 'ev_seen24', type: 'meta', text: `seen:${new Date(now - 1 * DAY).toISOString()}`,
+    ts: new Date(now - 1 * DAY).toISOString(), day: 6, stage: 1, source: 'system',
+  }
+  assert.equal(deriveSelf([seed, abs, seen], { now }).absenceDays, 0, 'seen 在 absence 之后 → 冷落结束')
+})
+
+test('absence 之后他来过（heard 兜底）也不再算冷落（issue #24）', () => {
+  const now = Date.now()
+  const seed = { id: 'ev_s', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1, source: 'system' }
+  const abs = {
+    id: 'ev_a24b', type: 'absence', text: '那个人有 3 天没出现。', days: 3,
+    ts: new Date(now - 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
+  }
+  const heard = { id: 'ev_h24', type: 'heard', text: '嗯。', ts: new Date(now - 1 * DAY).toISOString(), day: 6, stage: 1, source: 'system' }
+  assert.equal(deriveSelf([seed, abs, heard], { now }).absenceDays, 0, '侧栏那段没写 seen 的档靠 heard 兜住')
+})
+
+test('absence 之前的 seen 不算「他回来过」（issue #24）', () => {
+  const now = Date.now()
+  const seed = { id: 'ev_s', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1, source: 'system' }
+  const older = {
+    id: 'ev_seenold', type: 'meta', text: `seen:${new Date(now - 7 * DAY).toISOString()}`,
+    ts: new Date(now - 7 * DAY).toISOString(), day: 1, stage: 1, source: 'system',
+  }
+  const abs = {
+    id: 'ev_a24c', type: 'absence', text: '那个人有 2 天没出现。', days: 2,
+    ts: new Date(now - 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
+  }
+  assert.equal(deriveSelf([seed, older, abs], { now }).absenceDays, 2, '时间顺序不能反着用')
+})
+
+test('唤醒里写的 utterance 不算他来过，absenceDays 不归零（issue #24）', () => {
+  const now = Date.now()
+  const seed = { id: 'ev_s', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1, source: 'system' }
+  const abs = {
+    id: 'ev_a24d', type: 'absence', text: '那个人有 2 天没出现。', days: 2,
+    ts: new Date(now - 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
+  }
+  const utt = { id: 'ev_u24', type: 'utterance', text: '醒了。', ts: new Date(now - 1 * DAY).toISOString(), day: 6, stage: 1, source: 'her' }
+  assert.equal(deriveSelf([seed, abs, utt], { now }).absenceDays, 2, '定时器叫醒她自己想事不算他来过')
+})
+
+test('derive 与 absence.js 对「他回来了」给出同一个答案（issue #24）', () => {
+  const now = Date.now()
+  const seed = { id: 'ev_s', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1, source: 'system' }
+  const abs = {
+    id: 'ev_a24e', type: 'absence', text: '那个人有 4 天没出现。', days: 4,
+    ts: new Date(now - 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
+  }
+  const seen = {
+    id: 'ev_seen24e', type: 'meta', text: `seen:${new Date(now - 1 * DAY).toISOString()}`,
+    ts: new Date(now - 1 * DAY).toISOString(), day: 6, stage: 1, source: 'system',
+  }
+  const evs = [seed, abs, seen]
+  assert.equal(assess(evs, now, { afterDays: 2 }).reason, 'returned')
+  assert.equal(deriveSelf(evs, { now }).absenceDays, 0, '两层不能各说各话')
+})
