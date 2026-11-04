@@ -16,9 +16,6 @@ import assert from 'node:assert/strict'
 import {
   FISH_SOURCE_KIND,
   WAKE_PING,
-  NOTICE_FORM,
-  CHIP_LABEL,
-  chipText,
   fishMessage,
   resolveLiveAgent,
   deliverWake,
@@ -65,29 +62,15 @@ test('正文是空的：她不该看见一句可被解读的话', () => {
   assert.equal(fishMessage(undefined).content[0].text, WAKE_PING)
 })
 
-test('胶囊：她自己起头的那一条带 form=notice，字是「她自己开口 HH:MM」', () => {
-  assert.equal(NOTICE_FORM, 'notice')
-  assert.equal(CHIP_LABEL, '她自己开口')
-  assert.equal(chipText(new Date(2026, 10, 5, 5, 7)), '她自己开口 05:07')
-  assert.equal(chipText(new Date(2026, 10, 5, 23, 4)), '她自己开口 23:04')
-
-  const m = fishMessage(WAKE_PING, { rpcId: 'proactive-1', form: NOTICE_FORM, summary: chipText(new Date(2026, 10, 5, 5, 7)) })
-  assert.equal(m.source.form, 'notice')
-  assert.equal(m.source.kind, FISH_SOURCE_KIND, '换了画法也不许改来源名，否则记账就断')
-  assert.equal(m.source.summary, '她自己开口 05:07', '提示行上那行字走 source.summary')
-  assert.equal(m.content[0].text, WAKE_PING, '她读到的仍是空白信号，不是「有人在说话」')
-  assert.equal(classifyMessage({ source: m.source }), 'context', '带 form 也还是机器消息')
-
-  // 宿主的 notice 只认 source.summary：声明了 form 却不给 summary 会退回 opaque（那张卡片）。
-  const bare = fishMessage(WAKE_PING, { form: NOTICE_FORM })
-  assert.equal('summary' in bare.source, false, '不给就没有这个字段，由调用方自己保证别声明裸 notice')
-})
-
-test('不传 form 就一个字段都不多加：老路径的形状不变', () => {
-  const plain = fishMessage(' ', { rpcId: 'wake-2' })
+test('不许再挂 form/summary：那是轮触发条，宿主根本不读', () => {
+  // 2026-11-05（用户 m02223）真机复核：叫醒消息是开启这一轮的那条，前端走
+  // TurnTriggerNodeView，标题只看 source.kind；contextBody 的 notice 分支画的是
+  // 轮内注入的上下文。form/summary 写上去没有任何效果，留着只会骗下一个人。
+  const plain = fishMessage(WAKE_PING, { rpcId: 'wake-2' })
   assert.equal('form' in plain.source, false)
   assert.equal('summary' in plain.source, false)
   assert.deepEqual(Object.keys(plain.source).sort(), ['kind', 'rpcId'])
+  assert.equal(plain.content[0].text, WAKE_PING)
 })
 
 test('来源名落在机器消息那一档：她自己醒来的话不算「他来过」', () => {
@@ -106,23 +89,6 @@ test('投递：走 followup，并立刻 flush 一次', async () => {
   assert.equal(agent.got[0].source.rpcId, 'wake-1')
   assert.equal(flushed.length, 1, 'followup 之后必须显式 flush，否则卡片要等宿主下一拍')
   assert.equal(flushed[0], agent.session, 'flush 的对象是 agent 上那条会话')
-})
-
-test('投递：form 一路透传到 source，正文按给的写', async () => {
-  const agent = fakeAgent({ id: 'session-1' })
-  const ctx = { sessions: { flush: async () => true } }
-  const label = chipText(new Date(2026, 10, 5, 5, 7))
-
-  const out = await deliverWake(ctx, fakeSc({ agent }), 'session-1', {
-    text: WAKE_PING,
-    rpcId: 'proactive-1',
-    form: NOTICE_FORM,
-    summary: label,
-  })
-  assert.equal(out.ok, true)
-  assert.equal(agent.got[0].source.form, 'notice')
-  assert.equal(agent.got[0].source.summary, '她自己开口 05:07')
-  assert.equal(agent.got[0].content[0].text, WAKE_PING)
 })
 
 test('flush 抛错不影响投递结论：消息已经进了收件箱', async () => {

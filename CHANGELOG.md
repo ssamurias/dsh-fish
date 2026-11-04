@@ -215,53 +215,46 @@
 
 ---
 
-### 九、她开口的那一行，不再长得像一次任务
+### 九、她开口时那一行：实机确认宿主改不了（本机实验）
 
 #### 你会看到什么
 
-她自己开口的那一轮，对话里不再是一张写着「收到执行请求」的卡片，而是一行可折叠的提示：
-**她自己开口 05:12**。手动点「叫醒大肥鱼」那一条写成 **有人叫醒了她 06:11** ——
-两种都得对看的人诚实：手动那条处境正文第一行本来就是「有人刚按了叫醒」，
-界面再写「她自己开口」就自相矛盾了。
+和以前一样：叫醒那一行是一张默认收起的卡片，标题「收到执行请求」，展开只有一句
+「这条通知触发了本轮回复。」。没有小胶囊，也没有「她自己开口 05:12」那一行字。
 
-（真机上验证过：宿主只提供「折叠行 + 一行摘要」这种形态，没有居中小胶囊。
-之前预览图里那枚胶囊是按意思画的示意，不是宿主能给的样式。）
+#### 为什么改不了
 
-#### 为什么会退回成卡片
-
-第一版只声明了 `form: 'notice'` 就把字写进正文，真机上点叫醒，看到的仍是那张卡片。原因在宿主：
+叫醒消息是**开启这一轮的那条消息**，前端走 `TurnTriggerNodeView` →
+`turnTriggerDetails(node)`，标题只由 `source.kind` 决定：
 
 ```js
-case "notice": {
-  const summary = noticeSummary(props.source)        // 只读 source.summary
-  return summary === null ? opaque : { rendered: "notice", summary, body: … }
-}
+switch (kind) { case "goal": … case "schedule": 「自动化任务」 … default: 「收到执行请求」 }
 ```
 
-`opaque` 就是那张卡片。也就是说：**声明了 notice 却不给 `summary`，宿主判定这个形式读不出来，
-整条退回默认画法**（`session` 的格式校验里也写着 `if (form === "notice") stringValue(source["summary"])`）。
+另一套结构化提示（`contextForm` / `contextBody` 的 `notice` 分支，只读 `source.summary`）
+画的是**轮内注入的上下文**，不是轮触发条。0.8.9 早期版本试过 `form:'notice'` +
+`source.summary`，真机上点「叫醒大肥鱼」仍是同一张卡片——`summary` 根本没人读。
+客户端也没有居中小胶囊那种画法；`03-我的文档/大肥鱼/主动搭话-消息样式预览.png`
+里那枚胶囊是按「chip」的意思画的示意，不是宿主给的样式。
 
 #### 现在怎么判
 
-- `source.form = 'notice'`，`source.summary = '她自己开口 HH:MM'`（自动/定时）或
-  `'有人叫醒了她 HH:MM'`（手动）——`lib/deliver.js` 的 `chipText(at, label)` 生成。
-- 消息**正文仍是 `WAKE_PING`（一个空格）**。上一版把这句话写进了正文，等于以「用户消息」的
-  身份落进她的输入，又会引出「有人在对我说话」那条老毛病（`WAKE_PING` 的注释里记过）；
-  而界面那条折叠行读的本来就是 `summary`，写正文对界面对她都没好处。
-- 来源名仍是 `fish-wake`，记账、折叠、「他来过」的判定一字未动。
+- 正文仍是 `WAKE_PING`（一个空格：她只收到「起来」这个信号）；`source` 只有 `kind` + `rpcId`。
+- `form` / `summary` 那条路已删，原因写在 `lib/deliver.js` 文件头，别再试。
+- 想在小卡片上区分来源，唯一可动的字段是 `kind`（`schedule` → 「自动化任务」），
+  但那等于把来源标成别人的名字，也会动到 `lib/turns.js` 的 `MACHINE_KINDS` 认定——不做。
+- 真要一枚小胶囊，得宿主给插件开一条「自定义消息样式」的口子；现在没有。
 
 #### 纯文本渠道怎么办
 
-桥到 QQ 这类只能发文本的地方，转发的是正文，收到的是一个空白信号 —— 这是**故意**的：
-机器消息本来就该被桥过滤，而不是把「她自己开口 05:12」当成她真的说了这句话转给对方
-（冒充她说话比留白更糟）。
+桥到 QQ 这类只能发文本的地方，转发的是正文，收到的是空白信号——机器消息本来就该被桥过滤，
+而不是把「她自己开口 05:12」当成她真的说了这句话转给对方（冒充她说话比留白更糟）。
 
 #### 测试
 
-`test/deliver.test.mjs` 13 条覆盖：摘要字与时:分补零、`form`/`summary` 落在 `source`、
-正文仍是空白信号、不传就一个字段都不多加、`deliverWake` 一路透传。
-`test/boot.test.mjs` 那条唤醒用例钉住新契约（`source.form === 'notice'`、
-`source.summary` 匹配 `^有人叫醒了她 \d{2}:\d{2}$`、正文 `trim()` 为空）。全量 1365 pass。
+`test/deliver.test.mjs` 12 条：消息形状、空白正文、**不许再挂 `form`/`summary`**、来源名、
+followup + flush、失败路径；`test/boot.test.mjs` 那条唤醒用例钉住 `source.kind === 'fish-wake'`、
+`'form' in source === false`、正文 `trim()` 为空。全量 **1394 pass / 0 fail**。
 
 ---
 

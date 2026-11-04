@@ -393,16 +393,12 @@ test('唤醒消息只剩一句触发语，处境走 system prompt 段不进对�
     assert.equal(prompts.length, 1)
     const text = prompts[0].content[0].text
 
-    // 2026-11-05（用户 m01262 / m01742）：`form:'notice'` + `source.summary` 才是提示条；
-    // 正文仍是空白信号 —— 真机上验证过，声明 notice 却不给 summary，宿主会整条退回卡片，
-    // 而把这句话写进正文，又变成「有人在对我说话」落进她的输入。
+    // 2026-11-05（用户 m02223 真机复核）：这条消息是开启这一轮的「回合触发条」，
+    // 前端标题只看 source.kind；form/summary 对触发条无效，客户端也没有小胶囊那种画法。
+    // 正文仍是空白信号 —— 写什么都会被她当成别人说的话。
     assert.equal(prompts[0].source.kind, 'fish-wake', '来源必须是 fish-wake，否则前端又画成用户气泡')
-    assert.equal(prompts[0].source.form, 'notice', '带 form 才会画成提示条')
-    assert.match(
-      prompts[0].source.summary,
-      /^有人叫醒了她 \d{2}:\d{2}$/,
-      `手动叫醒的摘要字头要对得上处境那句「有人刚按了叫醒」，现在是：${prompts[0].source.summary}`,
-    )
+    assert.equal('form' in prompts[0].source, false, '触发条不读 form，别再加回来')
+    assert.equal('summary' in prompts[0].source, false, '触发条不读 summary，别再加回来')
     assert.equal(text.trim(), '', `正文必须还是空白信号，现在是：${text.slice(0, 80)}`)
     // 2026-10-26（用户 m00507）：原来是「……」，她当成用户发来的一句话去猜，
     // 侧栏标题还被生成成「Error」。
