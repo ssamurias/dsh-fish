@@ -18,7 +18,9 @@ import { personaLine, assemble, foldOlderBeliefs, HARD_BANS, sleepPrompt } from 
 import { renderSelfDoc } from '../lib/selfdoc.js'
 import { addExchange, recentExchanges, renderCarry, TALK_KEEP } from '../lib/talkmem.js'
 import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS } from '../lib/home.js'
-import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET } from '../lib/recall.js'
+import { searchEvents, tokensOf, renderRecall, registerRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET } from '../lib/recall.js'
+import { deriveSelf } from '../lib/derive.js'
+import { appendEvent } from '../lib/store.js'
 import { normalizeConfig, DEFAULTS } from '../lib/settings.js'
 
 const DAY = 86_400_000
@@ -272,6 +274,283 @@ test('回忆：超长原文被截断，不给她整段历史', () => {
   assert.ok(rows[0].text.length <= 200)
   assert.ok(rows[0].text.endsWith('…'))
 })
+
+test('回忆：行上带本地时刻，同一天的两句分得清先后（2026-11-04）', () => {
+  const now = Date.now()
+  const a = new Date(now - DAY)
+  a.setHours(9, 5, 0, 0)
+  const b = new Date(a)
+  b.setHours(21, 40, 0, 0)
+  const events = [
+    { id: 'am', type: 'utterance', ts: a.toISOString(), text: '评论 早上' },
+    { id: 'pm', type: 'utterance', ts: b.toISOString(), text: '评论 晚上' },
+  ]
+  const { rows } = searchEvents(events, '评论', { now })
+  assert.deepEqual(rows.map((r) => r.clock).sort(), ['09:05', '21:40'])
+  const txt = renderRecall(rows)
+  assert.ok(txt.includes(`${rows[0].date} ${rows[0].clock}`))
+  // 手写的老 fixture 没有 clock：不凭空印一个
+  assert.equal(renderRecall([{ date: '2026-10-22', text: '评论' }]).split('\n')[1], '- 2026-10-22｜评论')
+})
+
+const revisedStream = (now) => [
+  { id: 'old', type: 'utterance', ts: new Date(now - 90 * DAY).toISOString(), text: '我觉得下雨天最适合发呆' },
+  { id: 'new', type: 'revise', verdict: 'refuted', refs: ['old'], ts: new Date(now - 2 * DAY).toISOString(), text: '下雨天我其实更想出门走走' },
+  { id: 'calm', type: 'utterance', ts: new Date(now - 3 * DAY).toISOString(), text: '下雨天窗户上的水痕很好看' },
+]
+
+test('回忆：翻到推翻过的话，看得见后来推翻了，也看得见改成了什么（2026-11-04）', () => {
+  const now = Date.now()
+  const { rows } = searchEvents(revisedStream(now), '下雨天', { now })
+  const old = rows.find((r) => r.id === 'old')
+  assert.deepEqual(old.later, { id: 'new', verdict: 'refuted', text: '下雨天我其实更想出门走走' })
+  const neu = rows.find((r) => r.id === 'new')
+  assert.deepEqual(neu.earlier, { id: 'old', verdict: 'refuted', text: '我觉得下雨天最适合发呆' })
+  assert.equal(rows.find((r) => r.id === 'calm').later, undefined)
+
+  const lines = renderRecall(rows).split('\n')
+  const at = lines.findIndex((l) => l.endsWith('我觉得下雨天最适合发呆（old）') && l.startsWith('- '))
+  assert.equal(lines[at + 1], '  后来你推翻了这句，改说：下雨天我其实更想出门走走（new）')
+  const at2 = lines.findIndex((l) => l.endsWith('下雨天我其实更想出门走走（new）') && l.startsWith('- '))
+  assert.equal(lines[at2 + 1], '  这句推翻的是：我觉得下雨天最适合发呆（old）')
+})
+
+test('回忆：每条第一行的最后一个括号都是它自己的 id（身份文档这么教她抄的，2026-11-04）', () => {
+  const now = Date.now()
+  const { rows } = searchEvents(revisedStream(now), '下雨天', { now })
+  const firsts = renderRecall(rows).split('\n').filter((l) => l.startsWith('- '))
+  assert.equal(firsts.length, rows.length)
+  for (const r of rows) assert.ok(firsts.some((l) => l.endsWith(`（${r.id}）`)), r.id)
+})
+
+test('回忆：工具的话里没有「否掉」，她顺着说不会被记成一次拒绝（2026-11-04）', () => {
+  const now = Date.now()
+  const { rows } = searchEvents(revisedStream(now), '下雨天', { now })
+  assert.ok(!renderRecall(rows).includes('否掉'))
+  assert.ok(!renderRecall(rows, { brief: true }).includes('否掉'))
+  // derive.js 的 REFUSE_RE 认「我否掉」，不认「我推翻」。词表要是改了，这条的前提就不成立了。
+  const facts = (text) => deriveSelf([{ id: 'x', type: 'utterance', flags: ['uncommitted'], ts: new Date(now).toISOString(), text }]).facts.wont
+  assert.equal(facts('对，我否掉了那句'), 1)
+  assert.equal(facts('对，我推翻了那句'), 0)
+})
+
+test('回忆：被改的那句在时间窗外也照样引出来，三种 verdict 各说各的（2026-11-04）', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'b', type: 'utterance', ts: new Date(now - 50 * DAY).toISOString(), text: '老话' },
+    { id: 'a', type: 'revise', verdict: 'refined', refs: ['b'], ts: new Date(now - 2 * DAY).toISOString(), text: '评论另一种说法' },
+    { id: 'd', type: 'utterance', ts: new Date(now - 4 * DAY).toISOString(), text: '评论那件事' },
+    { id: 'c', type: 'revise', verdict: 'confirmed', refs: ['d'], ts: new Date(now - 3 * DAY).toISOString(), text: '没变' },
+    { id: 'f', type: 'utterance', ts: new Date(now - 6 * DAY).toISOString(), text: '评论第三件事' },
+    { id: 'e', type: 'revise', refs: ['f'], ts: new Date(now - 5 * DAY).toISOString(), text: '没写结论的改口' },
+  ]
+  const txt = renderRecall(searchEvents(events, '评论', { now, days: 10 }).rows)
+  assert.ok(txt.includes('  这句改的是：老话（b）'))
+  assert.ok(txt.includes('  后来你又确认过这句：没变（c）'))
+  assert.ok(txt.includes('  后来你改过这句，改说：没写结论的改口（e）'))
+  const confirm = renderRecall(searchEvents(events, '没变', { now }).rows)
+  assert.ok(confirm.includes('  这句确认的是：评论那件事（d）'))
+})
+
+test('回忆：连续改口时先写它改了谁，再写它后来被谁改，只翻到最早那句也看得见最后的说法（2026-11-04）', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'a', type: 'utterance', ts: new Date(now - 9 * DAY).toISOString(), text: '评论第一版' },
+    { id: 'b', type: 'revise', verdict: 'refuted', refs: ['a'], ts: new Date(now - 8 * DAY).toISOString(), text: '第二版' },
+    { id: 'c', type: 'revise', verdict: 'refuted', refs: ['b'], ts: new Date(now - 7 * DAY).toISOString(), text: '第三版' },
+  ]
+  const onlyA = searchEvents(events, '评论', { now }).rows
+  assert.deepEqual(onlyA.map((r) => r.id), ['a'])
+  assert.deepEqual(onlyA[0].later, { id: 'c', verdict: null, text: '第三版' }, '隔了几次时不套第一次的 verdict')
+  assert.deepEqual(renderRecall(onlyA).split('\n').slice(2), ['  后来你改过这句，改说：第三版（c）'])
+
+  const middle = renderRecall(searchEvents(events, '第二版', { now }).rows).split('\n').slice(2)
+  assert.deepEqual(middle, ['  这句推翻的是：评论第一版（a）', '  后来你推翻了这句，改说：第三版（c）'])
+
+  // 环和自指不会卡死，也不引自己（只有手改事件流才写得出来）
+  const loop = [
+    { id: 'x', type: 'revise', refs: ['y'], ts: new Date(now - 2 * DAY).toISOString(), text: '评论 x' },
+    { id: 'y', type: 'revise', refs: ['x'], ts: new Date(now - DAY).toISOString(), text: '评论 y' },
+    { id: 's', type: 'revise', verdict: 'refuted', refs: ['s'], ts: new Date(now - DAY).toISOString(), text: '评论 自己' },
+  ]
+  const rows = searchEvents(loop, '评论', { now }).rows
+  assert.equal(rows.length, 3)
+  assert.equal(rows.find((r) => r.id === 'x').later.id, 'y')
+  assert.equal(rows.find((r) => r.id === 's').later, undefined)
+  assert.equal(rows.find((r) => r.id === 's').earlier, undefined)
+})
+
+test('回忆：走到「确认」就停，确认过的话不会被说成改了（2026-11-04）', () => {
+  const now = Date.now()
+  const rev = (id, verdict, refs, d, text) => ({ id, type: 'revise', verdict, refs, ts: new Date(now - d * DAY).toISOString(), text })
+  const a = { id: 'a', type: 'utterance', ts: new Date(now - 9 * DAY).toISOString(), text: '评论第一版' }
+  const later = (...more) => {
+    const [row] = searchEvents([a, ...more], '评论', { now }).rows
+    return renderRecall([row]).split('\n').slice(2)
+  }
+  // 推翻之后确认的是那句推翻：a 还是被推翻了，不能读成 a 还成立
+  assert.deepEqual(later(rev('r1', 'refuted', ['a'], 8, '我其实不这么想'), rev('r2', 'confirmed', ['r1'], 7, '还成立，没变')),
+    ['  后来你推翻了这句，改说：我其实不这么想（r1）'])
+  // 确认之后再确认：她一直没改
+  assert.deepEqual(later(rev('r1', 'confirmed', ['a'], 8, '还成立'), rev('r2', 'confirmed', ['r1'], 7, '依然成立')),
+    ['  后来你又确认过这句：还成立（r1）'])
+  // 确认之后才推翻的，是真改了
+  assert.deepEqual(later(rev('r1', 'confirmed', ['a'], 8, '还成立'), rev('r2', 'refuted', ['r1'], 7, '现在不成立了')),
+    ['  后来你改过这句，改说：现在不成立了（r2）'])
+})
+
+test('回忆：正文带换行也是一条一行，第一行仍以自己的 id 结尾（2026-11-04）', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'o', type: 'utterance', ts: new Date(now - 3 * DAY).toISOString(), text: '评论 第一行\n第二行' },
+    { id: 'n', type: 'revise', verdict: 'refined', refs: ['o'], ts: new Date(now - 2 * DAY).toISOString(), text: '换个\n说法' },
+  ]
+  for (const brief of [false, true]) {
+    const lines = renderRecall(searchEvents(events, '评论', { now }).rows, { brief }).split('\n')
+    assert.ok(lines[1].includes('评论 第一行 第二行（o）'), lines[1])
+    assert.equal(lines[2], brief ? '  后来你改过这句（n）' : '  后来你改过这句，改说：换个 说法（n）')
+    assert.equal(lines.length, 3)
+  }
+})
+
+test('回忆：改了几句时只报第一句，不报「还有几句」；引用不超过 40 字（2026-11-04）', () => {
+  const now = Date.now()
+  const long = '评论' + '很长'.repeat(60)
+  const events = [
+    { id: 'p', type: 'utterance', ts: new Date(now - 9 * DAY).toISOString(), text: long },
+    { id: 'q', type: 'utterance', ts: new Date(now - 8 * DAY).toISOString(), text: '评论二' },
+    { id: 'r', type: 'revise', verdict: 'refined', refs: ['missing', 'p', 'q'], ts: new Date(now - 5 * DAY).toISOString(), text: '改过一次' },
+  ]
+  const [row] = searchEvents(events, '改过', { now }).rows
+  assert.equal(row.earlier.id, 'p', '指向不存在的 id 就跳过')
+  assert.ok(row.earlier.text.length <= RECALL_BRIEF_SNIPPET)
+  assert.ok(row.earlier.text.endsWith('…'))
+  assert.ok(!/等 ?\d/.test(renderRecall([row])), '报数就是在勾她再翻一次')
+})
+
+test('回忆：引用的那句要带来路，不把他说的话写成她说的，也不引 meta（2026-11-04）', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'h', type: 'heard', ts: new Date(now - 9 * DAY).toISOString(), text: '你别出门了' },
+    { id: 'u', type: 'utterance', flags: ['uncommitted'], ts: new Date(now - 8 * DAY).toISOString(), text: '顺口一句' },
+    { id: 'm', type: 'meta', ts: new Date(now - 7 * DAY).toISOString(), text: 'rotate:40:session-abc' },
+    { id: 'r1', type: 'revise', refs: ['h'], ts: new Date(now - 5 * DAY).toISOString(), text: '评论一' },
+    { id: 'r2', type: 'revise', refs: ['u'], ts: new Date(now - 4 * DAY).toISOString(), text: '评论二' },
+    { id: 'r3', type: 'revise', refs: ['m'], ts: new Date(now - 3 * DAY).toISOString(), text: '评论三' },
+  ]
+  const txt = renderRecall(searchEvents(events, '评论', { now }).rows)
+  assert.ok(txt.includes('这句改的是：他说：你别出门了（h）'))
+  assert.ok(txt.includes('这句改的是：聊天时说的：顺口一句（u）'))
+  assert.ok(!txt.includes('rotate:'))
+})
+
+test('回忆：读到的陌生人的话和别人的回复，翻到时也说清来路（2026-11-04）', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'v', type: 'voice', ts: new Date(now - 3 * DAY).toISOString(), text: '评论别看了' },
+    { id: 'an', type: 'answer', ts: new Date(now - 2 * DAY).toISOString(), text: '评论的事可以' },
+    { id: 'r', type: 'revise', refs: ['v'], ts: new Date(now - DAY).toISOString(), text: '我不这么看' },
+  ]
+  const txt = renderRecall(searchEvents(events, '评论', { now }).rows)
+  assert.ok(txt.includes('｜读到别人说：评论别看了（v）'))
+  assert.ok(txt.includes('｜回复：评论的事可以（an）'))
+  assert.ok(renderRecall(searchEvents(events, '不这么看', { now }).rows).includes('这句改的是：读到别人说：评论别看了（v）'))
+})
+
+test('回忆 brief 档：改口关系还在，只是不引对方的话，聊天原话也标着（2026-11-04）', () => {
+  const now = Date.now()
+  const events = [...revisedStream(now), { id: 'chat', type: 'utterance', flags: ['uncommitted'], ts: new Date(now - DAY).toISOString(), text: '下雨天顺口一句' }]
+  const { rows } = searchEvents(events, '下雨天', { now, snippet: RECALL_BRIEF_SNIPPET })
+  const lines = renderRecall(rows, { brief: true }).split('\n')
+  assert.ok(lines.includes('  后来你推翻了这句（new）'))
+  assert.ok(lines.includes('  这句推翻的是（old）'))
+  assert.ok(lines.some((l) => l.includes('聊天时说的：下雨天顺口一句（chat）')))
+  assert.ok(!lines.join('\n').includes('：下雨天我其实更想出门走走'))
+})
+
+test('回忆：推翻过的那条不再因为被引用加分，先改过再推翻也一样（2026-11-04）', () => {
+  const now = Date.now()
+  const ids = (events) => searchEvents(events, '下雨天', { now }).rows.map((r) => r.id)
+  assert.deepEqual(ids(revisedStream(now)), ['new', 'calm', 'old'], '同样命中时按新旧排')
+  const refinedFirst = [
+    ...revisedStream(now),
+    { id: 'r0', type: 'revise', verdict: 'refined', refs: ['old'], ts: new Date(now - 80 * DAY).toISOString(), text: '别的说法' },
+    { id: 't0', type: 'test', refs: ['old'], ts: new Date(now - 70 * DAY).toISOString(), text: '别的检验' },
+  ]
+  assert.deepEqual(ids(refinedFirst), ['new', 'calm', 'old'])
+  // 没被推翻的，被引用过仍然加分
+  const refined = revisedStream(now).map((e) => (e.id === 'new' ? { ...e, verdict: 'refined' } : e))
+  assert.equal(ids(refined)[0], 'old')
+})
+
+test('回忆：没认领的聊天原话排在同样命中的认领之后，并标明是聊天时说的（2026-11-04）', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'said', type: 'utterance', flags: [], ts: new Date(now - 9 * DAY).toISOString(), text: '评论这件事' },
+    { id: 'chat', type: 'utterance', flags: ['uncommitted'], ts: new Date(now - DAY).toISOString(), text: '评论这件事' },
+  ]
+  const { rows } = searchEvents(events, '评论', { now })
+  assert.deepEqual(rows.map((r) => r.id), ['said', 'chat'])
+  assert.equal(rows[0].unclaimed, undefined)
+  assert.equal(rows[1].unclaimed, true)
+  const txt = renderRecall(rows)
+  assert.ok(txt.includes('｜评论这件事（said）'))
+  assert.ok(txt.includes('｜聊天时说的：评论这件事（chat）'))
+  // 排查用的 weigh:false 还是纯字面 + 新旧
+  assert.deepEqual(searchEvents(events, '评论', { now, weigh: false }).rows.map((r) => r.id), ['chat', 'said'])
+  // 她问的那件事正好在聊天这句里：多中两个词就排在前面
+  const closer = [
+    { id: 'said', type: 'utterance', flags: [], ts: new Date(now - DAY).toISOString(), text: '今天下雨了' },
+    { id: 'chat', type: 'utterance', flags: ['uncommitted'], ts: new Date(now - 2 * DAY).toISOString(), text: '下雨 发呆 窗户 我全想起来了' },
+  ]
+  assert.equal(searchEvents(closer, '下雨 发呆 窗户', { now }).rows[0].id, 'chat')
+  // 聊天原话被引用过也不加分：一次确认不能抵掉那 1 分
+  const referenced = [
+    { id: 'said', type: 'utterance', flags: [], ts: new Date(now - 9 * DAY).toISOString(), text: '评论这件事' },
+    { id: 'chat', type: 'utterance', flags: ['uncommitted'], ts: new Date(now - DAY).toISOString(), text: '评论这件事' },
+    { id: 'r', type: 'revise', verdict: 'confirmed', refs: ['chat'], ts: new Date(now).toISOString(), text: '还成立' },
+  ]
+  assert.deepEqual(searchEvents(referenced, '评论', { now }).rows.map((r) => r.id), ['said', 'chat'])
+})
+
+test('回忆：一堆更新的聊天原话不会把她记下的那句挤出去（2026-11-04）', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'said', type: 'utterance', flags: [], ts: new Date(now - 30 * DAY).toISOString(), text: '评论这件事' },
+    ...Array.from({ length: 20 }, (_, i) => ({
+      id: `c${i}`, type: 'utterance', flags: ['uncommitted'], ts: new Date(now - i * 3600_000).toISOString(), text: '评论这件事',
+    })),
+  ]
+  assert.equal(searchEvents(events, '评论', { now }).rows[0].id, 'said')
+})
+
+test('回忆：截断不把 emoji 切成半个（2026-11-04）', () => {
+  const now = Date.now()
+  const text = '评论' + '好'.repeat(RECALL_BRIEF_SNIPPET - 4) + '😀'.repeat(10)
+  const events = [
+    { id: 'o', type: 'utterance', ts: new Date(now - 2 * DAY).toISOString(), text },
+    { id: 'n', type: 'revise', refs: ['o'], ts: new Date(now - DAY).toISOString(), text: '新说法' },
+  ]
+  const [row] = searchEvents(events, '新说法', { now }).rows
+  assert.ok(row.earlier.text.isWellFormed())
+  assert.ok(row.earlier.text.endsWith('…'))
+  const body = searchEvents(events, '评论', { now, snippet: RECALL_BRIEF_SNIPPET }).rows[0]
+  assert.ok(renderRecall([{ ...body, text }], { brief: true }).isWellFormed())
+})
+
+test('her_recall 走一遍工具：只给 found 和 text，改口关系也在（2026-11-04）', () => withRoot(async (root) => {
+  const old = await appendEvent({ type: 'utterance', text: '我觉得下雨天最适合发呆' }, { day: 1, stage: 1, source: 'tool' }, root)
+  const neu = await appendEvent({ type: 'revise', text: '下雨天我其实更想出门走走', refs: [old.id], verdict: 'refuted' }, { day: 1, stage: 1, source: 'tool' }, root)
+  await appendEvent({ type: 'utterance', text: '下雨天顺口一句', flags: ['uncommitted'] }, { day: 1, stage: 1, source: 'system' }, root)
+  let tool
+  registerRecall({ tools: { register: (t) => { tool = t } } }, { root })
+  const out = await tool.execute({ query: '下雨天' })
+  assert.deepEqual(Object.keys(out).sort(), ['found', 'text'])
+  assert.equal(out.found, true)
+  assert.ok(out.text.includes(`  后来你推翻了这句，改说：下雨天我其实更想出门走走（${neu.id}）`))
+  assert.ok(out.text.includes(`  这句推翻的是：我觉得下雨天最适合发呆（${old.id}）`))
+  assert.ok(out.text.includes('聊天时说的：下雨天顺口一句'))
+}))
 
 test('回忆 brief 档：只报开头，但条数与 id 一个不少（2026-11-02 m00335）', () => {
   const now = Date.now()
