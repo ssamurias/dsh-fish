@@ -393,12 +393,17 @@ test('唤醒消息只剩一句触发语，处境走 system prompt 段不进对�
     assert.equal(prompts.length, 1)
     const text = prompts[0].content[0].text
 
-    // 2026-11-05（用户 m01262）：正文改成「她自己开口 05:12」+ `form:'notice'`。
-    // 这句话是**第三人称的陈述**（谁起的头），不是对他说的、也不是对她说的语气；
-    // 前端拿它画提示条，纯文本渠道（QQ 桥）转发时它就自动降级成这一行。
+    // 2026-11-05（用户 m01262 / m01742）：`form:'notice'` + `source.summary` 才是提示条；
+    // 正文仍是空白信号 —— 真机上验证过，声明 notice 却不给 summary，宿主会整条退回卡片，
+    // 而把这句话写进正文，又变成「有人在对我说话」落进她的输入。
     assert.equal(prompts[0].source.kind, 'fish-wake', '来源必须是 fish-wake，否则前端又画成用户气泡')
     assert.equal(prompts[0].source.form, 'notice', '带 form 才会画成提示条')
-    assert.match(text, /^她自己开口 \d{2}:\d{2}$/, `正文只该是那一行，现在是：${text.slice(0, 80)}`)
+    assert.match(
+      prompts[0].source.summary,
+      /^有人叫醒了她 \d{2}:\d{2}$/,
+      `手动叫醒的摘要字头要对得上处境那句「有人刚按了叫醒」，现在是：${prompts[0].source.summary}`,
+    )
+    assert.equal(text.trim(), '', `正文必须还是空白信号，现在是：${text.slice(0, 80)}`)
     // 2026-10-26（用户 m00507）：原来是「……」，她当成用户发来的一句话去猜，
     // 侧栏标题还被生成成「Error」。
     assert.ok(!text.includes('……'), '不能再拿省略号当触发语')
