@@ -24,7 +24,7 @@ import {
 import { normalizeConfig, dateKey } from '../lib/settings.js'
 import { lookOnce } from '../lib/look.js'
 import { readEvents, appendEvent } from '../lib/store.js'
-import { buildReport, flushReport, quotesOf, listReports } from '../lib/report.js'
+import { buildReport, flushReport, quotesOf, listReports, REPORT_CHAT_LINES, REPORT_CHAT_CHARS } from '../lib/report.js'
 
 async function withRoot(fn) {
   const root = await mkdtemp(join(tmpdir(), 'fish-p2-'))
@@ -460,32 +460,63 @@ test('quotesOf 只取 HER_TYPES 且只取当天', () => {
   assert.deepEqual(q.map((x) => x.text), ['a', 'd'])
 })
 
-// 2026-11-04（群反馈第一条）：日报曾经把聊天原话也当成「她说了什么」罗列。
-// turns.js 的 settle() 会把一轮里她说过的话补写成 utterance 并打
-// flags:['uncommitted']（只留证、不当信念），日报不看 flags，于是聊得越多的那天
-// 日报越像流水账。这里钉住：聊天原话不进「她说了什么」，但也不能被说成「什么都没说」。
-test('日报：聊天里说的不罗列，但要如实交代有几句', () => {
+// 2026-11-04（群反馈第一条）：日报曾经把聊天原话也当成「她说了什么」罗列，
+// 一天聊几十轮那天日报全是流水账。现在分开放：认领下来的一节，聊天时说的
+// 另起一节、只留最近的、每段截断。
+test('日报：聊天里说的不进「她说了什么」，另起一节单列', () => {
   const events = [
     { type: 'utterance', ts: '2026-11-04T10:10:00.000Z', text: '聊天里随口说的', flags: ['uncommitted'] },
-    { type: 'utterance', ts: '2026-11-04T10:10:00.000Z', text: '聊天里的第二句', flags: ['uncommitted'] },
+    { type: 'utterance', ts: '2026-11-04T10:20:00.000Z', text: '聊天里的第二句', flags: ['uncommitted'] },
   ]
   const dk = dateKey(new Date('2026-11-04T10:10:00.000Z'))
   // 一条都不该进 quotesOf
   assert.deepEqual(quotesOf(events, dk), [])
   const md = buildReport({ dateKey: dk, items: [], events })
-  assert.ok(!md.includes('聊天里随口说的'), '聊天原话不该被当众罗列')
-  assert.match(md, new RegExp(`只在对话里说过 2 句`), '得说清有几句，不能说成什么都没说')
+  const [said, chat] = md.split('## 聊天时说过的')
+  assert.ok(!said.includes('聊天里随口说的'), '聊天原话不该混进她认领下来的那一节')
   assert.ok(!md.includes('今天她什么都没说'), '她明明说了两句，说「什么都没说」是假话')
+  assert.ok(said.includes('这一节今天是空的'), '这一节空着就说空着，别装成没说话')
+  assert.ok(chat.includes('聊天里随口说的') && chat.includes('聊天里的第二句'), '单列一节里要看得见')
+  assert.match(chat, /^- \d\d:\d\d 聊天里随口说的$/m, '一行一段，带时刻')
 })
 
-test('日报：认领过的话照常印，聊天原话不混进去', () => {
+test('日报：认领过的话照常印，聊天原话放到下面那一节', () => {
   const events = [
     { type: 'utterance', ts: '2026-11-04T09:00:00.000Z', text: '这是我自己记下的。' },
     { type: 'utterance', ts: '2026-11-04T10:10:00.000Z', text: '这是聊天里说的。', flags: ['uncommitted'] },
   ]
   const dk = dateKey(new Date('2026-11-04T09:00:00.000Z'))
   const md = buildReport({ dateKey: dk, items: [], events })
-  assert.match(md, /这是我自己记下的/)
-  assert.ok(!md.includes('这是聊天里说的'), '同一天有认领的话时，聊天原话也不该混进来')
-  assert.ok(!md.includes('只在对话里说过'), '有人认领过就不该走那条兜底文案')
+  const [said, chat] = md.split('## 聊天时说过的')
+  assert.match(said, /这是我自己记下的/)
+  assert.ok(!said.includes('这是聊天里说的'), '同一天有认领的话时，聊天原话也不该混进那一节')
+  assert.ok(chat.includes('这是聊天里说的'), '但要出现在「聊天时说过的」一节里')
+  assert.ok(!md.includes('这一节今天是空的'), '有人认领过就不该写这一节是空的')
+})
+
+test('日报：聊天太多只列最近的 20 段，并说清一共几段', () => {
+  const chatLines = (n) => Array.from({ length: n }, (_, i) => ({
+    type: 'utterance',
+    flags: ['uncommitted'],
+    ts: `2026-11-04T${String(Math.floor(i / 60) + 1).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00.000Z`,
+    text: `第${i}段`.padEnd(REPORT_CHAT_CHARS + 30, '长'),
+  }))
+  const n = REPORT_CHAT_LINES + 5
+  const dk = dateKey(new Date('2026-11-04T12:00:00.000Z'))
+  const section = buildReport({ dateKey: dk, events: chatLines(n) }).split('## 聊天时说过的')[1]
+  const lines = section.split('\n').filter((l) => l.startsWith('- '))
+  assert.equal(lines.length, REPORT_CHAT_LINES)
+  assert.ok(lines[0].includes(`第${n - REPORT_CHAT_LINES}段`), '留下的是最近的')
+  assert.ok(lines.at(-1).includes(`第${n - 1}段`))
+  assert.ok(section.includes(`今天一共 ${n} 段`))
+  // 正好列满时不多说一句
+  const exact = buildReport({ dateKey: dk, events: chatLines(REPORT_CHAT_LINES) })
+  assert.ok(!exact.includes('今天一共'))
+})
+
+test('日报：截断不把 emoji 切成半个', () => {
+  const text = '好'.repeat(REPORT_CHAT_CHARS - 2) + '😀'.repeat(10)
+  const dk = dateKey(new Date('2026-11-04T09:00:00.000Z'))
+  const md = buildReport({ dateKey: dk, events: [{ type: 'utterance', flags: ['uncommitted'], ts: '2026-11-04T09:00:00.000Z', text }] })
+  assert.ok(md.isWellFormed())
 })
