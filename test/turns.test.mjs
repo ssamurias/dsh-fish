@@ -591,6 +591,73 @@ test('认识不出来的来源，日志里要留一行（别静默丢消息）',
   }
 })
 
+test('外渠道连着说三句：seen 只写一条，日志也只打一行（别刷屏）', async () => {
+  const root = await tmpRoot()
+  const lines = []
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: (...a) => lines.push(a.join(' ')) })
+    try {
+      const say = (n) => ({
+        type: 'user/message',
+        data: {
+          id: `qq-${n}`,
+          role: 'user',
+          content: [{ type: 'text', text: `第 ${n} 句` }],
+          source: { kind: 'qq' },
+        },
+      })
+      for (const n of [1, 2, 3]) {
+        ctx.emit('session/event', session('s-qq'), say(n))
+        ctx.emit('session/event', session('s-qq'), TURN_END)
+      }
+      await settled()
+
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 1, '同一分钟里连说几句只写一条 seen')
+
+      // 2026-11-04（用户 m02556）：日志以前写在这个 if 外面，于是三句就是三行。
+      // 日志重复到看不出哪条是真的，等于这条日志白写。
+      const about = lines.filter((l) => l.includes('认识的会话之外的动静'))
+      assert.equal(about.length, 1, '同一分钟里连说几句只该打一行日志，不能刷屏')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('认不出来源：同一个 kind 连着丢十条，日志也只留一行', async () => {
+  const root = await tmpRoot()
+  const lines = []
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: (...a) => lines.push(a.join(' ')) })
+    try {
+      const mystery = (n) => ({
+        type: 'user/message',
+        data: {
+          id: `m-${n}`,
+          role: 'user',
+          content: [{ type: 'text', text: `不知道谁发的 ${n}` }],
+          source: { kind: 'user', rpcId: `uuid-${n}` },
+        },
+      })
+      for (let n = 0; n < 10; n += 1) ctx.emit('session/event', session(), mystery(n))
+      await settled()
+
+      const about = lines.filter((l) => l.includes('认不出来源'))
+      assert.equal(about.length, 1, '同一个 kind 十分钟之内只打一行，免得把日志淹掉')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
 test('满 rotateAfter 就换会话，事件流里留一条 meta', async () => {
   const root = await tmpRoot()
   try {
