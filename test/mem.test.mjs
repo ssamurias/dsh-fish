@@ -535,6 +535,52 @@ test('昨晚换的房间，不能再写成「你刚搬进这个房间」', async
   assert.match(legacy, /你刚搬进这个房间/)
 })
 
+test('回忆 brief 档：长的聊天原话也留着标记，别人的话仍不超过上限', () => {
+  const now = Date.now()
+  const long = '评论' + '好'.repeat(RECALL_BRIEF_SNIPPET)
+  const row = (id, type, flags = []) => ({ id, type, flags, ts: new Date(now - DAY).toISOString(), text: long })
+  const render = (ev) => renderRecall(searchEvents([ev], '评论', { now, snippet: RECALL_BRIEF_SNIPPET }).rows, { brief: true })
+  assert.ok(render(row('chat', 'utterance', ['uncommitted'])).includes('…｜聊天里说的（chat）'))
+  for (const [type, label] of [['voice', '读到别人说：'], ['heard', '他说：'], ['answer', '回复：']]) {
+    const line = render(row('x', type)).split('\n')[1]
+    const body = line.slice(line.indexOf('｜') + 1, line.lastIndexOf('（'))
+    assert.ok(body.startsWith(label), type)
+    assert.ok(body.length <= RECALL_BRIEF_SNIPPET, type)
+  }
+})
+
+test('回忆 brief 档：一行式的改口说明不被截掉，id 只报第一个', () => {
+  const rows = [{ id: 'r', type: 'revise', verdict: 'refuted', refs: ['a', 'b', 'c'], date: '2026-11-01', text: '好'.repeat(RECALL_BRIEF_SNIPPET + 20) }]
+  assert.ok(renderRecall(rows, { brief: true }).includes('…（推翻了 a，那是更早说的）（r）'))
+  assert.ok(renderRecall(rows).includes('（推翻了 a,b,c，那是更早说的）（r）'))
+})
+
+test('回忆：改口关系引用别人的话或聊天原话时，也说清来路', () => {
+  const now = Date.now()
+  const at = (d) => new Date(now - d * DAY).toISOString()
+  const long = '好'.repeat(RECALL_BRIEF_SNIPPET + 20)
+  const events = [
+    { id: 'h', type: 'heard', ts: at(9), text: '你别出门了' },
+    { id: 'v', type: 'voice', ts: at(9), text: '下雨别出门' },
+    { id: 'u', type: 'utterance', flags: ['uncommitted'], ts: at(9), text: '顺口一句' },
+    { id: 'lh', type: 'heard', ts: at(9), text: long },
+    { id: 'lu', type: 'utterance', flags: ['uncommitted'], ts: at(9), text: long },
+    { id: 'r1', type: 'revise', refs: ['h'], ts: at(5), text: '评论一' },
+    { id: 'r2', type: 'revise', refs: ['v'], ts: at(4), text: '评论二' },
+    { id: 'r3', type: 'revise', refs: ['u'], ts: at(3), text: '评论三' },
+    { id: 'r4', type: 'revise', refs: ['lh'], ts: at(2), text: '评论四' },
+    { id: 'r5', type: 'revise', refs: ['lu'], ts: at(1), text: '评论五' },
+  ]
+  const txt = renderRecall(searchEvents(events, '评论', { now }).rows)
+  assert.ok(txt.includes('这句改的是：他说：你别出门了（h）'))
+  assert.ok(txt.includes('这句改的是：读到别人说：下雨别出门（v）'))
+  assert.ok(txt.includes('这句改的是：顺口一句｜聊天里说的（u）'))
+  // 引用的字数只算原话，来路和标记都在限额之外
+  const cut = '好'.repeat(RECALL_BRIEF_SNIPPET - 1) + '…'
+  assert.ok(txt.includes(`这句改的是：他说：${cut}（lh）`))
+  assert.ok(txt.includes(`这句改的是：${cut}｜聊天里说的（lu）`))
+})
+
 // ------------------------------------------------- issue #23：被推翻的那句不再排第一
 
 test('回忆：被推翻的那条不再靠「被引用过」加分（issue #23）', async () => {
