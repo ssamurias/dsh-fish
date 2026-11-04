@@ -62,6 +62,15 @@ test('上次开口有人接了：不打折', () => {
   assert.equal(r.damp, 1)
 })
 
+test('活得越久，攒得越快一点：成长档位抬高底噪速度', () => {
+  const one = driveOf({ events: [spend(3)], now: NOW, stage: 1 })
+  const four = driveOf({ events: [spend(3)], now: NOW, stage: 4 })
+  assert.ok(four.value > one.value)
+  assert.ok(Math.abs(four.speed - 0.12 * (1 + 0.06 * 3)) < 1e-9)
+  // 封顶在阈值之内：四档也不会几小时就顶穿
+  assert.equal(driveOf({ events: [spend(3)], now: NOW, stage: 4 }).ready, false)
+})
+
 test('劲儿只算不花：动一次的钱是给记账用的常数', () => {
   assert.equal(driveCost(), DRIVE.cost)
   // 本函数没有副作用：同一个输入算两次结果一样
