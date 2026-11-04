@@ -428,4 +428,4 @@ P2（她真的会刷 B 站并写报告）：`lib/bili.js` 只读客户端 + `lib
 
 ## 许可
 
-MIT，见包内 `LICENSE`。**本项目没有上游代码派生**——`lib/` 全部为本项目新写；B 站接口的行为来自本机实测（见 `lib/bili.js` 头部注释），不是官方 API，也没有拷任何第三方库。原理页引用了 Kolb / Piaget / Bowlby / Festinger / Bartlett / Dewey / Schön 的理论，只是思想引用（页底标了作者与年份），不含他人代码或文字。插件不含第三方美术资源：头像由你自己上传到 `~/.dsh-fish/avatar.<ext>`；仓库里唯一的图片是 `media/fish.jpg`（本仓库作者提供的原图 + AI 生成）与 `media/` 下两张自绘 SVG。
+MIT，见包内 `LICENSE`（只放标准 MIT 全文，便于 GitHub / SPDX 识别）；第三方来源、思想引用与美术素材授权另见 `THIRD-PARTY-NOTICES.md`。**本项目没有上游代码派生**——`lib/` 全部为本项目新写；B 站接口的行为来自本机实测（见 `lib/bili.js` 头部注释），不是官方 API，也没有拷任何第三方库。原理页引用了 Kolb / Piaget / Bowlby / Festinger / Bartlett / Dewey / Schön 的理论，只是思想引用（页底标了作者与年份），不含他人代码或文字。插件不含第三方美术资源：头像由你自己上传到 `~/.dsh-fish/avatar.<ext>`；仓库里唯一的图片是 `media/fish.jpg`（本仓库作者提供的原图 + AI 生成）与 `media/` 下两张自绘 SVG。

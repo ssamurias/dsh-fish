@@ -11,6 +11,7 @@
   },
   "files": [
     "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
     "lib",
     "media",
     "cordis.patch.yml",
