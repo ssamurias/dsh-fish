@@ -32,6 +32,7 @@ import {
   tailLog,
 } from '../lib/log.js'
 import { DEFAULTS } from '../lib/settings.js'
+import { validateEvent } from '../lib/schema.js'
 
 async function tempRoot() {
   return await mkdtemp(join(tmpdir(), 'fish-log-'))
@@ -254,4 +255,54 @@ test('导出里带事件流尾部：watched: 这种计数只在事件流里，�
   assert.ok(iEv > 0, '要有事件流段')
   assert.ok(iLog > iEv, '事件流在日志前面')
   assert.match(text, /watched:2026-10-28 BV1xx411c7mD/)
+})
+
+test('导出的事件流不带正文：设置页答应了「不含正文」「没有她说过的话」', async () => {
+  const root = await tempRoot()
+  const opts = { day: 1, stage: 1, source: 'system' }
+  // 走真的 validateEvent：refuse.quote、ask.subject 这些带原话的字段，形状才和落盘一样。
+  // 只删 text 挡不住它们，所以这里要钉的是「白名单之外一个字都不出去」。
+  const rows = [
+    validateEvent({ type: 'utterance', text: '合成甲句她说的话', flags: ['uncommitted'] }, opts),
+    validateEvent({ type: 'heard', text: '合成乙句他说的话' }, opts),
+    validateEvent({ type: 'refusal', text: '我不想看合成丙号视频' }, opts),
+    validateEvent({
+      type: 'ask',
+      text: '合成丁句请求的话',
+      ask: { kind: 'rule', subject: '合成戊号请求标题', reason: '合成己号请求理由', options: ['合成庚号选项'] },
+    }, opts),
+  ]
+  const meta = JSON.stringify({ type: 'meta', text: 'watched:2026-10-28 BV1xx411c7mD' })
+  const broken = '{"type":"utterance","text":"合成辛句写了半截'
+  const bareJson = JSON.stringify('合成壬句裸字符串')
+  const bareArray = JSON.stringify(['合成癸句数组里'])
+  const noType = JSON.stringify({ text: '合成子句缺字段' })
+  const noFlags = JSON.stringify({ id: 'ev-no-flags', ts: '2026-11-05T00:00:00.000Z', type: 'utterance', text: '合成丑句没有标记' })
+  const lines = [...rows.map((r) => JSON.stringify(r)), meta, broken, bareJson, bareArray, noType, noFlags]
+  writeFileSync(join(root, 'events.jsonl'), lines.join('\n') + '\n', 'utf8')
+
+  const text = buildBundle(root, { lines: 5, eventLines: 60 })
+
+  for (const word of ['甲句', '乙句', '丙号', '丁句', '戊号', '己号', '庚号', '辛句', '壬句', '癸句', '子句', '丑句']) {
+    assert.equal(text.includes(word), false, `导出里不该出现「${word}」`)
+  }
+  // meta 原样留着：watched: 这种计数只在事件流里，日志文件里没有
+  assert.ok(text.includes(meta), 'meta 行要原样留着')
+  // 排查还要看得出「哪一条、什么时候、什么类型、多长」，否则这段尾巴就白带了
+  const out = text.split('\n')
+  const row = JSON.parse(out.find((l) => l.includes(rows[0].id)))
+  assert.deepEqual(Object.keys(row).sort(), ['flags', 'id', 'textLen', 'ts', 'type'])
+  assert.equal(row.type, 'utterance')
+  assert.equal(row.ts, rows[0].ts)
+  assert.deepEqual(row.flags, ['uncommitted'])
+  assert.equal(row.textLen, rows[0].text.length)
+  // 坏行不原样抄，只说它有多长
+  assert.ok(out.includes(`(坏行，长 ${broken.length} 字符，内容不导出)`), '解析不了的行只留长度')
+  assert.ok(out.includes(`(坏行，长 ${bareJson.length} 字符，内容不导出)`), '不是对象的行也算坏行')
+  assert.ok(out.includes(`(坏行，长 ${bareArray.length} 字符，内容不导出)`), '数组也算坏行，不要出一行空壳')
+  assert.ok(out.includes(`(坏行，长 ${noType.length} 字符，内容不导出)`), '没有 type 的对象也算坏行，不要出 {} 这种空壳')
+  // 缺 flags 的行形状也要稳：有 type 就留，flags 补成空数组
+  const short = JSON.parse(out.find((l) => l.includes('ev-no-flags')))
+  assert.deepEqual(short.flags, [])
+  assert.equal(short.textLen, '合成丑句没有标记'.length)
 })
