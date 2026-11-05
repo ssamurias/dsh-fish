@@ -24,6 +24,7 @@ import {
   followWake,
   isSurfaceEvent,
   looksLikeNothingSaid,
+  looksLikeStreamFailure,
   planWakeCompaction,
   tombstoneText,
 } from '../lib/compact.js'
@@ -328,4 +329,15 @@ test('followWake 把她说的话一并带出来，调用方才判得出是不是
   assert.equal(out.spoke, true)
   assert.match(out.said, /没什么要说的/)
   assert.equal(out.endSeq, 2)
+})
+
+test('上游断流的那行红字：既不是她开口，也不是「没什么要说的」', () => {
+  const line = '❌ [ACP] stream error: the turn degenerated again after the continuation nudge'
+  assert.equal(looksLikeStreamFailure(line), true)
+  assert.equal(looksLikeStreamFailure('  ❌ 上游失败'), true)
+  assert.equal(looksLikeStreamFailure('这条通知触发了本轮回复。'), false)
+  assert.equal(looksLikeStreamFailure('我想弄清这句话为什么成立'), false)
+  assert.equal(looksLikeStreamFailure(''), false)
+  // 两种判据互不覆盖：报错那行不该被当成元话语
+  assert.equal(looksLikeNothingSaid(line), false)
 })
