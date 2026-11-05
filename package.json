@@ -18,6 +18,7 @@
     "README.md",
     "AGENTS.md",
     "CHANGELOG.md",
+    "RELEASE-NOTES-*.md",
     "scripts"
   ],
   "scripts": {
