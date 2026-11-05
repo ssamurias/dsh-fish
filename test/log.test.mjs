@@ -276,12 +276,14 @@ test('导出的事件流不带正文：设置页答应了「不含正文」「�
   const broken = '{"type":"utterance","text":"合成辛句写了半截'
   const bareJson = JSON.stringify('合成壬句裸字符串')
   const bareArray = JSON.stringify(['合成癸句数组里'])
-  const lines = [...rows.map((r) => JSON.stringify(r)), meta, broken, bareJson, bareArray]
+  const noType = JSON.stringify({ text: '合成子句缺字段' })
+  const noFlags = JSON.stringify({ id: 'ev-no-flags', ts: '2026-11-05T00:00:00.000Z', type: 'utterance', text: '合成丑句没有标记' })
+  const lines = [...rows.map((r) => JSON.stringify(r)), meta, broken, bareJson, bareArray, noType, noFlags]
   writeFileSync(join(root, 'events.jsonl'), lines.join('\n') + '\n', 'utf8')
 
   const text = buildBundle(root, { lines: 5, eventLines: 60 })
 
-  for (const word of ['甲句', '乙句', '丙号', '丁句', '戊号', '己号', '庚号', '辛句', '壬句', '癸句']) {
+  for (const word of ['甲句', '乙句', '丙号', '丁句', '戊号', '己号', '庚号', '辛句', '壬句', '癸句', '子句', '丑句']) {
     assert.equal(text.includes(word), false, `导出里不该出现「${word}」`)
   }
   // meta 原样留着：watched: 这种计数只在事件流里，日志文件里没有
@@ -298,4 +300,9 @@ test('导出的事件流不带正文：设置页答应了「不含正文」「�
   assert.ok(out.includes(`(坏行，长 ${broken.length} 字符，内容不导出)`), '解析不了的行只留长度')
   assert.ok(out.includes(`(坏行，长 ${bareJson.length} 字符，内容不导出)`), '不是对象的行也算坏行')
   assert.ok(out.includes(`(坏行，长 ${bareArray.length} 字符，内容不导出)`), '数组也算坏行，不要出一行空壳')
+  assert.ok(out.includes(`(坏行，长 ${noType.length} 字符，内容不导出)`), '没有 type 的对象也算坏行，不要出 {} 这种空壳')
+  // 缺 flags 的行形状也要稳：有 type 就留，flags 补成空数组
+  const short = JSON.parse(out.find((l) => l.includes('ev-no-flags')))
+  assert.deepEqual(short.flags, [])
+  assert.equal(short.textLen, '合成丑句没有标记'.length)
 })
