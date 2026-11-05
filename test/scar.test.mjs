@@ -64,6 +64,17 @@ test('他坚持了、但她也顶住了（没说让步的话）→ 不是疤', (
   assert.equal(m.scars.length, 0)
 })
 
+test('聊天里没认领的「好吧」不成疤：uncommitted 只留证，不算她退了步', () => {
+  const chat = ev('u2', 'utterance', 3, CONCEDE, { source: 'system', flags: ['uncommitted'] })
+  const m = deriveSelf(base([react('r1', 'insist'), chat]))
+  assert.equal(m.scars.length, 0)
+  assert.equal(m.facts.scars, 0)
+  assert.ok(!personaLine(m).includes('至今没想通'))
+  // 同一句话认领过，照旧成疤：这里只分认没认领，不分话题
+  const claimed = deriveSelf(base([react('r1', 'insist'), ev('u2', 'utterance', 3, CONCEDE)]))
+  assert.equal(claimed.scars.length, 1)
+})
+
 test('让步的话必须在三天内，更晚的不追', () => {
   const inside = deriveSelf(base([react('r1', 'insist'), ev('u2', 'utterance', 4, CONCEDE)]))
   assert.equal(inside.scars.length, 1)

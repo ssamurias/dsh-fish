@@ -92,6 +92,22 @@ test('她今天说了话 + 开关打开 → 该提醒，带最后一句', () => 
   assert.equal(r.text, '最后这句才进通知')
 })
 
+test('聊天行（uncommitted）不占一天一次的提醒，也不顶掉留话', () => {
+  const now = new Date()
+  const config = { notify: { enabled: true, lastShown: '' } }
+  const today = todayKey(now)
+  const chat = { type: 'utterance', text: '嗯，我在，你说。', ts: now.toISOString(), flags: ['uncommitted'] }
+  const letter = { type: 'utterance', text: '这句是她留的话。', ts: now.toISOString() }
+
+  const only = shouldNotify({ events: [chat], config, today })
+  assert.equal(only.due, false, '刚在聊天里读过的回复不用再提醒')
+  assert.equal(only.why, '她今天还没说话')
+
+  const both = shouldNotify({ events: [letter, chat], config, today })
+  assert.equal(both.due, true)
+  assert.equal(both.text, '这句是她留的话。')
+})
+
 test('今天已经提醒过 → 同一天不再提醒第二次', () => {
   const now = new Date()
   const dk = todayKey(now)

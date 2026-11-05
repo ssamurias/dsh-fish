@@ -51,6 +51,26 @@ test('eventsSince：只摊开出门之后新增的，审查标记本身不算她
   }
 })
 
+test('eventsSince：家里聊天没认领的行不算这趟写的，「这趟不算数」也扫不到它', () => {
+  const { root, done } = tmp()
+  try {
+    const list = [
+      ev('ev_trip', 2_100, 'utterance', '出门后认领的一句'),
+      ev('ev_chat', 2_200, 'utterance', '我拒绝这个，今天不想动。', { source: 'system', flags: ['uncommitted'] }),
+    ]
+    const r = eventsSince(writeEvents(root, list), 2_000)
+    assert.equal(r.total, 1)
+    assert.deepEqual(r.items.map((x) => x.id), ['ev_trip'])
+
+    // observe.js 的 kept:false 就是把列表里非 meta 的 id 写进 outing-reject:
+    const swept = r.items.filter((it) => it.type !== 'meta').map((it) => it.id)
+    const m = deriveSelf([...list, ev('ev_mark', 2_300, 'meta', `outing-reject:${swept.join(' ')}`)])
+    assert.equal(m.facts.wont, 1, '家里那句拒绝不该跟着这趟一起被扫掉')
+  } finally {
+    done()
+  }
+})
+
 test('eventsSince：没给出门的时刻就不猜（宁可说算不出来）', () => {
   const { root, done } = tmp()
   try {

@@ -120,6 +120,19 @@ test('她认下了才叫回声：三日内说了一句意思相近的话', () =>
   assert.equal(m.freshVoice, null, '认下了就不再摆在眼前')
 })
 
+test('聊天里没认领的复述不算认下：那条评论还摆在她眼前', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种'),
+    ev('ev_v', 'voice', 2, '这游戏根本不值得买'),
+    ev('ev_u', 'utterance', 2, '我也觉得这游戏根本不值得买。', { flags: ['uncommitted'] }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
+  assert.equal(m.facts.voicesEchoed, 0)
+  assert.equal(m.voices[0].echoed, false)
+  assert.equal(m.freshVoice?.text, '这游戏根本不值得买', '信念没长，评论不能先从她眼前消失')
+  assert.equal(m.beliefCount, 0)
+})
+
 test('只是读到、没表态 → 不算回声，那条要摆在她眼前', () => {
   const evs = [
     ev('ev_seed', 'seed', 1, '种'),

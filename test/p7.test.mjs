@@ -49,6 +49,26 @@ test('away：按「你最后一次露面」之后的事件计数', () => {
   assert.equal(r.quiet, false)
 })
 
+test('away：上次聊天的回复（uncommitted）不算她不在时说的话', () => {
+  const day = 86400_000
+  const t0 = Date.parse('2026-10-20T12:00:00Z')
+  const chat = (text, ts) => ({ ...ev('utterance', text, ts), flags: ['uncommitted'] })
+  // seen: 在第一句人话时写，uncommitted 要等回合结束，所以它们必然排在 seen 之后。
+  const events = [
+    ev('meta', 'seen:2026-10-20T12:00:00Z', t0),
+    chat('嗯，我在。', t0 + 30_000),
+    chat('你说。', t0 + 31_000),
+  ]
+  const r = summarizeAway(events, { now: t0 + 2 * day })
+  assert.equal(r.days, 2)
+  assert.equal(r.said, 0)
+  assert.equal(r.quiet, true, '她什么也没做，不该出那张卡')
+
+  const claimed = summarizeAway([...events, ev('utterance', '这句她认领了。', t0 + day)], { now: t0 + 2 * day })
+  assert.equal(claimed.said, 1, '认领的话照常算')
+  assert.equal(claimed.quiet, false)
+})
+
 test('away：没有 seen 时从最早一条事件算起', () => {
   const t0 = Date.parse('2026-10-20T12:00:00Z')
   const events = [ev('seed', '你不是助手。', t0), ev('utterance', '诶。', t0 + 1000)]

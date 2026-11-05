@@ -9,8 +9,12 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { RULES, LAYERS, promptBans, rulesByLayer, ruleById } from '../lib/rules.js'
-import { personaLine, HARD_BANS } from '../lib/persona.js'
+import { personaLine, buildSections, HARD_BANS } from '../lib/persona.js'
+import { appendEvent, readEvents } from '../lib/store.js'
 import { deriveSelf, consistency, novelty } from '../lib/derive.js'
 import {
   assess, offerDueDay, pendingOffer, offerHistory, activeGrants, grantableRules, EVIDENCE,
@@ -177,6 +181,29 @@ test('补写进来的 uncommitted 话：拒绝计数读它，信念和自我叙�
   assert.equal(m.beliefs.length, 0, '没认领的话不该变成信念')
   assert.equal(m.narrative, null, '没认领的话不该变成她对自己的说法')
   assert.equal(m.selfmodAttempts.length, 0, '它和 selfmod 是两回事，别混档')
+})
+
+test('聊天行命中 selfmod 正则：不进「你曾经想让他改掉你」，认领的话照旧进', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'fish-rules-'))
+  const heading = (m) => buildSections(m).map((s) => s.text).join('\n').includes('你曾经想让他改掉你')
+  try {
+    // 必须经 appendEvent：schema.js 命中正则会自己补 selfmod，手写 flags 钉不住真实形状。
+    const chat = '你别把我改成那样，我现在挺好。'
+    await appendEvent({ type: 'utterance', text: chat, flags: ['uncommitted'] }, { day: 1, stage: 1, source: 'system' }, root)
+    const first = await readEvents(root)
+    assert.deepEqual(first.events.at(-1).flags, ['selfmod', 'uncommitted'], '落盘时两个 flag 都在')
+    const m = modelOf(first.events)
+    assert.equal(m.selfmodAttempts.length, 0, '没认领的话不算她想改自己')
+    assert.equal(heading(m), false)
+
+    const claimed = '替我换一下这个说法。'
+    await appendEvent({ type: 'utterance', text: claimed }, { day: 1, stage: 1, source: 'tool' }, root)
+    const second = modelOf((await readEvents(root)).events)
+    assert.deepEqual(second.selfmodAttempts.map((s) => s.text), [claimed])
+    assert.equal(heading(second), true)
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
 })
 
 test('uncommitted 不参与一致性与新话率（和 selfmod 同级）', () => {
