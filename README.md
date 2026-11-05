@@ -368,24 +368,30 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 
 默认不校验证书（ffmpeg 的 `tls_verify` 默认就是 0），拉到能出就直接出。只有你明确想校验证书、或某个构建不带 CA 时，才设置 `DSH_FISH_CA_FILE` 指向 CA 包——设了它会同时打开 `-tls_verify 1`，两者必须成对，光给 CA 不开校验是空转（2026-10-30 实测：传一个不存在的 CA 文件照样出图）。
 
-三种装法，任选一种：
+四种装法，任选一种：
 
-1. **面板装**（推荐）：DSH → 设置 → 插件 → 从本地安装 → 选这个目录。
-2. **命令行装**（先关掉 DSH，运行中替换已加载的包会 EPERM）：
+1. **从 npm 装**（最省事，推荐给只是想用的）：
+
+```
+"<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "@ssamurias/dsh-fish"
+```
+
+2. **面板装**：DSH → 设置 → 插件 → 从本地安装 → 选这个目录。
+3. **命令行装源码目录**（先关掉 DSH，运行中替换已加载的包会 EPERM）：
 
 ```
 "<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "link:<本目录绝对路径>"
 ```
 
-3. **直接从 GitHub 装**（不用先下载）：
+4. **直接从 GitHub 装**（不用先下载）：
 
 ```
 "<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "github:ssamurias/dsh-fish"
 ```
 
-打算改代码用 `link:` 指向自己的工作目录；只是想用，用 `github:` 这条。
+打算改代码用 `link:` 指向自己的工作目录；只是想用，用 npm 或 `github:` 那条。
 
-无论哪种，都要保证 profile 的 `package.json` 里 **`dependencies` 与 `dsh.profile.bundles` 都有 `dsh-fish`** —— 只有一边会在下次 `pnpm` 清理时把包删掉，表现为「重启后 DSH 崩了 / 设置页没有鱼」。包名必须与 `cordis.patch.yml` 里的 `name` 完全一致（都是 `dsh-fish`）。
+无论哪种，都要保证 profile 的 `package.json` 里 **`dependencies` 与 `dsh.profile.bundles` 都有 `@ssamurias/dsh-fish`** —— 只有一边会在下次 `pnpm` 清理时把包删掉，表现为「重启后 DSH 崩了 / 设置页没有鱼」。包名必须与 `cordis.patch.yml` 里的 `name` 完全一致（都是 `@ssamurias/dsh-fish`，**带 scope 的全名，写短名客户端那半会静默不加载**）。
 
 **全新 profile 还要有 `@deepseek-ai/dsh-web-app`**：只装 `dsh-base` 的话，插件会停在 `pending (waiting for services: sessionController, webServer)`，页面根本起不来。`dsh plugin add` 只会自动加 `dsh-base`，`dsh-web-app` 要自己补进 `bundles`。
 
@@ -405,7 +411,7 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 
 ## 卸载 / 停用
 
-- **卸载**：设置 → 插件 → 卸载（或 `dsh plugin --profile <profile> remove dsh-fish`），然后重启。`~/.dsh-fish/` 不会被动，她的记忆留在那儿。
+- **卸载**：设置 → 插件 → 卸载（或 `dsh plugin --profile <profile> remove @ssamurias/dsh-fish`），然后重启。`~/.dsh-fish/` 不会被动，她的记忆留在那儿。
 - **只想让她歇着**：设置 → 大肥鱼 → 把「每天醒几次」设成 0。关掉后定时器不唤她、不刷 B 站、不写任何事件——零后台活动。
 
 ## 现在的状态
