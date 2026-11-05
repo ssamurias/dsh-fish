@@ -347,7 +347,7 @@ lib/
   toolschema.js 简写参数 DSL → 标准 JSON Schema
   observe.js    宿主侧 JSON API（/dsh-fish/state、/events、/beliefs、/diary、/config、/wake、/browse、/reports、/update）
   client.js     浏览器半边：设置 → 大肥鱼
-test/           1090 个测试，node --test 全绿
+test/           1394 个测试，node --test 全绿
 ```
 
 ## 跑测试
@@ -368,28 +368,25 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 
 默认不校验证书（ffmpeg 的 `tls_verify` 默认就是 0），拉到能出就直接出。只有你明确想校验证书、或某个构建不带 CA 时，才设置 `DSH_FISH_CA_FILE` 指向 CA 包——设了它会同时打开 `-tls_verify 1`，两者必须成对，光给 CA 不开校验是空转（2026-10-30 实测：传一个不存在的 CA 文件照样出图）。
 
-四种装法，任选一种：
-
-1. **从 npm 装**（最省事，推荐给只是想用的）：
+**从 npm 装**——推荐，一条命令，不用先下载，也不用关掉 DSH：
 
 ```
 "<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "@ssamurias/dsh-fish"
 ```
 
-2. **面板装**：DSH → 设置 → 插件 → 从本地安装 → 选这个目录。
-3. **命令行装源码目录**（先关掉 DSH，运行中替换已加载的包会 EPERM）：
-
-```
-"<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "link:<本目录绝对路径>"
-```
-
-4. **直接从 GitHub 装**（不用先下载）：
+不想经过 npm 就直接从 GitHub 装，同样不用关 DSH：
 
 ```
 "<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "github:ssamurias/dsh-fish"
 ```
 
-打算改代码用 `link:` 指向自己的工作目录；只是想用，用 npm 或 `github:` 那条。
+要改代码才用源码目录，而且**必须先关掉 DSH**——运行中替换已被加载的包会 `EPERM`，包目录会被留成「已删除」，下次启动缺包：
+
+```
+"<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "link:<本目录绝对路径>"
+```
+
+> 升级已有的安装也等于「替换已被加载的包」：DSH 开着的时候先关掉再装，或者直接用设置页里的插件管理器升级。
 
 无论哪种，都要保证 profile 的 `package.json` 里 **`dependencies` 与 `dsh.profile.bundles` 都有 `@ssamurias/dsh-fish`** —— 只有一边会在下次 `pnpm` 清理时把包删掉，表现为「重启后 DSH 崩了 / 设置页没有鱼」。包名必须与 `cordis.patch.yml` 里的 `name` 完全一致（都是 `@ssamurias/dsh-fish`，**带 scope 的全名，写短名客户端那半会静默不加载**）。
 
@@ -419,7 +416,7 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 P1（骨架）：事件流、派生、阶段门、生物钟、工具、冷落检测、日记、观测台。
 P2（她真的会刷 B 站并写报告）：`lib/bili.js` 只读客户端 + `lib/browse.js` 选题筛读 + `lib/look.js` 的 `bili_look` 工具 + `lib/report.js` 写稿，已接进生物钟。
 
-**已有 1090 个测试全绿**，真接口跑通过一轮（10.8s，含首页+详情+评论+弹幕）。
+**已有 1394 个测试全绿**，真接口跑通过一轮（10.8s，含首页+详情+评论+弹幕）。
 
 `browse.enabled` 默认 **true**（装好就能用）；不想让她上网就在设置 → 大肥鱼里关掉，关掉后定时器一次都不会调 B 站接口。
 
