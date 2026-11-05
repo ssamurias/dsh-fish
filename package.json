@@ -1,6 +1,6 @@
 {
   "name": "@ssamurias/dsh-fish",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "养一条会自己长大的鱼：没有人格设置，通过事件流长大。她可以自己刷 B 站、会写日记给你看，四个阶段完成后才会开始有立场。状态库在 ~/.dsh-fish，不能删除记录。",
   "type": "module",
   "main": "lib/index.js",
