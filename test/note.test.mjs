@@ -1,13 +1,14 @@
 /**
  * note.test.mjs —— issue #22 乙档「醒来看的那张便条」的锁定测试（2026-11-04）
  *
- * 守六件事：
+ * 守七件事：
  *   1. renderNotes 是纯函数，没有到期的一张时返回空串（唤醒正文一个字都不多）；
  *   2. 只列 open + 有日子 + 已经到期的；没日子的、将来的、做完了的都不进第一眼；
  *   3. 过期不删——renderNotes 不改输入，closeNote 只改 status，条目一条都不少；
  *   4. 一次最多 5 条，剩下的只报数；文案里不出现「逾期」「请尽快」这类催人的词；
  *   5. 上限写死在代码里（字数 / 张数），拒绝时不训她；
- *   6. 注册出来的工具是宿主认的形状，且 notes.json 与 session-notes.json 不混名。
+ *   6. 注册出来的工具是宿主认的形状，且 notes.json 与 session-notes.json 不混名；
+ *   7. 划掉只靠她看得见的东西：她手里没有 id，只有自己写过的那句话。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -31,6 +32,7 @@ import {
   closeNote,
   registerNote,
 } from '../lib/note.js'
+import { NOTE_BRIEF } from '../lib/persona.js'
 import { paths } from '../lib/store.js'
 
 async function withRoot(fn) {
@@ -257,5 +259,176 @@ test('注册出来的 her_note 是宿主认的形状，render 只回方括号标
     const closed = await def.execute({ id: out.id, status: 'done' }, { session: {} })
     assert.equal(closed.ok, true)
     assert.equal((await readNotes(root))[0].status, 'done')
+  })
+})
+
+// ---- 只靠她看得见的东西划掉（issue #22）----
+// 宿主只把 render 的结果交给她，execute 的返回值（里面有 id）不进她的上下文。
+// 所以下面这几条走的路和她一样：从回执和醒来那段拿字，除了专门测 id 的那条，一律不碰 value.id。
+
+function herTool(root) {
+  const ctx = fakeCtx()
+  registerNote(ctx, { root, log: () => {} })
+  const def = ctx._tools[0]
+  const call = async (args) => def.output.render(args, await def.execute(args, { session: {} }))[0].text
+  return { def, call }
+}
+const wakeOf = async (root, now) => renderNotes(await readNotes(root), now)
+// 醒来那行是「11-01 那件事，晚了四天。」：掐头去尾，剩下的就是她手里的原话
+const wordsOn = (line) => line.replace(/^\d\d-\d\d /, '').replace(/，(就是今天|晚了.+天)。$/, '')
+
+test('走一遍：记一张，醒来读到字，照着划掉，下次醒来就空了', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    const now = new Date(2026, 10, 5)
+
+    assert.equal(await call({ text: '把借的伞还回去', due: '2026-11-01' }), '[记下了]')
+
+    const wake = await wakeOf(root, now)
+    assert.doesNotMatch(wake, /note-/, '醒来那段不带 id，所以她只能靠字')
+    const line = wake.split('\n')[1]
+    assert.equal(line, '11-01 把借的伞还回去，晚了四天。')
+
+    const closed = await call({ text: wordsOn(line), status: 'done' })
+    assert.equal(closed, '[划掉了]')
+    assert.doesNotMatch(closed, /\d/, '回执里不带数字（不吃状态）')
+    assert.equal(await wakeOf(root, now), '', '划掉之后不再摆出来')
+
+    const back = await readNotes(root)
+    assert.equal(back.length, 1, '划掉不等于删掉，也不许顺手多记一张')
+    assert.equal(back[0].status, 'done')
+    assert.ok(back[0].closedAt)
+  })
+})
+
+test('没日子的纸条从不进醒来那段，也能靠自己写过的那句话划掉', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    const now = new Date(2026, 10, 5)
+
+    assert.equal(await call({ text: '下次路过\n  那家店\t看一眼' }), '[记下了]')
+    assert.equal(await wakeOf(root, now), '', '没日子不上桌：这张她读不到第二遍')
+
+    // 空白和记的时候不一样也算同一句：addNote 落盘前就是这么规整的
+    assert.equal(await call({ text: ' 下次路过 那家店  看一眼\n', status: 'done' }), '[划掉了]')
+
+    const back = await readNotes(root)
+    assert.equal(back.length, 1)
+    assert.equal(back[0].status, 'done')
+  })
+})
+
+test('重名时先划最早记下的那张，一次只划一张', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    const now = new Date(2026, 10, 5)
+    await call({ text: '交水费', due: '2026-11-01' })
+    await call({ text: '交水费', due: '2026-11-02' })
+    assert.match(await wakeOf(root, now), /桌上压着两张/)
+
+    assert.equal(await call({ text: '交水费', status: 'done' }), '[划掉了]')
+    assert.equal(await wakeOf(root, now), '（桌上压着一张）\n11-02 交水费，晚了三天。')
+
+    assert.equal(await call({ text: '交水费', status: 'done' }), '[划掉了]')
+    assert.equal(await wakeOf(root, now), '')
+
+    // 都划过了再划一次：和按 id 重复划掉一样，不算错，也不动已有的
+    const before = JSON.stringify(await readNotes(root))
+    assert.equal(await call({ text: '交水费', status: 'done' }), '[划掉了]')
+    assert.equal(JSON.stringify(await readNotes(root)), before)
+  })
+})
+
+test('「最早」看记下的时间，不看文件里的前后（文件允许人手改）', async () => {
+  await withRoot(async (root) => {
+    await writeNotes(root, [
+      note({ id: 'later', text: '交水费', created: '2026-11-03T00:00:00.000Z' }),
+      note({ id: 'earlier', text: '交水费', created: '2026-11-01T00:00:00.000Z' }),
+    ])
+    const { call } = herTool(root)
+    assert.equal(await call({ text: '交水费', status: 'done' }), '[划掉了]')
+    const back = await readNotes(root)
+    assert.equal(back.find((n) => n.id === 'earlier').status, 'done')
+    assert.equal(back.find((n) => n.id === 'later').status, 'open')
+  })
+})
+
+test('桌上满了也划得掉：记不进去的时候，照醒来那行字划', async () => {
+  await withRoot(async (root) => {
+    const many = Array.from({ length: NOTES_MAX }, (_, i) => note({ id: `n${i}`, text: `第${i}件` }))
+    many[7] = note({ id: 'n7', text: '把借的伞还回去', due: '2026-11-01' })
+    await writeNotes(root, many)
+    const { call } = herTool(root)
+    const now = new Date(2026, 10, 5)
+
+    assert.match(await call({ text: '再来一张' }), /^\[没记下：.*堆满/)
+
+    const line = (await wakeOf(root, now)).split('\n')[1]
+    assert.equal(await call({ text: wordsOn(line), status: 'done' }), '[划掉了]')
+    assert.equal(await wakeOf(root, now), '')
+    assert.equal((await readNotes(root)).length, NOTES_MAX, '划掉不等于删掉')
+  })
+})
+
+test('划不掉时回一句人话，回执写「没划掉」，不再要 id，也不多记一张', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    const now = new Date(2026, 10, 5)
+    await call({ text: '把借的伞还回去', due: '2026-11-01' })
+
+    const answers = [
+      await call({ text: '把伞还了', status: 'done' }), // 记错了原话
+      await call({ text: '11-01 把借的伞还回去，晚了四天。', status: 'done' }), // 整行抄过来：日子和晚几天不是原话
+      await call({ status: 'done' }), // 什么都没给
+    ]
+    for (const said of answers) {
+      assert.match(said, /^\[没划掉：.+\]$/)
+      assert.doesNotMatch(said, /id/i, '她看不到 id，不能再叫她报')
+      assert.doesNotMatch(said, /\d/, '回执里不带数字（不吃状态）')
+      assert.doesNotMatch(said, /记下了|错误|非法|无效/)
+    }
+    assert.match(answers[1], /一字不差/, '要告诉她差在哪，不然她只能瞎试')
+
+    const back = await readNotes(root)
+    assert.equal(back.length, 1)
+    assert.equal(back[0].status, 'open')
+    assert.match(await wakeOf(root, now), /把借的伞还回去/)
+  })
+})
+
+test('id 这条路还在：回执同样写划掉，没对上 id 但给了原话也算', async () => {
+  await withRoot(async (root) => {
+    const { def, call } = herTool(root)
+    const a = await def.execute({ text: '第一件' }, { session: {} })
+    await def.execute({ text: '第二件' }, { session: {} })
+
+    assert.equal(await call({ id: a.id, status: 'done' }), '[划掉了]')
+    assert.equal(await call({ id: a.id }), '[划掉了]', '只给 id 也算划掉，判据没变')
+    assert.match(await call({ id: 'note-nope', status: 'done' }), /^\[没划掉：桌上没有这一张/)
+
+    // 她可能猜一个 id 再带上原话：id 对不上不该把原话也废掉
+    assert.equal(await call({ id: 'note-nope', text: '第二件', status: 'done' }), '[划掉了]')
+    assert.deepEqual((await readNotes(root)).map((n) => n.status), ['done', 'done'])
+
+    // id 和原话指向两张时听 id；带 id 带 text 不带 status 还是记一张，判据没变
+    const c = await def.execute({ text: '第三件' }, { session: {} })
+    await def.execute({ text: '第四件' }, { session: {} })
+    assert.equal(await call({ id: c.id, text: '第四件', status: 'done' }), '[划掉了]')
+    assert.deepEqual((await readNotes(root)).map((n) => n.status), ['done', 'done', 'done', 'open'])
+    assert.equal(await call({ id: c.id, text: '第五件' }), '[记下了]')
+    assert.equal((await readNotes(root)).length, 5)
+  })
+})
+
+test('说明书和工具描述都告诉她怎么划掉，不再叫她报看不到的 id', async () => {
+  await withRoot(async (root) => {
+    const { def } = herTool(root)
+    for (const said of [NOTE_BRIEF, def.description]) {
+      assert.match(said, /text/)
+      assert.match(said, /status: ?"done"/)
+      assert.match(said, /原样/)
+      assert.doesNotMatch(said, /id/i)
+    }
+    assert.match(def.parameters.properties.text.description, /当时记的那句话/, '参数说明不能再说划掉时不用给')
   })
 })
