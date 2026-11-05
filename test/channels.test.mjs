@@ -276,6 +276,46 @@ test('群里说了话，书房里留一句「刚才有人叫过你」（串门�
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
 
+test('等群里这一轮时侧栏结了账：没认领的聊天行不算她在群里回的', async () => {
+  const root = await tmpRoot()
+  try {
+    await seed(root)
+    const { ctx } = fakeCtx()
+    // 群里最长等 75 秒，这期间侧栏回合结束，turns.js 就写一行 uncommitted（形状照抄 turns.js）。
+    const writes = []
+    const { prompt } = ctx.sessionController
+    ctx.sessionController.prompt = async (req, signal) => {
+      if (String(req?.requestId).startsWith('say-')) {
+        for (const w of writes.splice(0)) await w()
+      }
+      return prompt(req, signal)
+    }
+    const chatLine = (text) => () => appendEvent(
+      { type: 'utterance', text, flags: ['uncommitted'] },
+      { day: 1, stage: 1, source: 'system' },
+      root,
+    )
+    const opts = { root, waitMs: 5_000, channel: 'qq-group:1', scene: 'group', speaker: '路人' }
+
+    writes.push(chatLine('这句只在侧栏说（合成）。'))
+    const r = await sayToHer(ctx, '群里有人问你在不在', opts)
+    assert.deepEqual(r.said, [], '侧栏的话不能算她在群里回的')
+    assert.equal(r.herReply, '')
+    assert.equal(r.note, '她这次没说话。')
+    const group = await recentExchanges(root, 4, 'group')
+    assert.equal(group[group.length - 1].her, '', '也不能进群聊那一桶')
+    const notes = await readFile(join(root, 'session-notes.json'), 'utf8').catch(() => '')
+    assert.doesNotMatch(notes, /你回过了/, '她没回，书房就不该留「你回过了」')
+
+    // 她在这一轮真认领了一句：照常算，只滤掉聊天行
+    writes.push(chatLine('这句也只在侧栏说（合成）。'))
+    writes.push(() => appendEvent({ type: 'utterance', text: '这句是她认领的（合成）。' }, { day: 1, stage: 1, source: 'tool' }, root))
+    const r2 = await sayToHer(ctx, '群里又有人问', opts)
+    assert.deepEqual(r2.said.map((s) => s.text), ['这句是她认领的（合成）。'])
+    assert.equal(r2.herReply, '这句是她认领的（合成）。')
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
 test('私聊仍回书房：写 seen、涨轮数，与以前一字不差', async () => {
   const root = await tmpRoot()
   try {
