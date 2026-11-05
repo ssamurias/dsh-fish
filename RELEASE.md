@@ -12,7 +12,7 @@
 cd "D:/deepseekagent/02-我的项目/大肥鱼/plugin"
 git status --short          # 必须是空的
 git log --oneline origin/main..HEAD   # 看看这次要发几个提交
-npm whoami                  # 必须是 ssamurias；报 E401 就先 npm login
+npm whoami --registry=https://registry.npmjs.org/   # 必须是 ssamurias；报 E401 就先 npm login（见第 4 步）
 gh auth status              # 必须是 ssamurias
 ```
 
@@ -49,7 +49,7 @@ git add -A
 git commit -m "0.9.x：<一句话说清这一版>"
 ```
 
-- 0.9.1 的本地状态：`main` 领先 `origin/main` 9 个提交（含四个社区 PR 的合并提交），一直没 push——这是故意的，等维护者说「发」。
+- 0.9.1 就是这么发出去的：先在本地攒了 10 个提交（含四个社区 PR 的合并提交），维护者说「发」之后才推。之后同样先攒、别边改边推。
 - 没点头就停在这里。下面每一步都会动线上（GitHub / npm），发布出去基本收不回。
 
 ---
@@ -60,29 +60,43 @@ git commit -m "0.9.x：<一句话说清这一版>"
 git push origin main
 ```
 
-- 若 `github.com:443` 不通（本机常见），改用 GitHub Git Data API 推，流程见技能 `mem-skill-github-com-443-github-git-data-api-sha-ebd4879ead19`。
+- 若 `github.com:443` 不通（本机常见），改用 Git Data API 推：`node D:/deepseekagent/04-小工具/fish-push-generic.mjs`（逐提交建树、建 commit，并断言树 SHA 与本地一致），成功后 `node D:/deepseekagent/04-小工具/fish-realign-shas.mjs`（按 `.git/push-map.json` 把本地 SHA 对齐成服务端版本，同时更新 `origin/main`）。原理与三个坑见避坑指南第 27 节。
 - **不要** `git push --force` / `git push --delete`：会被 CC Safety Net 拦下。确需删远端引用，用 `gh api -X DELETE /repos/ssamurias/dsh-fish/git/refs/<ref>`。
 - 推完去 Actions 看一眼三档 Node（20 / 22 / 24）是否全绿：`gh run list --limit 3`。
 
 ---
 
-## 4. 发 npm 包
+## 4. 发 npm 包（需要你手动跑，可整段复制）
+
+> 这一段是给维护者本人执行的：登录和 2FA 都在你的终端里完成，agent 不代跑发布。
+> **本机 npm 默认 registry 是 `https://registry.npmmirror.com`，所以每条命令都必须显式带 `--registry=https://registry.npmjs.org/`**，否则会得到看似「包不存在 / 没权限」的 E404。
 
 ```bash
-npm whoami                 # 再确认一次身份，避免发到别人账号下
-npm publish
+cd "D:/deepseekagent/02-我的项目/大肥鱼/plugin"
+
+# 0) 确认身份：返回 ssamurias 就说明本机已经登录，可以跳过第 1 步
+npm whoami --registry=https://registry.npmjs.org/
+
+# 1) 只有第 0 步报 E401 / 不是 ssamurias 时才需要：浏览器登录
+npm login --registry=https://registry.npmjs.org/
+npm whoami --registry=https://registry.npmjs.org/
+
+# 2) 发布（开了 2FA 就在末尾加 --otp=123456）
+npm publish --registry=https://registry.npmjs.org/
+
+# 3) 核对：应为 0.9.x 和 latest -> 0.9.x
+npm view @ssamurias/dsh-fish version dist-tags --registry=https://registry.npmjs.org/
 ```
 
-- 本包已是公开的 scoped 包，**不需要** `--access public`（首次发布才要）。
-- 2FA 开着时：`npm publish --otp=<6位验证码>`。
+- **不想每条都带参数**：`npm config set registry https://registry.npmjs.org/`，发完再改回 `npm config set registry https://registry.npmmirror.com/`。
+- **scoped 包没有写权限时 npm 故意返回 404（不是 403）**：看到 E404 先查 `npm whoami`，别怀疑包名或网络。
+- 本包已经是公开包，**不需要** `--access public`（只有首次发布才要）。
 - 常见报错：
-  - `E401`：没登录 / token 过期 → `npm login`
-  - `E403`：账号没有 `@ssamurias` scope 权限
-  - `EPUBLISHCONFLICT`：这个版本号已经发过 → `npm view @ssamurias/dsh-fish versions` 看现有版本，必要时升 patch 号重来（已发布的版本不能覆盖）
-- `publish` 前想再核一次打进去的文件，可用 `npm publish --dry-run`。
+  - `E401`：没登录 / token 过期 → `npm logout --registry=...` 再 `npm login --registry=...`
+  - `E403`：账号没有 `@ssamurias` scope 写权限，或开了 2FA 没给 `--otp`
+  - `EPUBLISHCONFLICT`：这个版本号已经发过 → 已发布版本不能覆盖，升 patch 号重来
+- `npm publish --dry-run` 可以先看会打进去哪些文件，不会真的发。
 - 用户端注意：pnpm 的 `minimumReleaseAge`（默认 24 小时）会把「太新」的版本回滚掉；本机 profile 已设 `minimumReleaseAge: 0`（避坑指南第 3 节）。
-
----
 
 ## 5. 打 tag + 建 GitHub Release
 
@@ -97,6 +111,8 @@ gh release create v0.9.x -F RELEASE-NOTES-0.9.x.md --title "0.9.x"
 
 - Release 正文直接用仓库里的 `RELEASE-NOTES-*.md`（`-F` 读文件），不要在网页上手打——两边会不一致。
 - 想先存草稿：`gh release create v0.9.x -F RELEASE-NOTES-0.9.x.md --draft`，检查完再 `gh release edit v0.9.x --draft=false`。
+- `git push origin v0.9.x` 若也卡在 443：用 `gh api -X POST repos/ssamurias/dsh-fish/git/tags` 在服务端建 tag 对象，再 `gh api -X POST repos/ssamurias/dsh-fish/git/refs -f ref=refs/tags/v0.9.x -f sha=<tag对象sha>`。
+- 兜底也可以在网页上建 Release（会自动建 tag），但正文仍以 `RELEASE-NOTES-*.md` 为准，别手打。
 
 ---
 
