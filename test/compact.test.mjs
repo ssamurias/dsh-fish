@@ -170,13 +170,21 @@ test('别的会话在同一条插件里转轮：不认，别把它的 seq 折进
 test('超时：没有 turn/end 就给 ok:false，只记账不折', async () => {
   const ctx = fakeCtx()
   const follow = followWake(ctx, { rpcId: RID, timeoutMs: 20 })
-  ctx.emit(SESSION, ping(5))
-  ctx.emit(SESSION, thinking(6))
-  const out = await follow.done
-  assert.equal(out.ok, false)
-  assert.equal(out.why, 'timeout')
-  assert.equal(out.endSeq, -1)
-  assert.equal(ctx.size, 0)
+  // `followWake` 的计时器是 unref 的（生产环境里不该拖住宿主退出）。
+  // Node 22 的 test runner 在事件循环空掉时会先判「Promise 还挂着」，所以
+  // 这里自己拿一个 ref 的计时器把事件循环撑到超时回调跑完。
+  const keepAlive = setTimeout(() => {}, 500)
+  try {
+    ctx.emit(SESSION, ping(5))
+    ctx.emit(SESSION, thinking(6))
+    const out = await follow.done
+    assert.equal(out.ok, false)
+    assert.equal(out.why, 'timeout')
+    assert.equal(out.endSeq, -1)
+    assert.equal(ctx.size, 0)
+  } finally {
+    clearTimeout(keepAlive)
+  }
 })
 
 /** 够长的一段内容：`MIN_RUN_CHARS` 之下不值得折，测试里得给出真实体量。 */
