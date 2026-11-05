@@ -67,7 +67,7 @@ const tgz = (entries) => zlib.gzipSync(makeTar(entries))
 /** 一个"长得像这个插件"的包。 */
 function goodTarball(version = '0.6.14', extra = {}) {
   return tgz({
-    'package/package.json': JSON.stringify({ name: 'dsh-fish', version }),
+    'package/package.json': JSON.stringify({ name: '@ssamurias/dsh-fish', version }),
     'package/lib/index.js': 'export default {}\n',
     'package/README.md': '# x\n',
     ...extra,
@@ -91,16 +91,13 @@ const tmp = (p) => mkdtemp(join(tmpdir(), `fish-selupdate-${p}-`))
 
 test('下载地址是硬编码的：直连 + 两个镜像，且都指向同一个 tag', () => {
   const list = sourcesFor('0.6.14')
-  assert.equal(list.length, 3)
-  assert.ok(list[0].url.startsWith('https://codeload.github.com/ssamurias/dsh-fish/tar.gz/refs/tags/v0.6.14'))
+  assert.equal(list.length, 2)
+  assert.equal(list[0].url, 'https://registry.npmjs.org/@ssamurias/dsh-fish/-/dsh-fish-0.6.14.tgz')
+  assert.equal(list[1].url, 'https://registry.npmmirror.com/@ssamurias/dsh-fish/-/dsh-fish-0.6.14.tgz')
+  // 包名必须带 scope（裸名 dsh-fish 在 npm 上被别人占了），版本必须进 tarball 名
   for (const s of list) {
-    assert.ok(s.url.includes('/ssamurias/dsh-fish/'), `${s.name} 指错仓库`)
-    assert.ok(s.url.includes('v0.6.14'), `${s.name} 的 tag 不对`)
-  }
-  // 镜像前缀不认 codeload 的地址（实测 403 Invalid input.），必须走 github.com/…/archive
-  for (const s of list.slice(1)) {
-    assert.ok(!s.url.includes('codeload.github.com'), `${s.name} 不该套 codeload 地址`)
-    assert.ok(s.url.includes('github.com/ssamurias/dsh-fish/archive/refs/tags/v0.6.14.tar.gz'), s.url)
+    assert.ok(s.url.includes('@ssamurias/dsh-fish'), `${s.name} 指错包`)
+    assert.ok(s.url.includes('dsh-fish-0.6.14.tgz'), `${s.name} 的版本不对`)
   }
   // 认不出的版本不许编一个地址出来
   assert.deepEqual(sourcesFor('latest'), [])
@@ -108,8 +105,9 @@ test('下载地址是硬编码的：直连 + 两个镜像，且都指向同一�
 })
 
 test('spec 与文件名跟着版本走；多余前缀被规范掉', () => {
-  assert.equal(specFor('0.6.14'), 'github:ssamurias/dsh-fish#v0.6.14')
-  assert.equal(specFor('v0.6.14'), 'github:ssamurias/dsh-fish#v0.6.14')
+  // 从 npm 装：写成版本号而不是 github: 或 file:（file: 会让下一次升级把自己当开发版）
+  assert.equal(specFor('0.6.14'), '@ssamurias/dsh-fish@0.6.14')
+  assert.equal(specFor('v0.6.14'), '@ssamurias/dsh-fish@0.6.14')
   assert.equal(fileNameFor('v0.6.14'), 'dsh-fish-v0.6.14.tgz')
 })
 
@@ -146,7 +144,7 @@ test('应用自带的 node/pnpm：找不到就给空（退回 PATH），不瞎�
 
 test('解得开的包：能读出包名、版本，并且确认入口文件在', () => {
   const info = inspectPackage(goodTarball('0.6.14'), { version: '0.6.14' })
-  assert.equal(info.name, 'dsh-fish')
+  assert.equal(info.name, '@ssamurias/dsh-fish')
   assert.equal(info.version, '0.6.14')
   assert.ok(info.files.includes('lib/index.js'))
 })
@@ -168,16 +166,16 @@ test('包名不对——拒（防止有人在同名仓库里塞别的东西）',
     'package/package.json': JSON.stringify({ name: 'not-fish', version: '0.6.14' }),
     'package/lib/index.js': '',
   })
-  assert.throws(() => inspectPackage(bad, { version: '0.6.14' }), /不是 dsh-fish/)
+  assert.throws(() => inspectPackage(bad, { version: '0.6.14' }), /不是 @ssamurias\/dsh-fish/)
 })
 
 test('没有 lib/index.js——拒（装上去也加载不了）', () => {
-  const bad = tgz({ 'package/package.json': JSON.stringify({ name: 'dsh-fish', version: '0.6.14' }) })
+  const bad = tgz({ 'package/package.json': JSON.stringify({ name: '@ssamurias/dsh-fish', version: '0.6.14' }) })
   assert.throws(() => inspectPackage(bad, { version: '0.6.14' }), /lib\/index\.js/)
 })
 
 test('半截 tar（头说 100 字节、实际只有 3 字节）——拒', () => {
-  const full = makeTar({ 'package/package.json': JSON.stringify({ name: 'dsh-fish', version: '0.6.14' }) })
+  const full = makeTar({ 'package/package.json': JSON.stringify({ name: '@ssamurias/dsh-fish', version: '0.6.14' }) })
   const cut = full.subarray(0, 512 + 3)
   assert.throws(() => inspectPackage(zlib.gzipSync(cut), { version: '0.6.14' }))
 })
@@ -224,8 +222,8 @@ test('不传 sources 时用硬编码地址（这条曾经把 sources 当成本�
     })
     assert.equal(r.ok, true, r.error)
     assert.equal(urls.length, 1)
-    assert.ok(urls[0].startsWith('https://codeload.github.com/ssamurias/dsh-fish/tar.gz/refs/tags/v0.6.14'), urls[0])
-    assert.equal(r.source, 'GitHub 直连')
+    assert.ok(urls[0].startsWith('https://registry.npmjs.org/@ssamurias/dsh-fish/-/dsh-fish-0.6.14.tgz'), urls[0])
+    assert.equal(r.source, 'npm 官方源')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -334,10 +332,11 @@ test('安装脚本：先等宿主退出、备份、装、校验版本、失败�
   assert.ok(script.indexOf('timeout /t 2') < script.indexOf('taskkill'), '先等两秒再杀')
   assert.ok(script.includes('taskkill /F /IM "DeepSeek Harness.exe"'))
   assert.ok(script.indexOf('tasklist') < script.indexOf('pnpm'), '宿主真退出了才动手')
-  assert.ok(script.includes('file:C:/Users/DANG/.dsh-fish/updates/dsh-fish-v0.6.14.tgz'), '装的是下好验过的那个包')
-  assert.ok(!script.includes('github:ssamurias'), '有本地包就不要走 git 协议（国内实测 connection reset）')
+  assert.ok(script.includes('add "@ssamurias/dsh-fish@0.6.14"'), '从 npm 装指定的那个版本')
+  assert.ok(!script.includes('github:ssamurias'), '不走 git 协议（国内实测 connection reset）')
+  assert.ok(!script.includes('file:'), '不用 file: 装临时 tarball（会把依赖写成临时路径）')
   assert.ok(script.includes('--config.minimumReleaseAge=0'), '24 小时年龄闸会拦住刚发的包')
-  assert.ok(script.includes('-e "const p=require(\'./node_modules/dsh-fish/package.json\')'), '装完要核对版本')
+  assert.ok(script.includes('-e "const p=require(\'./node_modules/@ssamurias/dsh-fish/package.json\')'), '装完要核对版本')
   assert.ok(script.includes(':rollback'), '失败要有回滚')
   assert.ok(script.includes('copy /Y "%BK%\\package.json"'), '回滚要还原 manifest')
   assert.ok(script.includes('pnpm') && script.includes('install'))
@@ -350,7 +349,7 @@ test('没有自带 pnpm 时退回 PATH 上的 pnpm，而不是拼一个不存在
   const script = scriptFor({
     version: '0.6.14', profileDir: 'C:\\p', exe: 'C:\\App.exe', logFile: 'C:\\l.log', backupDir: 'C:\\b', hostName: 'App.exe',
   })
-  assert.ok(/\r?\npnpm add "github:/.test(script), '要用 PATH 上的 pnpm')
+  assert.ok(/\r?\npnpm add "@ssamurias\/dsh-fish@/.test(script), '要用 PATH 上的 pnpm')
 })
 
 // ---------------------------------------------------------------- 状态机
@@ -489,11 +488,17 @@ test('非 Windows 不许起安装脚本：脚本是 cmd 批处理，别的系统
   }
 })
 
-test('没有 tarball 时才退回 github: spec（老路径，仍可用但不推荐）', () => {
-  const script = scriptFor({
+test('不管有没有本地 tarball，都从 npm 装（file: 会把依赖写成临时路径，下次升级被当开发版）', () => {
+  const base = {
     version: '0.6.14', profileDir: 'C:\\p', exe: 'C:\\App.exe', logFile: 'C:\\l.log', backupDir: 'C:\\b', hostName: 'App.exe',
-  })
-  assert.ok(script.includes('github:ssamurias/dsh-fish#v0.6.14'))
+  }
+  const plain = scriptFor(base)
+  const withTarball = scriptFor({ ...base, tarball: 'C:/x/dsh-fish-v0.6.14.tgz' })
+  for (const script of [plain, withTarball]) {
+    assert.ok(script.includes('add "@ssamurias/dsh-fish@0.6.14"'), '装的是 npm 上那个版本')
+    assert.ok(!script.includes('github:'), '不再走 git 协议')
+    assert.ok(!script.includes('file:'), '不再用 file: 装临时 tarball')
+  }
 })
 
 test('安装：写好脚本、起在子进程里、状态切到 installing', async () => {
@@ -520,9 +525,16 @@ test('安装：写好脚本、起在子进程里、状态切到 installing', asy
     assert.equal(r.ok, true, r.error)
     assert.equal(up.status().phase, 'installing')
     assert.equal(spawned.length, 1)
-    assert.equal(spawned[0].cmd, 'cmd.exe')
+    // 走 wscript + VBS 隐藏启动：直接 detached 起 cmd.exe 会在 Windows 上另开一个黑窗口
+    assert.equal(spawned[0].cmd, 'wscript.exe')
     assert.equal(spawned[0].opts.detached, true, '宿主被杀不能带走安装脚本')
-    const script = await readFile(spawned[0].args[1], 'utf8')
+    const vbsPath = spawned[0].args[spawned[0].args.length - 1]
+    const vbs = await readFile(vbsPath, 'utf8')
+    assert.ok(vbs.includes(', 0, False'), '窗口样式 0 = 完全不显示')
+    assert.ok(vbs.includes('WScript.Shell'), '用 WScript.Shell 起进程')
+    const hit = vbs.match(/cmd \/c ""(.+?)""/)
+    assert.ok(hit, 'vbs 里要能找到那个 .cmd 的路径')
+    const script = await readFile(hit[1], 'utf8')
     assert.ok(script.includes('v0.6.14'))
     assert.ok(script.includes('taskkill'))
   } finally {
