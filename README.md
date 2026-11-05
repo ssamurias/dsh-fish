@@ -347,7 +347,7 @@ lib/
   toolschema.js 简写参数 DSL → 标准 JSON Schema
   observe.js    宿主侧 JSON API（/dsh-fish/state、/events、/beliefs、/diary、/config、/wake、/browse、/reports、/update）
   client.js     浏览器半边：设置 → 大肥鱼
-test/           1394 个测试，node --test 全绿
+test/           1396 个测试，node --test 全绿
 ```
 
 ## 跑测试
@@ -425,7 +425,7 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 P1（骨架）：事件流、派生、阶段门、生物钟、工具、冷落检测、日记、观测台。
 P2（她真的会刷 B 站并写报告）：`lib/bili.js` 只读客户端 + `lib/browse.js` 选题筛读 + `lib/look.js` 的 `bili_look` 工具 + `lib/report.js` 写稿，已接进生物钟。
 
-**已有 1394 个测试全绿**，真接口跑通过一轮（10.8s，含首页+详情+评论+弹幕）。
+**已有 1396 个测试全绿**，真接口跑通过一轮（10.8s，含首页+详情+评论+弹幕）。
 
 `browse.enabled` 默认 **true**（装好就能用）；不想让她上网就在设置 → 大肥鱼里关掉，关掉后定时器一次都不会调 B 站接口。
 

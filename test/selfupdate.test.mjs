@@ -13,8 +13,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import { execFileSync } from 'node:child_process'
 import zlib from 'node:zlib'
-import { mkdtemp, rm, readFile, stat, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, readdir, stat, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -27,6 +28,7 @@ import {
   inspectPackage,
   downloadTarball,
   scriptFor,
+  normalizeScript,
   runtimeBins,
   profileDirOf,
   createSelfUpdater,
@@ -607,5 +609,54 @@ test('路由：GET 只读状态；下载/安装只认 POST；未知子路径 404
     assert.equal(unknown.status, 404)
   } finally {
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('安装脚本：装完先把旧包名留下的依赖键和 bundles 清掉，再重开', () => {
+  const script = scriptFor({
+    version: '0.6.14',
+    profileDir: 'C:\\p',
+    exe: 'C:\\App.exe',
+    logFile: 'C:\\l.log',
+    backupDir: 'C:\\b',
+    hostName: 'App.exe',
+    normalizePath: 'C:\\u\\normalize-package.cjs',
+  })
+  assert.ok(script.includes('normalize-package.cjs'), '要真的调用收拾现场那步')
+  assert.ok(
+    script.indexOf('add "@ssamurias/dsh-fish') < script.indexOf('normalize-package.cjs'),
+    '先装新包，再收拾旧的',
+  )
+  assert.ok(
+    script.indexOf('normalize-package.cjs') < script.indexOf('start ""'),
+    '收拾完才重开应用',
+  )
+})
+
+test('收拾现场：旧依赖键、旧 bundle 条目清掉，旧目录改名不删，改前备份', async () => {
+  const dir = await tmp('normalize')
+  try {
+    await mkdir(join(dir, 'node_modules', 'dsh-fish'), { recursive: true })
+    await writeFile(
+      join(dir, 'package.json'),
+      JSON.stringify({
+        dependencies: { 'dsh-fish': 'file:updates/x.tgz', other: '1' },
+        dsh: { profile: { bundles: ['dsh-fish', 'dsh-voice'] } },
+      }, null, 2),
+    )
+    const f = join(dir, 'normalize.cjs')
+    await writeFile(f, normalizeScript(), 'utf8')
+    execFileSync(process.execPath, [f, dir, '@ssamurias/dsh-fish'], { encoding: 'utf8' })
+
+    const j = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'))
+    assert.deepEqual(Object.keys(j.dependencies), ['other'], '旧名那条依赖要删掉')
+    assert.deepEqual(j.dsh.profile.bundles, ['dsh-voice', '@ssamurias/dsh-fish'], 'bundles 只留全名那条')
+    const nm = await readdir(join(dir, 'node_modules'))
+    assert.equal(nm.length, 1)
+    assert.match(nm[0], /^dsh-fish\.disabled-/, '旧目录改名收起来，不直接删')
+    const files = await readdir(dir)
+    assert.ok(files.some((n) => n.includes('bak-normalize')), '改 manifest 前要备份')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
   }
 })
