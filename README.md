@@ -415,6 +415,24 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 
 > 路径里带中文时，用 ASCII 目录联接（junction）指过去更稳：先 `fs.symlinkSync(真目录, ASCII 别名, 'junction')`，再 `link:<ASCII 别名>`。用 `mklink /J` 接中文目标路径常把目录名写成乱码，随后 `MODULE_NOT_FOUND`。
 
+## 从旧版升到 0.8.10（改名那一版）
+
+0.8.9 把包名从 `dsh-fish` 改成了 `@ssamurias/dsh-fish`。老安装分三种，走的路不一样：
+
+| 你当初怎么装的 | 怎么升 | 会发生什么 |
+| --- | --- | --- |
+| npm / GitHub | 设置 → 大肥鱼 → 插件 → 检查更新 → 下载 → 重启安装 | 脚本装完新包会先收拾现场：删旧的裸名依赖键、删旧 `bundles` 条目、把旧的 `node_modules/dsh-fish` 改名成 `.disabled-<时间戳>` 收起来（不删，能回退），改 `package.json` 前先备份。全程不弹窗口，日志在 `~/.dsh-fish/updates/last.log` |
+| `link:` 源码目录 | 先跑 `node scripts/fix-legacy-link.mjs --write`，再启动 | 不跑就起不来：条目名是全名，你本地只有裸名链接，import 失败会让 DSH 直接崩 |
+| 还停在 0.8.8 或更早（GitHub 装） | 手动一条命令：`plugin --profile <profile> add "@ssamurias/dsh-fish@0.8.10"` | 那一版的升级脚本还是老代码（用 `file:` 装临时 tgz），大概率装不上新名字，卡在旧版本 |
+
+升级完自检三行，缺一行就会「重启后崩 / 设置页没有鱼」：
+
+```
+package.json 的 dependencies           里有 "@ssamurias/dsh-fish"
+package.json 的 dsh.profile.bundles    里有 "@ssamurias/dsh-fish"
+node_modules 里                       没有裸名 dsh-fish 目录
+```
+
 ## 卸载 / 停用
 
 - **卸载**：设置 → 插件 → 卸载（或 `dsh plugin --profile <profile> remove @ssamurias/dsh-fish`），然后重启。`~/.dsh-fish/` 不会被动，她的记忆留在那儿。

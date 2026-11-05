@@ -164,3 +164,15 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] `node --test` 1396 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
+- [ ] 没动包名；真要动，先看下面「包名与装法」那节
+
+---
+
+## 包名与装法（0.8.10 起，改名踩过一次，别再踩）
+
+包名是 **`@ssamurias/dsh-fish`**（带 scope 的全名）。装法看 `README.md` 的「安装」，这里只列动代码时容易破坏的三条：
+
+1. **`lib/client.js` 里 `__ModuleLoader__.load({ id })` 必须等于 `package.json` 的 `name`**，不是短名。client-modules 按 loader 条目名（完整包标识）解析浏览器包，名字对不上时客户端那半**静默不加载**——宿主照常跑、设置页空着，看起来像没装上。`test/client.test.mjs` 直接从 `package.json` 读 `name` 比对，别把那条断言改成写死字符串。
+2. **`cordis.patch.yml` 的 `id` 保持短名 `dsh-fish`、`name` 写全名**（与 `@goodandready/dsh-voice` 一致）。`id` 变了会连带 client bundle 的 URL 对不上；`name` 写短名则 import 失败、直接崩在 web boot。
+3. **别删升级脚本里的 normalize 那一步**（`lib/selfupdate.js` 的 `normalizeScript()`，安装脚本第 5/6 步）。0.8.9 之前装的 profile 里旧键还在，不清掉就会同时有两条鱼、两条 insert 撞一个 id，启动报 `duplicate factory registration`。
+
