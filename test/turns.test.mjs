@@ -157,6 +157,10 @@ test('来源判据：真人 / 插件 / 上下文 / 外渠道 分得清', () => {
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'uuid-1', clientTimeZone: 'Asia/Shanghai' } }), 'human')
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'wake-abc' } }), 'plugin')
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'say-abc' } }), 'plugin')
+  // 2026-11-06：换会话前问她留不留话那条也要认出来。原来 PLUGIN_RPC 漏了
+  // carry，它掉进 unknown 分支——不进轮数（对），但每换一次会话就多一行
+  // 「这条消息认不出来源」的日志。
+  assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'carry-ask-1700000000000' } }), 'plugin')
   assert.equal(classifyMessage({ source: { kind: 'runtime-context' } }), 'context')
   assert.equal(classifyMessage({ source: { kind: 'skill-catalog' } }), 'context')
   assert.equal(classifyMessage({ source: { kind: 'plugin:hindsight' } }), 'context')

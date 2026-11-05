@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { personaLine, assemble, foldOlderBeliefs, HARD_BANS, sleepPrompt } from '../lib/persona.js'
 import { renderSelfDoc } from '../lib/selfdoc.js'
 import { addExchange, recentExchanges, renderCarry, TALK_KEEP } from '../lib/talkmem.js'
-import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS } from '../lib/home.js'
+import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS, ROTATE_RETRY_MS } from '../lib/home.js'
 import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET } from '../lib/recall.js'
 import { normalizeConfig, DEFAULTS } from '../lib/settings.js'
 
@@ -429,7 +429,87 @@ test('没有 prompt 服务（或它抛错）时，轮换照样成功、lastWords
   }
 })
 
-// ---------------------------------------------------------------- 配置
+// ---------------------------------------------------------------- 轮换失败
+
+// 病历（2026-11-06，用户反馈的截图）：换会话失败时，那条「要不要给下一个房间
+// 留一句话」已经先发出去、落在他正在用的会话窗口里了，而 turns 不归零，
+// 下一轮结账又到点、又问一遍——他那边看到的就是「每回一句都弹这句」。
+test('换会话失败时不许把「留一句话」问出去', async () => {
+  await withRoot(async (root) => {
+    const { writeAtomic, paths } = await import('../lib/store.js')
+    await writeAtomic(join(paths(root).root, 'home.json'), JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 40 }))
+    const prompts = []
+    const ctx = {
+      sessionController: {
+        async create() { throw new Error('boom 建不出来') },
+        async rename() { return {} },
+        async prompt(req) { prompts.push(req); return {} },
+      },
+      on() { return () => {} },
+      get() { return null },
+    }
+    const r = await rotateTalkSession(ctx, { root })
+    assert.equal(r.ok, false)
+    assert.match(r.why, /建会话失败/)
+    assert.deepEqual(prompts, [], '换不成就不该往他的对话里发东西')
+  })
+})
+
+test('换会话失败之后冷却一会儿，别每轮都重试', async () => {
+  await withRoot(async (root) => {
+    const { writeAtomic, paths } = await import('../lib/store.js')
+    const homeFile = join(paths(root).root, 'home.json')
+    await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 40 }))
+    let created = 0
+    const ctx = {
+      sessionController: {
+        async create() { created += 1; throw new Error('boom 建不出来') },
+        async rename() { return {} },
+        async prompt() { return {} },
+      },
+      on() { return () => {} },
+      get() { return null },
+    }
+    const first = await rotateTalkSession(ctx, { root })
+    assert.equal(first.ok, false)
+    assert.equal(created, 1)
+    const saved = JSON.parse(await readFile(homeFile, 'utf8'))
+    assert.ok(saved.rotateFailAt, '失败要记一笔时间')
+    assert.match(String(saved.rotateFailWhy), /建会话失败/)
+
+    // 冷却期内再来（这中间可能又说了好几句话）：直接跳过，不再骚扰宿主
+    const second = await rotateTalkSession(ctx, { root })
+    assert.equal(second.ok, false)
+    assert.equal(second.cooled, true)
+    assert.equal(created, 1, '冷却期内不该再建一次')
+  })
+})
+
+test('冷却期过了就能再试，换成之后把失败记录清掉', async () => {
+  await withRoot(async (root) => {
+    const { writeAtomic, paths } = await import('../lib/store.js')
+    const homeFile = join(paths(root).root, 'home.json')
+    const old = new Date(Date.now() - ROTATE_RETRY_MS - 1000).toISOString()
+    await writeAtomic(homeFile, JSON.stringify({
+      wsId: 'ws-1', sessionId: 'sess-old', turns: 40, rotateFailAt: old, rotateFailWhy: '上次炸了',
+    }))
+    const ctx = {
+      sessionController: {
+        async create() { return { sessionId: 'sess-new' } },
+        async rename() { return {} },
+        async prompt() { return {} },
+      },
+      on() { return () => {} },
+      get() { return null },
+    }
+    const r = await rotateTalkSession(ctx, { root })
+    assert.equal(r.ok, true)
+    assert.equal(r.sessionId, 'sess-new')
+    const saved = JSON.parse(await readFile(homeFile, 'utf8'))
+    assert.equal(saved.rotateFailAt, undefined)
+    assert.equal(saved.rotateFailWhy, undefined)
+  })
+})
 
 test('新配置项有默认值且能被夹住', () => {
   assert.equal(DEFAULTS.chat.rotateAfter, 40)
