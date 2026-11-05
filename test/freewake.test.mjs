@@ -101,3 +101,14 @@ test('叫醒拼装处真的按这个判据走：世界在门内，工具常量�
   assert.ok(desk > 0, '桌子还在')
   assert.ok(tool > desk, '工具句应该在桌子之后、仍然每次都说')
 })
+
+test('设置页关掉「自己找点事做」：空窗再久也不空醒，桌子照摆', () => {
+  const off = { memory: { selfWake: false } }
+  assert.equal(freeWakeFor({ events: [old(QUIET_DAYS + 1)], dk: '2026-11-05', now: NOW, config: off }), null)
+  // 摆料优先，不受这个开关影响：桌上真有东西时这一轮照开。
+  const nl = String.fromCharCode(10)
+  const table = freeWakeFor({ tableText: '这次隔了 9 个小时。' + nl + '- 「一句旧的」', dk: '2026-11-05', now: NOW, config: off })
+  assert.equal(table.kind, 'table')
+  // 没写这个键就是开着（老配置不因为升级变安静）。
+  assert.equal(freeWakeFor({ events: [old(QUIET_DAYS + 1)], dk: '2026-11-05', now: NOW, config: {} }).kind, 'think')
+})
