@@ -41,6 +41,19 @@ test('fileDepDir：三种 file: 写法都认，link: 不认', () => {
   assert.ok(fileDepDir(profile, dev).endsWith('src'))
 
   assert.equal(fileDepDir(profile, { dependencies: { 'dsh-fish': 'link:D:/x' } }), '', 'link: 不是副本，不用提醒')
+  // 2026-11-05 改名后的老 profile：键可能还是裸名 dsh-fish，也得认出来
+  assert.equal(
+    fileDepDir(profile, { dependencies: { 'dsh-fish': 'file:D:/old-src' } }),
+    fileDepDir(profile, { dependencies: { '@ssamurias/dsh-fish': 'file:D:/old-src' } }),
+    '裸名键与 scoped 键要给出同一个目录',
+  )
+  // 两个键同时存在时，认真正是 file: 的那条，不被 link: 挡掉
+  assert.equal(
+    fileDepDir(profile, {
+      dependencies: { '@ssamurias/dsh-fish': 'link:D:/a', 'dsh-fish': 'file:D:/b' },
+    }),
+    fileDepDir(profile, { dependencies: { '@ssamurias/dsh-fish': 'file:D:/b' } }),
+  )
   assert.equal(fileDepDir(profile, {}), '')
 })
 

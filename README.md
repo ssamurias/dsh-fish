@@ -398,11 +398,20 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 
 **查到新版可以直接在这儿升级**（0.6.14 起）：点「下载 vX」→ 下载并校验 → 点「现在重启并安装」→ 应用自己关掉、换包、重开。中间有两次确认，没点确认什么都不会发生：第一次只下载，不碰现有安装；第二次才关应用。
 
-- 下载走 GitHub 的 tag 包（`codeload` 直连；`ghproxy.net` / `ghfast.top` 两个镜像走 `github.com/…/archive/refs/tags/v<ver>.tar.gz`——镜像不认 codeload 地址，会回 403。单源 25 秒、整批 60 秒，断了换下一个）。下载完**先解开验包**——包名、版本、`lib/index.js` 都在才算成功；镜像回个 HTML 错误页、或缓存滞后给了旧版本，都会被拒，半截文件不落盘。
-- 失败会写清哪条源、什么原因，卡片里留「重试下载」，不用刷新页面。
-- 安装交给一个独立脚本做（数据目录 `updates/install-v<ver>.cmd`）：等应用退出 → 备份 profile 的 `package.json` / `pnpm-lock.yaml` / 插件目录 → 用应用自带的 node/pnpm 装**刚才下载并验过的那只本地包**（`add "file:<数据目录>/updates/dsh-fish-v<ver>.tgz"`）→ 核对装上的版本 → 失败就还原备份 → 重开应用。日志在 `updates/last.log`，界面上能看到最后几行。不直接写 `github:` spec，是因为 pnpm 得跑 `git ls-remote` 打 `github.com:443`，国内实测 `Connection was reset`；本地包零网络。那个 `.tgz` 会留在 `updates/` 里，之后 `pnpm install` 还要用它。
+- **0.8.10 起走 npm 装**（`add "@ssamurias/dsh-fish@x.y.z"`），不再用 `file:<临时 tgz>`——那条路会把依赖记成一个临时路径，下次升级时连自己都认不出来，被当成「开发版」拒掉。下载那一步保留，只用来确认这个版本真的在、内容没被换掉（先解开验包名、版本、`lib/index.js`，镜像回 HTML 错误页或给了旧版本都会被拒）。
+- **不再弹黑窗口**。以前用 detached 起 `cmd.exe`，Windows 会给它另开一个控制台，用户看到一块黑的、关不掉。现在同一份批处理由 VBS 启动器经 `wscript //B` 藏起来跑：窗口不显示，脚本照常等宿主退出、装、校验、失败回滚、再把它拉起来。日志仍在 `updates/last.log`，界面上能看到最后几行。
+- 版本号走三条源并发取（npm 官方源、npmmirror 镜像，加上 GitHub 那几条），国内通哪条算哪条。失败会写清哪条源、什么原因，卡片里留「重试下载」，不用刷新页面。
 - **开发版不升级**：依赖写的是 `link:` / `file:`（装到源码目录那种）时按钮不会出现，服务端也会拒——那会把源码目录换成下载包。非桌面版（拿 `node` 跑起来的）同样拒绝安装：换上去却没有能重开的 exe，等于把人关在门外。
 - 同一张卡里还有个 GitHub 入口（「或去 GitHub 手动下载」），代码、更新记录、怎么装都在那边。
+
+> **0.8.10 之前用 `link:` 装的人，先跑一次迁移。** 包名从 `dsh-fish` 改成了 `@ssamurias/dsh-fish`，插件自带的 `cordis.patch.yml` 条目名也跟着变成完整包名——而你 profile 的 `node_modules` 里只有裸名 `dsh-fish` 那条链接，条目 import 会失败，DSH 直接起不来。先关应用，然后：
+>
+> ```
+> node scripts/fix-legacy-link.mjs          # 先看它要改什么
+> node scripts/fix-legacy-link.mjs --write  # 真改（会备份 package.json）
+> ```
+>
+> 它会把 `node_modules/@ssamurias/dsh-fish` 建好、把依赖键改成新名、把老链接改名停用。从 npm / GitHub 装的人不受影响，不用跑。
 
 > 路径里带中文时，用 ASCII 目录联接（junction）指过去更稳：先 `fs.symlinkSync(真目录, ASCII 别名, 'junction')`，再 `link:<ASCII 别名>`。用 `mklink /J` 接中文目标路径常把目录名写成乱码，随后 `MODULE_NOT_FOUND`。
 

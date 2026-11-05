@@ -84,7 +84,9 @@ async function loadClient({ react }) {
 
   assert.equal(loaded.length, 1, '必须调用一次 window.__ModuleLoader__.load')
   const spec = loaded[0]
-  assert.equal(spec.id, 'dsh-fish', 'loader id 必须等于包名，否则客户端模块挂不上')
+  // 直接跟 package.json 比：今后再改名，这条会当场红，而不是等用户发现设置页空了
+  const pkgName = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).name
+  assert.equal(spec.id, pkgName, 'loader id 必须等于包名，否则客户端模块挂不上')
   const exports = spec.factory((id) => {
     if (id === 'react') return react
     throw new Error(`unexpected require: ${id}`)

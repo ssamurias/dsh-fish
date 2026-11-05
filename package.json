@@ -17,7 +17,8 @@
     "cordis.patch.yml",
     "README.md",
     "AGENTS.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "scripts"
   ],
   "scripts": {
     "test": "node --test"
