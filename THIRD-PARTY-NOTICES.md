@@ -14,6 +14,9 @@
 原理页引用了 Kolb / Piaget / Bowlby / Erikson / Festinger / Bartlett / Dewey / Schön 的理论，
 属思想引用，页底标注了作者与年份；不含他人代码或原文。
 
+- 主观能动性的攒劲机制灵感来自交流群 2 群的群友「无」；落进本插件时全部重新实现，没有代码或文本的直接搬运。
+- 兴趣与好奇的判据为自研实现（`lib/interest.js`、`lib/curiosity.js`），未移植任何第三方插件代码；概念上参考了 Loewenstein 的信息缺口理论（1994）、Generative Agents 的记忆时间衰减排序（2023）与 Oudeyer 关于内在动机中「新奇会失效」的论述（2007）。
+
 ## 美术资源
 
 - `media/fish.jpg`：作者提供的大肥鱼原图经 AI 生成，随本仓库以同一许可（MIT）授权。

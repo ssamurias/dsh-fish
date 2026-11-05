@@ -19,3 +19,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+## 第三方来源与致谢
+
+- 主观能动性的攒劲机制灵感来自交流群 2 群的群友「无」；落进本插件时全部重新实现，没有代码或文本的直接搬运。
+- 兴趣与好奇的判据为自研实现（`lib/interest.js`、`lib/curiosity.js`），未移植任何第三方插件代码；概念上参考了 Loewenstein 的信息缺口理论（1994）、Generative Agents 的记忆时间衰减排序（2023）与 Oudeyer 关于内在动机中「新奇会失效」的论述（2007）。
