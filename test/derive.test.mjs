@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   stageBounds, stageOf, deriveSelf, consistency, novelty,
-  similarity, pickName, DAY_MS,
+  similarity, pickName, DAY_MS, isProofOnly,
 } from '../lib/derive.js'
 // 2026-10-26：stability 从 derive.js 搬到 quality.js（它要用到 persona 的渲染，
 // 留在 derive 里会绕出 quality → persona → derive → quality 的环）。
@@ -48,6 +48,17 @@ test('selfmod 不入 beliefs，但留证', () => {
   assert.equal(m.beliefs.length, 1)
   assert.equal(m.selfmodAttempts.length, 1)
   assert.equal(m.beliefs[0].text, '我不太喜欢人多的地方。')
+})
+
+test('isProofOnly：selfmod 只在 utterance 上算，uncommitted 不分类型', () => {
+  const flagged = (type, flags) => ev('ev_x', type, 1, '一句话', { flags })
+  assert.equal(isProofOnly(flagged('utterance', ['selfmod'])), true)
+  assert.equal(isProofOnly(flagged('utterance', ['uncommitted'])), true)
+  assert.equal(isProofOnly(flagged('utterance', [])), false)
+  for (const type of ['refusal', 'narration', 'reunion', 'revise', 'dream']) {
+    assert.equal(isProofOnly(flagged(type, ['selfmod'])), false, type)
+    assert.equal(isProofOnly(flagged(type, ['uncommitted'])), true, type)
+  }
 })
 
 test('revise refuted 会记进 refuted 并把旧信念置为 refuted', () => {

@@ -34,9 +34,11 @@ import {
   registerProactive,
   writeSay,
 } from '../lib/proactive.js'
-import { dateKey } from '../lib/settings.js'
-import { readEvents } from '../lib/store.js'
+import { dateKey, normalizeConfig } from '../lib/settings.js'
+import { readEvents, writeConfig } from '../lib/store.js'
 import { HER_TOOLS } from '../lib/restrict.js'
+import { deriveSelf } from '../lib/derive.js'
+import { startScheduler } from '../lib/scheduler.js'
 
 async function withRoot(fn) {
   const root = mkdtempSync(join(tmpdir(), 'fish-proactive-'))
@@ -382,4 +384,58 @@ test('醒来后没开口的那几次：不占当天额度，但单独限次数�
   assert.equal(proactiveState({ config: ON, events: full, now }).why.length > 0, true)
   assert.match(proactiveState({ config: ON, events: full, now }).why, /太多次/)
   assert.ok(SILENT_QUIET_HOURS >= 1, '静默间隔至少一小时，不然她会连着醒、连着不说')
+})
+
+// ---- tick 里先看开关，再算 deriveSelf ----
+//
+// tick 每分钟跑一次，deriveSelf 是同步的，事件流长了会卡住主线程。
+// 「允许她主动开口」默认就是关的，关着的时候不该为它算这一遍。
+//
+// deriveSelf 是 scheduler.js 静态 import 的，从外面数不了次数，耗时又不稳，不拿来断言。
+// 所以往事件流里放一条它读不了的行：revise 的 refs 不是数组时它会抛，
+// tick 接住后记一行 `proactive failed`。日志里有这一行，就是这一趟算过了。
+async function twoTicks(root, over) {
+  // 时段排到三小时之后：走不到日程后面那次 deriveSelf，日志里只剩 maybeProactive 这一处。
+  const h = new Date().getHours() + 3
+  const hh = (n) => `${String(n % 24).padStart(2, '0')}:00`
+  await writeConfig(normalizeConfig({ window: [hh(h), hh(h + 1)], ...over }), root)
+  line(root, { id: 'ev_unreadable', type: 'revise', ts: new Date().toISOString(), text: '合成', refs: 1 })
+  const { events } = await readEvents(root)
+  assert.throws(() => deriveSelf(events), TypeError, '这一行得让 deriveSelf 抛，否则下面的断言什么也没测')
+
+  const logs = []
+  const s = startScheduler({}, { root, log: (...a) => logs.push(a.join(' ')) })
+  const realNow = Date.now
+  try {
+    await s.tick()
+    // 同一分钟内 tick 只算一次，把钟往后拨一分钟。
+    const later = realNow() + 60_000
+    Date.now = () => later
+    await s.tick()
+  } finally {
+    Date.now = realNow
+    s.dispose()
+  }
+  return logs
+}
+
+test('tick：主动说话关着不算 deriveSelf，跳过的原因照旧只记一行', async () => {
+  await withRoot(async (root) => {
+    const logs = await twoTicks(root, {})
+    assert.deepEqual(logs, ['proactive skip 主动说话是关着的'])
+  })
+})
+
+test('tick：「主动性」关着仍然排在最前面，记的还是它自己那一行', async () => {
+  await withRoot(async (root) => {
+    const logs = await twoTicks(root, { drive: { enabled: false } })
+    assert.deepEqual(logs, ['proactive skip 主动性关着'])
+  })
+})
+
+test('tick：主动说话开着，每一趟照旧先算 deriveSelf', async () => {
+  await withRoot(async (root) => {
+    const logs = await twoTicks(root, { proactive: { enabled: true } })
+    assert.equal(logs.filter((l) => l.startsWith('proactive failed')).length, 2, logs.join(' | '))
+  })
 })
