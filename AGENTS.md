@@ -144,7 +144,24 @@ GET /dsh-fish/whoami
 3. **外来场次必须带说话人前缀**。`lib/say.js` 对 `group` 与 `guest` 都用 `speaker` 拼 `某某在群里说：…` / `某某说：…`。不拼的话，群里三个人的话在她看来跟一个人连说三句一模一样，她会把三个人的观点拼成一个"他"。外来文本统一过 `lib/guard.js` 的 `sanitizeForeign`。
 4. **桥不要用宿主的 `source.form`**。`snapshot`、`notice`、`catalog`、`instructions`、`recall` 是宿主前端的保留词表，`classifyMessage` 见到就当上下文，不算人（`MACHINE_FORMS`）。转述人说的话，要么不带 `form`，要么用 `relay`。
 
-### 7.3 另一条老路：工具白名单（仍然有效）
+### 7.3 对话靠工具发出去的部署
+
+先问一句：**她写的正文会被插件自动发出去吗？** 会，就什么都不用填，只认正文的默认行为是对的。不会，也就是正文只留在会话里、要调工具才发得出去，才填下面这几项。都不认具体插件，工具名由配置给。
+
+- `proactive.sendTools`：发送工具的名字，也要放进 `tools.allow`（工具面收窄开着时，没放行她调不到）。填了之后，只有这些工具调成功才算她开了口（记 `proactive-turn:`，占额度，不折叠），代码模式（run_code）里调的也算；只写正文算没开口。处境和身份段会照实写用这个工具、正文发不到聊天里。工具自己返回「没发出去」但没有报错的，这里认不出来。
+- `proactive.idleCountsSeen`：`true` 时 `seen:` 也算打断安静、也算「他接了」。她靠工具回话、正文不进事件流时要开。它要有 `seen:` 可认：走 `/say`，或者 `source.kind` 不是 `user`，或者带 `clientTimeZone`；`{kind:'user'}` 不带时区的桥要自己写。代价是他在这台机器上和别的 agent 说话也算，所以默认关。
+
+还有一项和工具无关：`proactive.foldSilent` 是 `false` 时，没开口的一轮只记账、不折。折叠会改历史，上下文很大、靠缓存省钱时可以关。
+
+插件知道她在忙时（比如在打一局游戏），挂一个事件就行，不用知道 dsh-fish 的包名和路径：
+
+```js
+ctx.on('dsh-fish/busy', (sessionId) => stillPlaying(sessionId) ? true : undefined)
+```
+
+定时叫醒和主动回合投递前都会问一声。监听要同步返回，只有 `true` 算忙；不忙返回 `undefined`、`null` 或 `false`，返回别的值会挡住后面的插件，返回 Promise 按不忙算。忙的标记卡住时她就一直不被叫醒，所以结束时记得放开。不挂也没事，调度器自己知道家里那条会话正在跑的那一轮。
+
+### 7.4 另一条老路：工具白名单（仍然有效）
 
 桥如果是以插件形式装进来、暴露工具给她的，仍然可以在 `config.tools.allow`（设置页「插件能力白名单」）里放行工具名。qq-bridge 默认要放行的是：
 
