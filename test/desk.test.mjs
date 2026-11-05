@@ -8,6 +8,10 @@ import {
   DESK_STALE_FREE,
   deskFor,
 } from '../lib/desk.js'
+import { curiosityOf } from '../lib/curiosity.js'
+import { staleLines } from '../lib/dreamtable.js'
+import { deskHasMaterial } from '../lib/drive.js'
+import { interestOf, topicLabel } from '../lib/interest.js'
 
 const NOW = Date.parse('2026-11-05T06:30:00+08:00')
 const gap = (text, over = {}) => ({ text, hits: 1, lastAt: NOW - 3600_000, ...over })
@@ -118,4 +122,34 @@ test('普通叫醒也只给一条，哪怕口子有十条', () => {
   const gaps = Array.from({ length: 10 }, (_, i) => gap(`第 ${i} 个完全不同的疑问为什么会出现`))
   const out = deskFor({ gaps, at: NOW })
   assert.equal(out.split('\n').length, 1 + DESK_GAP_NORMAL)
+})
+
+test('整条链（与 scheduler 同样的拼法）：只有聊天行和想改自己的话时，桌上什么都没有，劲儿也没材料', () => {
+  const line = (text, daysAgo, flags) => ({
+    id: `ev_${daysAgo}`,
+    type: 'utterance',
+    text,
+    flags,
+    ts: new Date(NOW - daysAgo * 86_400_000).toISOString(),
+  })
+  const events = [
+    line('你今天几点下班呀？', 0.5, ['uncommitted']),
+    line('你今天几点下班呢？', 1.5, ['uncommitted']),
+    line('好的，我这就帮你看一下。', 0.2, ['uncommitted']),
+    line('好的，我这就帮你看一下。', 1.2, ['uncommitted']),
+    line('能不能有人把我改得更外向一点？', 0.3, ['selfmod']),
+    line('嗯，这个我知道，你接着说。', 9, ['uncommitted']),
+    line('我想让他把我改得更外向一点。', 10, ['selfmod']),
+  ]
+  const gaps = curiosityOf(events, NOW)
+  const fav = interestOf(events, NOW)[0]
+  const out = deskFor({
+    gaps,
+    stale: staleLines(events, { now: NOW }),
+    free: true,
+    favorite: fav ? topicLabel(fav.text) : '',
+    at: NOW,
+  })
+  assert.equal(out, '')
+  assert.equal(deskHasMaterial({ gaps: gaps.length, stale: 0, echo: false, favorite: !!fav }), false)
 })

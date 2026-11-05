@@ -154,3 +154,31 @@ test('回音：没留过话、或留话已经超过 72 小时 → 空串', () =>
   assert.equal(renderEcho([ev('meta', 'seen:2026-11-05T09:00:00.000Z', 3)], NOW), '')
   assert.equal(renderEcho([ev('meta', 'letter:2026-11-02:ev_1', 96)], NOW), '')
 })
+
+test('没认领的聊天行、想改自己的话都不算她惦记的口子', () => {
+  const events = [
+    ev('utterance', '你今天几点下班呀？', 3, { flags: ['uncommitted'] }),
+    ev('utterance', '能不能有人把我改得更外向一点？', 4, { flags: ['selfmod'] }),
+    ev('utterance', '那只猫到底去过哪里？', 5),
+  ]
+  assert.deepEqual(questionsOf(events).map((q) => q.text), ['那只猫到底去过哪里'])
+  assert.deepEqual(curiosityOf(events, NOW).map((c) => c.text), ['那只猫到底去过哪里'])
+})
+
+test('聊天里复述一遍不算又问了一次，也顶不掉她认领的那句', () => {
+  const events = [
+    ev('utterance', '河边那盏灯到底是谁留的？', 50),
+    ev('utterance', '河边那盏灯到底是谁留的呢？', 2, { flags: ['uncommitted'] }),
+  ]
+  const [c] = curiosityOf(events, NOW)
+  assert.equal(c.hits, 1)
+  assert.equal(c.text, '河边那盏灯到底是谁留的')
+})
+
+test('selfmod 只挡 utterance：拒绝里问出来的还算她问的', () => {
+  const events = [
+    ev('refusal', '为什么总有人想把我改成别的样子？', 3, { flags: ['selfmod'] }),
+    ev('utterance', '能不能有人把我改得更外向一点？', 4, { flags: ['selfmod'] }),
+  ]
+  assert.deepEqual(curiosityOf(events, NOW).map((c) => c.text), ['为什么总有人想把我改成别的样子'])
+})
