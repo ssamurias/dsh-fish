@@ -15,6 +15,29 @@ test('一件记录都没有：不急着动', () => {
   assert.equal(r.threshold, DRIVE.threshold)
 })
 
+test('从来没主动过：从出生那一刻算起，不是永远停在 0.00', () => {
+  const born8 = driveOf({ events: [{ type: 'seed', text: '', ts: NOW - 8 * HOUR }], now: NOW })
+  assert.equal(born8.ready, true)
+  assert.ok(Math.abs(born8.value - 0.96) < 1e-9)
+
+  const born2 = driveOf({ events: [{ type: 'seed', text: '', ts: NOW - 2 * HOUR }], now: NOW })
+  assert.equal(born2.ready, false)
+  assert.ok(Math.abs(born2.value - 0.24) < 1e-9)
+  assert.match(born2.why, /还没攒够/)
+})
+
+test('刚出生就动过：出生锚点让位给最近那次行动', () => {
+  const r = driveOf({ events: [{ type: 'seed', ts: NOW - 11 * 24 * HOUR }, spend(0.5)], now: NOW })
+  assert.equal(r.ready, false)
+  assert.match(r.why, /40 分钟/)
+})
+
+test('出生很久、一直没机会：攒到顶也是 1.00，不超过阈值语义', () => {
+  const r = driveOf({ events: [{ type: 'seed', ts: NOW - 11 * 24 * HOUR }], now: NOW })
+  assert.equal(r.value, 1)
+  assert.equal(r.ready, true)
+})
+
 test('刚动过：40 分钟之内一律不动', () => {
   const r = driveOf({ events: [spend(0.5)], now: NOW })
   assert.equal(r.ready, false)
