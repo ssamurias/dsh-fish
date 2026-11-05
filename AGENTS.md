@@ -69,7 +69,7 @@
 node --test
 ```
 
-当前基线 **1409 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **1420 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
@@ -99,7 +99,7 @@ CI 也跑同一套（`.github/workflows/test.yml`，Node 20 / 22 / 24 各跑一�
 
 ```
 POST /dsh-fish/say
-{ "text": "…", "channel": "qq-group:987654", "scene": "group", "speaker": "张三" }
+{ "text": "…", "channel": "qq-group:987654", "scene": "group", "speaker": "张三", "title": "摸鱼群" }
 ```
 
 | 字段 | 必填 | 说明 |
@@ -108,13 +108,23 @@ POST /dsh-fish/say
 | `image` | 否 | base64 图片 |
 | `channel` | 否 | 渠道标识，桥自己起名。**同一个名字 = 同一间房** |
 | `scene` | 否 | `desk`（默认，等于不传）/ `private` / `group` |
-| `speaker` | 否 | 群聊里这句话是谁说的，写进正文前缀 |
+| `room` | 否 | `house`（并进书房）或 `channel`（另开一间）。不传时私聊回书房、群聊另开 |
+| `speaker` | 否 | 这句话是谁说的。**任何场次都写进正文前缀**，不再只限群聊 |
+| `guest` | 否 | `true` = 外客（群友私聊这类）。标明「不是他」，不算他来过、不涨轮数、不进书房桶 |
+| `title` | 否 | 侧栏显示名（群名、昵称）。不传才回落到 channel 键 |
 
 路由规则（`lib/channels.js` 的 `resolveChannel`）：
 
 - **不传 `channel`** → 家里那条会话。观测台、侧栏、老桥的行为一字不变。
-- **`scene: 'private'`** → **仍进家里那条会话**（这就是"QQ 私聊和 DSH 对话融合在一起"那个选项，真融合，不会分裂）。
-- **`scene: 'group'`** → 插件按 `channel` 自建/复用一间房（记在 `channels.json`），房间 cwd 仍是她的屋子，所以身份、工具面、白板都照旧——**还是同一个人，只是换了个房间说话**。
+- **`room: 'house'`** → 并进家里那条会话，场次照记（群聊仍记 `group`）。
+- **`scene: 'private'`** → 默认**仍进家里那条会话**（"QQ 私聊和 DSH 对话融合"那个选项）。要每人一间，传 `room: 'channel'`。
+- **`scene: 'group'`** → 默认按 `channel` 自建/复用一间房（记在 `channels.json`），cwd 仍是她的屋子，身份、工具面、白板都照旧——**还是同一个人，只是换了个房间说话**。想让所有群并进书房，传 `room: 'house'`。
+- **`guest: true`** → 房间照开（如果 `room` 要求），但这条不算他来过：不写 `seen:`、不 `bumpTurns`、不触发轮换；正文标「有个不是他的人跟你说话」，她不会把群友当成主人。
+
+**常见布局都由桥表达，插件不写死：** 全部并进书房（不传 `channel`，或 `room:'house'`）；每群一间（`channel:'qq-group:<群号>'` + `group`）；群友私聊每人一间（`channel:'qq:dm:<QQ号>'` + `private` + `room:'channel'` + `guest:true`）；群友私聊进书房但标身份（`private` + `guest:true` + `speaker`）；只有 @ 她才进（桥侧过滤，不投递就不建房）。
+
+**群房会轮换。** 默认一间群房用满 **7 天**换新的（`config.rooms.groupRotateDays`，`0` = 不换）：旧房改名成「… YYYY-MM-DD 之前」留在侧栏，新房从当天重新算天数。200 条上下文对热闹的群不够用，所以按天而不是按轮数。
+
 
 启动前可以先探一句：
 
@@ -130,8 +140,8 @@ GET /dsh-fish/whoami
 ### 7.2 三个配套约定（改桥之后的正确性全押在这三条上）
 
 1. **场次要进事件流**。`validateEvent` 现在接受可选 `scene`（非 `desk` 才落库，纯加法，不升 `EVENT_SCHEMA_VERSION`）。桥注入 `user/message` 时把 `scene` 写进 **`source.scene`**，`classifyMessage` 才会认出来（`lib/turns.js`）。
-2. **群聊不动生命体征**。`seen:`、`heard`、`bumpTurns`、会话轮换只由 desk/private 触发；群聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。
-3. **群聊必须带说话人前缀**。`lib/say.js` 用 `speaker` 拼 `某某在群里说：…`。不拼的话，群里三个人的话在她看来跟一个人连说三句一模一样，她会把三个人的观点拼成一个"他"。外来文本统一过 `lib/guard.js` 的 `sanitizeForeign`。
+2. **外客不动生命体征**。`seen:`、`heard`、`bumpTurns`、会话轮换只由 desk/private 且非 `guest` 触发；群聊与群友私聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。
+3. **外来场次必须带说话人前缀**。`lib/say.js` 对 `group` 与 `guest` 都用 `speaker` 拼 `某某在群里说：…` / `某某说：…`。不拼的话，群里三个人的话在她看来跟一个人连说三句一模一样，她会把三个人的观点拼成一个"他"。外来文本统一过 `lib/guard.js` 的 `sanitizeForeign`。
 
 ### 7.3 另一条老路：工具白名单（仍然有效）
 
@@ -161,7 +171,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 三个依赖字段还是 `{}`
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `guard.js`
-- [ ] `node --test` 1409 全绿
+- [ ] `node --test` 1420 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节
