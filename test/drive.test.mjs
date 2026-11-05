@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { DRIVE, driveCost, driveOf } from '../lib/drive.js'
+import { DRIVE, deskHasMaterial, driveCost, driveOf } from '../lib/drive.js'
 
 const HOUR = 3_600_000
 const NOW = Date.parse('2026-11-05T09:00:00+08:00')
@@ -106,4 +106,13 @@ test('劲儿只算不花：动一次的钱是给记账用的常数', () => {
   // 本函数没有副作用：同一个输入算两次结果一样
   const events = [spend(9)]
   assert.deepEqual(driveOf({ events, now: NOW }), driveOf({ events, now: NOW }))
+})
+
+test('空桌不醒：桌上一件材料都没有时，劲儿再满也不算有话说', () => {
+  assert.equal(deskHasMaterial({ gaps: 0, stale: 0, echo: false, favorite: false }), false)
+  assert.equal(deskHasMaterial(null), false)
+  assert.equal(deskHasMaterial({ gaps: 1, stale: 0, echo: false, favorite: false }), true)
+  assert.equal(deskHasMaterial({ gaps: 0, stale: 2, echo: false, favorite: false }), true)
+  assert.equal(deskHasMaterial({ gaps: 0, stale: 0, echo: true, favorite: false }), true)
+  assert.equal(deskHasMaterial({ gaps: 0, stale: 0, echo: false, favorite: true }), true)
 })

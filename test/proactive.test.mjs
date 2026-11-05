@@ -206,7 +206,9 @@ test('空手回合的正文只说事实和许可，不写「你应该」', () =>
   assert.match(text, /没有人跟你说话/)
   assert.match(text, /想说什么就说/)
   assert.match(text, /他看得见/, '得说她的话有收件人，不然她以为只是记一笔')
-  assert.match(text, /什么都不做|什么都别做/)
+  // 2026-11-05（用户 m02937）：「什么都不做」在文本界面上不成立，改成明确的不写。
+  assert.match(text, /什么都别写/)
+  assert.match(text, /不要写任何字/)
   assert.match(text, /1–6 条/)
   assert.doesNotMatch(text, /你应该/)
   assert.match(text, /\[ev_a\]/)

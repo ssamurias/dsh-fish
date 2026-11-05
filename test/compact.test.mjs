@@ -23,6 +23,7 @@ import {
   compactWake,
   followWake,
   isSurfaceEvent,
+  looksLikeNothingSaid,
   planWakeCompaction,
   tombstoneText,
 } from '../lib/compact.js'
@@ -284,4 +285,39 @@ test('compactWake：没有会话 / 宿主拒绝，都只返回 false，不抛', 
   assert.equal(ok, false)
   assert.match(logs.join('\n'), /折叠没成/)
   assert.match(logs.join('\n'), /missing 7/)
+})
+
+test('「没什么要说的」不算开口：短、开头就交代', () => {
+  // 2026-11-05（用户 m02937）真机原话
+  assert.equal(looksLikeNothingSaid('这一轮没什么要说的。今天想说的话，一小时前已经说完了。'), true)
+  assert.equal(looksLikeNothingSaid('今天没什么想说的'), true)
+  assert.equal(looksLikeNothingSaid('没什么要说的。'), true)
+  assert.equal(looksLikeNothingSaid('这一回合没什么可说的'), true)
+})
+
+test('真话不会被当成「没什么要说的」', () => {
+  assert.equal(looksLikeNothingSaid('我在想，你今天是不是有点累。'), false)
+  assert.equal(looksLikeNothingSaid('这一轮我想说的是：你别老熬夜。'), false)
+  // 太长的一律不算元话语——真开口才会这么长。
+  assert.equal(looksLikeNothingSaid('这一轮没什么要说的。' + '前几天翻日记的时候看到一句话，'.repeat(5)), false)
+  assert.equal(looksLikeNothingSaid(''), false)
+  assert.equal(looksLikeNothingSaid(null), false)
+})
+
+test('followWake 把她说的话一并带出来，调用方才判得出是不是元话语', async () => {
+  const handlers = []
+  const ctx = { on: (_n, fn) => { handlers.push(fn); return () => {} } }
+  const follow = followWake(ctx, { rpcId: 'r1', timeoutMs: 10_000 })
+  const session = { header: { id: 's1' } }
+  const ping = { seq: 1, type: 'user/message', data: { source: { kind: FISH_SOURCE_KIND, rpcId: 'r1' } } }
+  const said = { seq: 2, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '没什么要说的' }] } } }
+  for (const fn of handlers) {
+    fn(session, ping)
+    fn(session, said)
+    fn(session, { seq: 3, type: 'turn/end', data: {} })
+  }
+  const out = await follow.done
+  assert.equal(out.spoke, true)
+  assert.match(out.said, /没什么要说的/)
+  assert.equal(out.endSeq, 2)
 })
