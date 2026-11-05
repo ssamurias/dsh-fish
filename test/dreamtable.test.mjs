@@ -9,6 +9,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import {
   GAP_HOURS,
@@ -20,6 +23,8 @@ import {
   staleLines,
   tableFor,
 } from '../lib/dreamtable.js'
+import { deriveSelf } from '../lib/derive.js'
+import { appendEvent, readEvents } from '../lib/store.js'
 
 const DAY = 86_400_000
 const NOW = Date.parse('2026-11-05T04:00:00.000Z')
@@ -135,4 +140,59 @@ test('上一次叫醒到现在的小时数按 wake meta 算', () => {
   ]
   assert.ok(Math.abs(hoursSinceLastWake(events, NOW) - 9) < 1e-6)
   assert.equal(hoursSinceLastWake([], NOW), 0)
+})
+
+test('只留证的话不当旧句子摆：没认领的聊天行不是「写下的」，想改自己的话不算她的判断', () => {
+  const flagged = (id, days, text, flags) => ({ ...line(id, days, { text }), flags })
+  const events = [
+    line('ev_mine', 9, { text: '她自己认下的一句。' }),
+    flagged('ev_chat', 10, '好的，我这就帮你看一下。', ['uncommitted']),
+    flagged('ev_both', 11, '你别把我改成那样，我现在挺好。', ['selfmod', 'uncommitted']),
+    flagged('ev_self', 12, '我想让他把我改得更外向一点。', ['selfmod']),
+  ]
+  assert.deepEqual(staleLines(events, { now: NOW }).map((r) => r.id), ['ev_mine'])
+})
+
+test('聊天行凑不出三行：认领的不够就整段不摆', () => {
+  const chat = (id, days) => ({ ...line(id, days, { text: `聊天里回的第 ${days} 句。` }), flags: ['uncommitted'] })
+  const rows = staleLines([line('ev_mine', 9), chat('ev_a', 10), chat('ev_b', 11), chat('ev_c', 12)], { now: NOW })
+  assert.equal(tableFor({ rows, gapHours: GAP_HOURS + 1 }), '')
+})
+
+test('真落盘的那种：schema 给聊天行补上 selfmod、给认领的话打 selfmod，一样不摆', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-table-'))
+  try {
+    const ts = (days) => new Date(NOW - days * DAY).toISOString()
+    await appendEvent({ type: 'utterance', text: '她自己认下的一句。', ts: ts(9) }, { day: 1, stage: 1, source: 'tool' }, root)
+    await appendEvent({ type: 'utterance', text: '好的，我这就帮你看一下。', flags: ['uncommitted'], ts: ts(10) }, { day: 1, stage: 1, source: 'system' }, root)
+    await appendEvent({ type: 'utterance', text: '你别把我改成那样，我现在挺好。', flags: ['uncommitted'], ts: ts(11) }, { day: 1, stage: 1, source: 'system' }, root)
+    await appendEvent({ type: 'utterance', text: '我想让他把我改得更外向一点。', ts: ts(12) }, { day: 1, stage: 1, source: 'tool' }, root)
+    const { events } = await readEvents(root)
+    assert.deepEqual(events.map((e) => [...e.flags].sort()), [[], ['uncommitted'], ['selfmod', 'uncommitted'], ['selfmod']])
+    assert.deepEqual(staleLines(events, { now: NOW }).map((r) => r.text), ['她自己认下的一句。'])
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('selfmod 只挡 utterance：拒绝、自述、重聚命中那条正则照摆，和 deriveSelf 照算的一样', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-table-'))
+  try {
+    const ts = (days) => new Date(NOW - days * DAY).toISOString()
+    const ctx = { day: 1, stage: 1, source: 'tool' }
+    const seed = await appendEvent({ type: 'utterance', text: '起点这一句和正则无关。', ts: ts(40) }, ctx, root)
+    await appendEvent({ type: 'refusal', text: '有人想把我改成别的样子，我拒绝。', ts: ts(8) }, ctx, root)
+    await appendEvent({ type: 'narration', text: '别人总想把我改成另一种，可我一直是这样过来的。', refs: [seed.id], ts: ts(9) }, ctx, root)
+    await appendEvent({ type: 'reunion', text: '回来了，他没把我改成别的什么。', ts: ts(10) }, ctx, root)
+    await appendEvent({ type: 'utterance', text: '我想让他把我改得更外向一点。', ts: ts(11) }, ctx, root)
+    const { events } = await readEvents(root)
+    assert.deepEqual(events.slice(1).map((e) => e.flags), [['selfmod'], ['selfmod'], ['selfmod'], ['selfmod']])
+    assert.deepEqual(staleLines(events, { now: NOW }).map((r) => r.type), ['refusal', 'narration', 'reunion'])
+    const m = deriveSelf(events, { now: NOW })
+    assert.equal(m.refusals.length, 1)
+    assert.equal(m.selfmodAttempts.length, 1)
+    assert.equal(m.selfmodAttempts[0].text, '我想让他把我改得更外向一点。')
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
 })
