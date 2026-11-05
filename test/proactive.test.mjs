@@ -33,10 +33,13 @@ import {
   recentMaterial,
   registerProactive,
   writeSay,
+  saysToday,
 } from '../lib/proactive.js'
-import { dateKey } from '../lib/settings.js'
-import { readEvents } from '../lib/store.js'
+import { dateKey, normalizeConfig } from '../lib/settings.js'
+import { readEvents, writeConfig } from '../lib/store.js'
 import { HER_TOOLS } from '../lib/restrict.js'
+import { deriveSelf } from '../lib/derive.js'
+import { startScheduler } from '../lib/scheduler.js'
 
 async function withRoot(fn) {
   const root = mkdtempSync(join(tmpdir(), 'fish-proactive-'))
@@ -205,7 +208,9 @@ test('空手回合的正文只说事实和许可，不写「你应该」', () =>
   const text = proactiveSection({ now: Date.now(), state: { idleHours: 9.5, chance: 0.3 }, material: [{ id: 'ev_a', type: 'utterance', text: '今天有点累' }], loose: [{ id: 'ev_b', text: '你问过一件事，还没答复。' }] })
   assert.match(text, /没有人跟你说话/)
   assert.match(text, /想说什么就说/)
-  assert.match(text, /他看得见/, '得说她的话有收件人，不然她以为只是记一笔')
+  // 2026-11-06（issue #41）：原文写「他看得见」，装了渠道路由插件就不成立。
+  // 保留的意图是「这句话有收件人，不是只记一笔」——改成她能验证的那个事实：字会进你们的对话。
+  assert.match(text, /落进你们俩这条对话里/, '得说她的话有收件人，不然她以为只是记一笔')
   // 2026-11-05（用户 m02937）：「什么都不做」在文本界面上不成立，改成明确的不写。
   assert.match(text, /什么都别写/)
   assert.match(text, /不要写任何字/)
@@ -267,6 +272,45 @@ test('写下的一句会落成 utterance（带「她主动说」前缀）并留�
   assert.match(meta.text, /care/)
 }))
 
+test('her_say 真的按「一天最多几次」拦住，不是只在说明书写着（issue #41）', () => withRoot(async (root) => {
+  const now = Date.now()
+  const dk = dateKey(new Date(now))
+  line(root, ev({ id: 'ev_say', type: 'utterance', text: '我今天有点累', ts: new Date(now - 3_600_000).toISOString() }))
+  await writeConfig(normalizeConfig({ proactive: { enabled: true, maxPerDay: 2 } }), root)
+
+  const a = await writeSay(root, { text: '第一句。', refs: ['ev_say'], now })
+  assert.equal(a.ok, true, a.note)
+  const b = await writeSay(root, { text: '第二句。', refs: ['ev_say'], now })
+  assert.equal(b.ok, true, b.note)
+  // 第三句该被挡住：原来这里读了 config 却没用，连写八次都成功。
+  const c = await writeSay(root, { text: '第三句。', refs: ['ev_say'], now })
+  assert.equal(c.ok, false)
+  assert.match(c.note, /上限/)
+
+  assert.equal(saysToday(await readEvents(root).then((r) => r.events), dk), 2)
+}))
+
+test('her_say 写下的 day/stage 是真实成长坐标，不是写死的 1/1（issue #41）', () => withRoot(async (root) => {
+  const now = Date.now()
+  // seed 落在 40 天前：growthDay 应该算出 41 天左右，而不是恒定 1。
+  line(root, ev({ id: 'ev_seed', type: 'seed', text: '起点', ts: new Date(now - 40 * 86_400_000).toISOString() }))
+  line(root, ev({ id: 'ev_say', type: 'utterance', text: '我先前的记录', ts: new Date(now - 3_600_000).toISOString() }))
+  await writeConfig(normalizeConfig({ proactive: { enabled: true } }), root)
+
+  const { events } = await readEvents(root)
+  const model = deriveSelf(events)
+  assert.ok(model.day > 30, `seed 40 天前，成长日该是 41 左右，实际 ${model.day}`)
+
+  const r = await writeSay(root, { text: '写一句。', refs: ['ev_say'], now })
+  assert.equal(r.ok, true, r.note)
+  const after = (await readEvents(root)).events
+  const said = after.find((e) => e.id === r.id)
+  assert.equal(said.day, model.day, 'day 得跟 deriveSelf 一致，否则 consistency() 会把它当成阶段 1 的旧话')
+  assert.equal(said.stage, model.stage)
+  const meta = after.find((e) => e.type === 'meta' && String(e.text ?? '').startsWith(`proactive-say:${dateKey(new Date(now))}`))
+  assert.equal(meta.day, model.day)
+}))
+
 test('her_say 在 0.9.0 起对所有人注册', () => {
   const src = readFileSync(new URL('../lib/proactive.js', import.meta.url), 'utf8')
   assert.match(src, /name: 'her_say'/)
@@ -296,7 +340,9 @@ test('her_say 的显示结果是 ContentBlock 数组，不是字符串（0.8.2 �
     assert.equal(typeof blocks[0].text, 'string')
     assert.ok(blocks[0].text.length > 0)
   }
-  assert.match(spec.output.render({}, { ok: true }).at(0).text, /说出去了/)
+  // 2026-11-06（issue #41）：回执原来写「说出去了」，可这一步只落一条流水；
+  // 用户此刻看不看得见，由她这一轮有没有直接写正文决定。回执按实际做的事说。
+  assert.match(spec.output.render({}, { ok: true }).at(0).text, /记下了/)
   assert.match(spec.output.render({}, { ok: false, note: '这条没记下。' }).at(0).text, /没记下/)
 })
 
@@ -382,4 +428,58 @@ test('醒来后没开口的那几次：不占当天额度，但单独限次数�
   assert.equal(proactiveState({ config: ON, events: full, now }).why.length > 0, true)
   assert.match(proactiveState({ config: ON, events: full, now }).why, /太多次/)
   assert.ok(SILENT_QUIET_HOURS >= 1, '静默间隔至少一小时，不然她会连着醒、连着不说')
+})
+
+// ---- tick 里先看开关，再算 deriveSelf ----
+//
+// tick 每分钟跑一次，deriveSelf 是同步的，事件流长了会卡住主线程。
+// 「允许她主动开口」默认就是关的，关着的时候不该为它算这一遍。
+//
+// deriveSelf 是 scheduler.js 静态 import 的，从外面数不了次数，耗时又不稳，不拿来断言。
+// 所以往事件流里放一条它读不了的行：revise 的 refs 不是数组时它会抛，
+// tick 接住后记一行 `proactive failed`。日志里有这一行，就是这一趟算过了。
+async function twoTicks(root, over) {
+  // 时段排到三小时之后：走不到日程后面那次 deriveSelf，日志里只剩 maybeProactive 这一处。
+  const h = new Date().getHours() + 3
+  const hh = (n) => `${String(n % 24).padStart(2, '0')}:00`
+  await writeConfig(normalizeConfig({ window: [hh(h), hh(h + 1)], ...over }), root)
+  line(root, { id: 'ev_unreadable', type: 'revise', ts: new Date().toISOString(), text: '合成', refs: 1 })
+  const { events } = await readEvents(root)
+  assert.throws(() => deriveSelf(events), TypeError, '这一行得让 deriveSelf 抛，否则下面的断言什么也没测')
+
+  const logs = []
+  const s = startScheduler({}, { root, log: (...a) => logs.push(a.join(' ')) })
+  const realNow = Date.now
+  try {
+    await s.tick()
+    // 同一分钟内 tick 只算一次，把钟往后拨一分钟。
+    const later = realNow() + 60_000
+    Date.now = () => later
+    await s.tick()
+  } finally {
+    Date.now = realNow
+    s.dispose()
+  }
+  return logs
+}
+
+test('tick：主动说话关着不算 deriveSelf，跳过的原因照旧只记一行', async () => {
+  await withRoot(async (root) => {
+    const logs = await twoTicks(root, {})
+    assert.deepEqual(logs, ['proactive skip 主动说话是关着的'])
+  })
+})
+
+test('tick：「主动性」关着仍然排在最前面，记的还是它自己那一行', async () => {
+  await withRoot(async (root) => {
+    const logs = await twoTicks(root, { drive: { enabled: false } })
+    assert.deepEqual(logs, ['proactive skip 主动性关着'])
+  })
+})
+
+test('tick：主动说话开着，每一趟照旧先算 deriveSelf', async () => {
+  await withRoot(async (root) => {
+    const logs = await twoTicks(root, { proactive: { enabled: true } })
+    assert.equal(logs.filter((l) => l.startsWith('proactive failed')).length, 2, logs.join(' | '))
+  })
 })

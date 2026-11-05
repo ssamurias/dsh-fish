@@ -131,6 +131,18 @@ test('从模块路径反推 profile 目录：link 安装（真身在源码目录
   assert.equal(profileDirOf(linkUrl), '')
 })
 
+test('pnpm 的 isolated 布局也要认得出 profile 根，否则升级按钮永远不出现（issue #43）', () => {
+  const url = 'file:///C:/Users/DANG/.dsh/profiles/desktop/node_modules/.pnpm/@ssamurias+dsh-fish@0.9.1/node_modules/@ssamurias/dsh-fish/lib/selfupdate.js'
+  const got = profileDirOf(url).split(String.fromCharCode(92)).join('/').replace(/^\/(?=[A-Za-z]:)/, '')
+  assert.equal(got, 'C:/Users/DANG/.dsh/profiles/desktop')
+  // .pnpm 里的老裸名同理（0.8.9 之前用 pnpm 装的人）
+  const old = 'file:///C:/u/.dsh/profiles/desktop/node_modules/.pnpm/dsh-fish@0.8.8/node_modules/dsh-fish/lib/selfupdate.js'
+  assert.equal(profileDirOf(old).split(String.fromCharCode(92)).join('/').replace(/^\/(?=[A-Za-z]:)/, ''), 'C:/u/.dsh/profiles/desktop')
+  // 普通布局不能被这条误伤
+  const plain = 'file:///C:/u/.dsh/profiles/desktop/node_modules/@ssamurias/dsh-fish/lib/selfupdate.js'
+  assert.equal(profileDirOf(plain).split(String.fromCharCode(92)).join('/').replace(/^\/(?=[A-Za-z]:)/, ''), 'C:/u/.dsh/profiles/desktop')
+})
+
 test('应用自带的 node/pnpm：找不到就给空（退回 PATH），不瞎指一个路径', () => {
   assert.deepEqual(runtimeBins({ exe: 'C:/nowhere/App.exe', exists: () => false }), { nodeBin: '', pnpmScript: '' })
   const r = runtimeBins({

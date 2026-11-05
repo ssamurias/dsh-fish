@@ -102,13 +102,40 @@ test('叫醒拼装处真的按这个判据走：世界在门内，工具常量�
   assert.ok(tool > desk, '工具句应该在桌子之后、仍然每次都说')
 })
 
+test('「兴趣」关掉之后不再摆旧句子：否则每 6 小时还会因为旧句子空醒一次（issue #42）', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, '..', 'lib', 'scheduler.js'), 'utf8')
+  // 判据必须挂在 interest.enabled 上：旧句子属于「桌上那几样东西」里的一样。
+  assert.match(src, /const staleOn = config\?\.interest\?\.enabled !== false/)
+  assert.match(src, /if \(staleOn && !dreamOn\(evs, model\.day\)\.length\)/)
+
+  // 纯函数这一层也钉住：tableText 为空就不再判成 table。
+  assert.equal(freeWakeFor({ tableText: '', events: [old(QUIET_DAYS + 1)], dk: '2026-11-05', now: NOW }).kind, 'think')
+})
+
 test('设置页关掉「自己找点事做」：空窗再久也不空醒，桌子照摆', () => {
   const off = { memory: { selfWake: false } }
   assert.equal(freeWakeFor({ events: [old(QUIET_DAYS + 1)], dk: '2026-11-05', now: NOW, config: off }), null)
   // 摆料优先，不受这个开关影响：桌上真有东西时这一轮照开。
   const nl = String.fromCharCode(10)
-  const table = freeWakeFor({ tableText: '这次隔了 9 个小时。' + nl + '- 「一句旧的」', dk: '2026-11-05', now: NOW, config: off })
+  const table = freeWakeFor({ tableText: '距你上次醒来，隔了 9 个小时。' + nl + '- 「一句旧的」', dk: '2026-11-05', now: NOW, config: off })
   assert.equal(table.kind, 'table')
   // 没写这个键就是开着（老配置不因为升级变安静）。
   assert.equal(freeWakeFor({ events: [old(QUIET_DAYS + 1)], dk: '2026-11-05', now: NOW, config: {} }).kind, 'think')
+})
+
+test('quietDays：没认领的聊天行不算她自己动过，每天有人聊也等得到兜底', () => {
+  const chat = (daysAgo, flags = ['uncommitted']) => ({ type: 'utterance', text: '聊天里回的一句', flags, ts: NOW - daysAgo * DAY })
+  const events = [old(QUIET_DAYS + 3), chat(1), chat(2, ['selfmod', 'uncommitted'])]
+  assert.equal(Math.round(quietDays(events, NOW)), QUIET_DAYS + 3)
+  assert.equal(freeWakeFor({ events, dk: '2026-11-05', now: NOW }).kind, 'think')
+  // 只有聊天行、一件她自己的事都没有：还是「没有基线」，不补。
+  assert.equal(quietDays([chat(1)], NOW), null)
+  assert.equal(freeWakeFor({ events: [chat(1)], dk: '2026-11-05', now: NOW }), null)
+})
+
+test('quietDays：想改自己也是她自己动过，selfmod 照算', () => {
+  const events = [old(QUIET_DAYS + 3), { type: 'utterance', text: '我想让他把我改得更外向一点。', flags: ['selfmod'], ts: NOW - 2 * DAY }]
+  assert.equal(Math.round(quietDays(events, NOW)), 2)
+  assert.equal(freeWakeFor({ events, dk: '2026-11-05', now: NOW }), null)
 })

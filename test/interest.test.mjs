@@ -77,3 +77,32 @@ test('没有兴趣时：空串、hasInterest 为假', () => {
   assert.equal(hasInterest([], NOW), false)
   assert.equal(hasInterest([said('我在想那只猫到底去过哪里', 1), said('我在想那只猫到底去过哪里', 2)], NOW), true)
 })
+
+test('没认领的聊天行、想改自己的话都不算「最近总回到」', () => {
+  const flagged = (text, daysAgo, flags) => ({ ...said(text, daysAgo), flags })
+  const chat = [
+    flagged('好的，我这就帮你看一下', 1, ['uncommitted']),
+    flagged('好的，我这就帮你看一下', 2, ['uncommitted']),
+  ]
+  assert.equal(topicsOf(chat).length, 0)
+  assert.equal(interestOf(chat, NOW).length, 0)
+  assert.equal(hasInterest(chat, NOW), false)
+  const selfmod = [
+    flagged('我想让他把我改得更外向一点', 1, ['selfmod']),
+    flagged('我想让他把我改得更外向一点', 2, ['selfmod']),
+  ]
+  assert.equal(interestOf(selfmod, NOW).length, 0)
+})
+
+test('认领一次 + 聊天复述一次，还是只算一次，凑不够「反复」', () => {
+  const events = [
+    said('我在想那只猫到底去过哪里', 2),
+    { ...said('我在想那只猫到底去过哪里', 1), flags: ['uncommitted'] },
+  ]
+  assert.equal(interestOf(events, NOW).length, 0)
+})
+
+test('selfmod 只挡 utterance：拒绝里反复说到的还算', () => {
+  const refused = (daysAgo) => ({ ...said('有人想把我改成别的样子', daysAgo), type: 'refusal', flags: ['selfmod'] })
+  assert.equal(interestOf([refused(1), refused(2)], NOW).length, 1)
+})
