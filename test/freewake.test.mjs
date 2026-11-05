@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import { FREE_NOTE, QUIET_DAYS, THINK_EVERY_DAYS, freeWakeFor, quietDays } from '../lib/freewake.js'
+import { FREE_NOTE, QUIET_DAYS, THINK_EVERY_DAYS, freeWakeFor, keepWorldOnWake, quietDays } from '../lib/freewake.js'
 
 const meta = (text) => ({ type: 'meta', text })
 const DAY = 86_400_000
@@ -78,4 +81,24 @@ test('空醒的收尾句不派活、不提梦、也不催', () => {
   assert.doesNotMatch(FREE_NOTE, /应该|必须|记得|别忘了/)
   assert.match(FREE_NOTE, /这一轮是你自己的/)
   assert.match(FREE_NOTE, /也可以什么都不做/)
+})
+
+test('摆料那一轮不摆世界：只有 think 和普通叫醒才看 B 站、才摆桌子', () => {
+  // 2026-11-05（用户 m01128）：table 那轮连 B 站和惦记清单都不带。
+  assert.equal(keepWorldOnWake({ kind: 'table', note: FREE_NOTE }), false)
+  assert.equal(keepWorldOnWake({ kind: 'think', note: FREE_NOTE }), true)
+  assert.equal(keepWorldOnWake(null), true)
+})
+
+test('叫醒拼装处真的按这个判据走：世界在门内，工具常量在门外', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, '..', 'lib', 'scheduler.js'), 'utf8')
+  assert.match(src, /const showWorld = keepWorldOnWake\(free\) \|\| deps\.forceBrowse === true/)
+  assert.match(src, /showWorld \? await lookBeforeWake/)
+  const gate = src.indexOf('if (showWorld) {')
+  const desk = src.indexOf('const desk = deskFor({')
+  const tool = src.indexOf("parts.push('', TOOL_ASK_NOTE)")
+  // 桌子在门内，工具句在门外——工具句不是活，是她世界里的常量。
+  assert.ok(gate > 0 && desk > gate, '桌子应该在 showWorld 门内')
+  assert.ok(tool > desk, '工具句应该在桌子之后、仍然每次都说')
 })
