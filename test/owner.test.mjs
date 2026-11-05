@@ -88,10 +88,13 @@ test('缺了 bili_jct 要说出来——少了它就看不了也发不了', () =
   assert.deepEqual(r.missing, ['bili_jct'])
 })
 
-test('mentionPrefix：有昵称才加，空格换下划线，关掉就不加', () => {
+test('mentionPrefix：有昵称才加，昵称里的空格原样留着，关掉就不加', () => {
   assert.equal(mentionPrefix({ nickname: '大肥鱼的主人' }, {}), '@大肥鱼的主人 ')
-  assert.equal(mentionPrefix({ nickname: 'a b' }, {}), '@a_b ')
+  // 2026-11-06：原来把空格换成下划线，等于 @ 了一个不存在的昵称（B 站按原文匹配）。
+  assert.equal(mentionPrefix({ nickname: 'a b' }, {}), '@a b ')
+  assert.equal(mentionPrefix({ nickname: '  空格 前后  ' }, {}), '@空格 前后 ')
   assert.equal(mentionPrefix({ nickname: '' }, {}), '')
+  assert.equal(mentionPrefix({}, {}), '')
   assert.equal(mentionPrefix({ nickname: 'x' }, { comment: { atOwner: false } }), '')
 })
 

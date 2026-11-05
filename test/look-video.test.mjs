@@ -243,3 +243,40 @@ test('bili_look：她自己那条会话（cwd 在这个家里）能正常看', a
     assert.ok(events.some((e) => String(e.text ?? '').startsWith('looked:') && e.sessionId === 'session-her'))
   })
 })
+
+// ------------------- 2026-11-06 用户 m01641：bili_look 也要能看「有人回我吗」 -------------------
+
+test('what=replies：读她自己评论下面的回复，并给出回楼中楼要用的编号', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    const { appendEvent, paths } = await import('../lib/store.js')
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1xx411c7mD 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    await (await import('node:fs/promises')).writeFile(paths(root).owner, JSON.stringify({ mid: 9 }), 'utf8')
+
+    const c = fakeClient({
+      subReplies: async () => ({
+        ok: true,
+        data: [{ rpid: 222, mid: 7, user: '路人甲', text: '这句话我不同意', ctime: 5 }],
+      }),
+    })
+    const r = await lookOnce({ what: 'replies', root, client: c, cfg: normalizeConfig({}) })
+    assert.equal(r.ok, true, r.note)
+    assert.match(r.text, /路人甲/)
+    assert.match(r.text, /这句话我不同意/)
+    assert.match(r.text, /reply=222/)
+    assert.match(r.text, /parent=111/)
+    assert.deepEqual(r.picks, [{ bvid: 'BV1xx411c7mD', rpid: 222, rootRpid: 111 }])
+    // 只是看，不能因此把视频记成「看过了」（那会影响她能不能评论）
+    const { events } = await readEvents(root)
+    assert.equal(events.filter((e) => String(e.text ?? '').startsWith('looked:')).length, 0)
+  })
+})
+
+test('what=replies：没人回时给一句人话，不吐堆栈', async () => {
+  await withRoot(async (root) => {
+    const r = await lookOnce({ what: 'replies', root, client: fakeClient(), cfg: normalizeConfig({}), events: [] })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /没在谁的评论下面被人回过/)
+    assert.deepEqual(r.picks, [])
+  })
+})

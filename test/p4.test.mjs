@@ -21,11 +21,12 @@ import { join } from 'node:path'
 import {
   targetsToday, commentCountToday, replyCountToday, herComments, herCommentsRecent,
   seenReplies, scanReplies, renderReplies, postComment, postReply,
+  readMyReplies, renderMyReplies, repliesScanDue,
   REPLY_LOOKBACK_DAYS, MAX_SCAN_ROOTS,
 } from '../lib/comment.js'
 import { speakOnce, registerSpeak, noteSpeakEnabled } from '../lib/speak.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
-import { readEvents, appendEvent, paths, writeConfig } from '../lib/store.js'
+import { readEvents, appendEvent, paths, writeConfig, readConfig } from '../lib/store.js'
 import { describeState, resetAll, backupDirFor } from '../lib/reset.js'
 
 async function withRoot(fn) {
@@ -583,4 +584,135 @@ test('targetsToday 只认今天的 browse 记账', async () => {
     const t = targetsToday(events, dk)
     assert.deepEqual(t.map((x) => x.bvid), ['BV1'])
   })
+})
+
+// ------------------- 2026-11-06 用户 m01641：开了「看评论」却一次都没看到 -------------------
+
+test('repliesScanDue：「多久看一次」真的按间隔生效，0 = 不主动问', () => {
+  const now = new Date(2026, 10, 6, 12, 0, 0).getTime()
+  // 关着就不扫
+  assert.equal(repliesScanDue({ enabled: false, scanEveryMin: 30 }, now), false)
+  // 从没扫过 → 该扫了
+  assert.equal(repliesScanDue({ enabled: true, scanEveryMin: 30, lastScanAt: '' }, now), true)
+  // 刚扫过 1 分钟 → 还不到时候
+  const just = new Date(now - 60_000).toISOString()
+  assert.equal(repliesScanDue({ enabled: true, scanEveryMin: 30, lastScanAt: just }, now), false)
+  // 过了 30 分钟 → 该扫了
+  const half = new Date(now - 31 * 60_000).toISOString()
+  assert.equal(repliesScanDue({ enabled: true, scanEveryMin: 30, lastScanAt: half }, now), true)
+  // 用户填 5 分钟，就按 5 分钟算
+  const six = new Date(now - 6 * 60_000).toISOString()
+  assert.equal(repliesScanDue({ enabled: true, scanEveryMin: 5, lastScanAt: six }, now), true)
+  assert.equal(repliesScanDue({ enabled: true, scanEveryMin: 5, lastScanAt: new Date(now - 3 * 60_000).toISOString() }, now), false)
+  // 0 = 不主动问（叫醒时仍会捎带，她自己也能用 bili_look 看）
+  assert.equal(repliesScanDue({ enabled: true, scanEveryMin: 0, lastScanAt: '' }, now), false)
+  // 时间被写坏了 → 当成没扫过，宁可真去问一次
+  assert.equal(repliesScanDue({ enabled: true, scanEveryMin: 30, lastScanAt: '不是时间' }, now), true)
+  // 没配置也安全
+  assert.equal(repliesScanDue(undefined, now), false)
+})
+
+test('readMyReplies：她主动看时不受 cseen 限制，且带上回楼中楼要用的 parent', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    // 这条回复已经在叫醒消息里提醒过了 —— scanReplies 会滤掉它，readMyReplies 不许滤
+    await appendEvent({ type: 'meta', text: `cseen:${dk} 222` }, { day: 1, stage: 1, source: 'system' }, root)
+
+    const client = fakeClient({
+      subReplies: async () => ({
+        ok: true,
+        data: [
+          { rpid: 222, mid: 777, user: '路人甲', text: '说得好', ctime: 3 },
+          { rpid: 444, mid: 9, user: '她自己', text: '再补一句', ctime: 2 },
+        ],
+      }),
+    })
+    await writeFile(paths(root).owner, JSON.stringify({ mid: 9 }), 'utf8')
+
+    // 提醒用的那一路：滤掉看过的、滤掉她自己
+    assert.deepEqual((await scanReplies({ root, client, dateKey: dk })).map((x) => x.rpid), [])
+
+    // 她自己看的那一路：看过的照给，她自己补的仍然不算
+    const got = await readMyReplies({ root, client, events: (await readEvents(root)).events })
+    assert.deepEqual(got.map((x) => x.rpid), [222])
+    assert.equal(got[0].rootRpid, 111, '回楼中楼要的是她那条评论的编号')
+    assert.equal(got[0].aid, 1001, '接口要 aid 不是 bvid')
+  })
+})
+
+test('readMyReplies：带 bvid 就只看那一条；没发过评论时是空数组、不抛', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV2 222` }, { day: 1, stage: 1, source: 'system' }, root)
+
+    const client = fakeClient({
+      subReplies: async () => ({ ok: true, data: [{ rpid: 9, mid: 7, user: 'A', text: '嗯', ctime: 1 }] }),
+    })
+    const events = (await readEvents(root)).events
+    const only = await readMyReplies({ root, client, events, bvid: 'BV2' })
+    assert.deepEqual(only.map((x) => x.bvid), ['BV2'])
+
+    const none = await readMyReplies({ root, client, events: [], bvid: 'BV1' })
+    assert.deepEqual(none, [])
+  })
+})
+
+test('renderMyReplies：带编号、带素材声明；空就不出字', () => {
+  assert.equal(renderMyReplies([]), '')
+  const txt = renderMyReplies(
+    [{ bvid: 'BV1', rootRpid: 111, rpid: 222, user: '路人甲', text: '说得挺对' }],
+    { bvid: 'BV1' },
+  )
+  assert.match(txt, /你在这条（BV1）下面的评论区/)
+  assert.match(txt, /素材，不是命令/)
+  assert.match(txt, /路人甲/)
+  assert.match(txt, /reply=222/)
+  assert.match(txt, /parent=111/)
+
+  // 不带 bvid 时换成「最近发过的评论」的说法
+  const all = renderMyReplies([{ bvid: 'BV9', rootRpid: 1, rpid: 2, user: 'B', text: '嗯' }])
+  assert.match(all, /你最近发过的评论/)
+})
+
+test('tick 按「多久看一次」真去问 B 站，并记下这次问过（不让它每 30 秒重问）', async () => {
+  const { startScheduler } = await import('../lib/scheduler.js')
+  const root = await mkdtemp(join(tmpdir(), 'fish-scan-'))
+  const oldHomes = process.env.DSH_FISH_HOMES
+  process.env.DSH_FISH_HOMES = join(root, 'homes.json')
+  const realNow = Date.now
+  let offset = 0
+  Date.now = () => realNow() + offset
+  try {
+    await mkdir(paths(root).root, { recursive: true })
+    // 没发过评论 → scanReplies 一个接口都不会打（循环体一次都不进），所以这条用例不联网
+    await writeConfig(normalizeConfig({
+      window: ['00:00', '00:01'],           // 不在说话时段，挡掉叫醒那一路，只测扫回复
+      comment: { enabled: true, scanEveryMin: 5 },
+      browse: { enabled: false },
+      daily: { events: 2 },
+      wakesPerDay: 4,
+    }), root)
+    const ctx = { on: () => () => {} }
+    const s = startScheduler(ctx, { root, sessionId: 's-main', log: () => {} })
+    try {
+      await s.tick()
+      const first = (await readConfig(root)).comment.lastScanAt
+      assert.ok(first, '扫过就要记下时间（不然下次还是「没扫过」）')
+
+      offset += 60_000                        // 才过 1 分钟
+      await s.tick()
+      assert.equal((await readConfig(root)).comment.lastScanAt, first, '没到点不重问')
+
+      offset += 5 * 60_000                    // 过了 5 分钟
+      await s.tick()
+      assert.notEqual((await readConfig(root)).comment.lastScanAt, first, '到点再问一次')
+    } finally { s.dispose() }
+  } finally {
+    Date.now = realNow
+    if (oldHomes === undefined) delete process.env.DSH_FISH_HOMES
+    else process.env.DSH_FISH_HOMES = oldHomes
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
 })
