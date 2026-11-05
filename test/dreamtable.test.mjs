@@ -16,6 +16,7 @@ import {
   TABLE_MIN,
   hoursSinceLastWake,
   renderTable,
+  staleForDesk,
   staleLines,
   tableFor,
 } from '../lib/dreamtable.js'
@@ -117,6 +118,13 @@ test('tableFor 的三道门：今天记过梦不摆、今天已经摆过不摆�
   assert.equal(tableFor({ rows, gapHours: 20 }), tableFor({ rows, gapHours: 20, shownToday: false }))
   assert.equal(tableFor({ rows, gapHours: 20, shownToday: true }), '')
   assert.equal(tableFor({ rows, gapHours: 20, dreamedToday: true }), '')
+})
+
+test('摆料那一轮旧句子只出现一次：tableText 非空时桌子不再收 stale', () => {
+  const rows = rowsOf(4)
+  assert.equal(staleForDesk('这次隔了 9 个小时。\n- 「一句旧的」', rows).length, 0)
+  assert.deepEqual(staleForDesk('', rows), rows)
+  assert.deepEqual(staleForDesk(undefined, rows), rows)
 })
 
 test('上一次叫醒到现在的小时数按 wake meta 算', () => {
