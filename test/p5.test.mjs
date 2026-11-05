@@ -83,7 +83,7 @@ test('在上网时段内会真的去取素材（证明闸门不是永远关着�
     const client = new Proxy({}, {
       get: (_t, k) => (...a) => { calls.push(String(k)); return { ok: false, note: 'stub' } },
     })
-    const cfg = normalizeConfig({ browse: { window: ['09:00', '18:00'] } })
+    const cfg = normalizeConfig({ browse: { enabled: true, window: ['09:00', '18:00'] } })
     await lookBeforeWake(root, { name: '测试' }, cfg, '2026-10-23', {
       client,
       now: new Date(2026, 9, 23, 10, 0, 0),

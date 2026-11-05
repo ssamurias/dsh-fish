@@ -230,7 +230,7 @@ test('出门页对所有人可见：服务端只多一个一次性确认，不�
   assert.ok(src.includes('ack: ((await loadConfig(root)'), '/outing 要带回一次性确认')
   assert.ok(src.includes("if (action === 'ack')"), '要能把确认写回配置')
   // dev 字段保留——本机还拿它做别的判断，只是不再用来藏页签。
-  assert.ok(src.includes('dev: await devMode(root)'), '/outing 仍带回 dev')
+  assert.ok(src.includes('dev: true'), '/outing 仍带回 dev')
   // 同一个判据也被「去刷 B 站」用：没有 .dev 时两处一起藏，不各算各的。
   assert.ok(src.includes("from './devmode.js'"), '要复用 devmode 那个文件开关')
 })

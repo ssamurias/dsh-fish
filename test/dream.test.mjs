@@ -167,7 +167,7 @@ test('长梦与空梦都写不进去', async () => withRoot(async (root) => {
   assert.equal(DREAM_REFS_MAX, 6)
 }))
 
-test('/dream 路由：没有 .dev 就 404，有 .dev 才看得到', async () => withRoot(async (root) => {
+test('/dream 路由：0.9.0 起公开，没有 .dev 也读得到', async () => withRoot(async (root) => {
   seed(root, line('ev_a', T0))
   await writeDream(root, { text: '梦里那扇窗还开着。', refs: ['ev_a'] })
 
@@ -198,10 +198,7 @@ test('/dream 路由：没有 .dev 就 404，有 .dev 才看得到', async () => 
     return { status, json: text ? JSON.parse(text) : null }
   }
 
-  const closed = await call()
-  assert.equal(closed.status, 404, '公开版不能读到梦')
-
-  writeFileSync(join(root, '.dev'), 'local dev\n', 'utf8')
+  // 0.9.0 起梦是公开能力：没有 .dev 也读得到。
   const open = await call()
   assert.equal(open.status, 200, JSON.stringify(open.json))
   assert.equal(open.json.total, 1)
@@ -211,13 +208,12 @@ test('/dream 路由：没有 .dev 就 404，有 .dev 才看得到', async () => 
   assert.equal(open.json.items[0].sources[0].text, '今天想起一件事。')
 }))
 
-test('她得知道自己有 her_dream，也只在本机实验里知道', () => {
+test('她得知道自己有 her_dream（0.9.0 起对所有人）', () => {
   assert.ok(HER_TOOLS.includes('her_dream'), '本机白名单里要有它')
   assert.match(DREAM_BRIEF, /her_dream/)
   const selfdoc = readFileSync(new URL('../lib/selfdoc.js', import.meta.url), 'utf8')
   assert.match(selfdoc, /DREAM_BRIEF/)
-  assert.match(selfdoc, /dream \? \[DREAM_BRIEF/, '身份文档要按 .dev 决定挂不挂')
+  assert.match(selfdoc, /DREAM_BRIEF/, '身份文档要念到它')
   const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.match(client, /梦（本机实验）/, '卡片只在开发副本里出现')
-  assert.match(client, /state\?\.dev === true/, '卡片要按 dev 判据渲染')
+  assert.match(client, /group\('梦'/, '设置页有梦那张卡')
 })

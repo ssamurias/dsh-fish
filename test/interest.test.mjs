@@ -67,7 +67,7 @@ test('两周前的老话题：分量随半衰掉下去（但还认得出来）',
 test('摆到桌上只有一句话，不带分数与次数', () => {
   const items = interestOf([said('我在想那只猫到底去过哪里', 1), said('我在想那只猫到底去过哪里', 2)], NOW)
   const line = renderInterest(items)
-  assert.equal(line, '最近你总回到「我在想那只猫到底去过哪里」这件事上。')
+  assert.equal(line, '你最近总说到「我在想那只猫到底去过哪里」。')
   assert.doesNotMatch(line, /\d/)
 })
 

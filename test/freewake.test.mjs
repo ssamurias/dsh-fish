@@ -93,12 +93,11 @@ test('摆料那一轮不摆世界：只有 think 和普通叫醒才看 B 站、�
 test('叫醒拼装处真的按这个判据走：世界在门内，工具常量在门外', () => {
   const here = dirname(fileURLToPath(import.meta.url))
   const src = readFileSync(join(here, '..', 'lib', 'scheduler.js'), 'utf8')
-  assert.match(src, /const showWorld = keepWorldOnWake\(free\) \|\| deps\.forceBrowse === true/)
-  assert.match(src, /showWorld \? await lookBeforeWake/)
-  const gate = src.indexOf('if (showWorld) {')
+  // 0.9.0（用户 m02562）：刷站不再挂在唤醒上，所有醒来都不摆世界。
+  assert.match(src, /const showWorld = false/)
   const desk = src.indexOf('const desk = deskFor({')
   const tool = src.indexOf("parts.push('', TOOL_ASK_NOTE)")
-  // 桌子在门内，工具句在门外——工具句不是活，是她世界里的常量。
-  assert.ok(gate > 0 && desk > gate, '桌子应该在 showWorld 门内')
+  // 桌子照摆，工具句在桌子之后——工具句不是活，是她世界里的常量。
+  assert.ok(desk > 0, '桌子还在')
   assert.ok(tool > desk, '工具句应该在桌子之后、仍然每次都说')
 })

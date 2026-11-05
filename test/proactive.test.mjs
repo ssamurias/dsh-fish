@@ -265,11 +265,10 @@ test('写下的一句会落成 utterance（带「她主动说」前缀）并留�
   assert.match(meta.text, /care/)
 }))
 
-test('默认白名单里没有 her_say；只有 .dev 下注册了才看得见', () => {
-  assert.equal(HER_TOOLS.includes('her_say'), false, '公开版不能有这个工具')
+test('her_say 在 0.9.0 起对所有人注册', () => {
   const src = readFileSync(new URL('../lib/proactive.js', import.meta.url), 'utf8')
   assert.match(src, /name: 'her_say'/)
-  assert.match(src, /devModeSync/, '注册要跟提示词、界面共用同一个 .dev 判据')
+  assert.match(src, /TOOL_ASK_NOTE/)
 
   const registered = []
   const ctx = { tools: { register: (t) => registered.push(t) } }
