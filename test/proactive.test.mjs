@@ -333,11 +333,15 @@ test('meta:watched 也不刷新 idle：她看了条视频，不等于她说过�
   assert.equal(countsForIdle(watched), false)
   const idle = idleHoursOf([watched, answer], now)
   assert.ok(idle > 17.5, '应该是 17.5 小时，不是 0.01 小时')
-  // 反过来：几种「真的有人说话」的事件都要算，尤其 seen:（他来过）。
+  // 反过来：几种「真的有人说话」的事件都要算。
   for (const type of ['utterance', 'revise', 'heard', 'voice', 'ask', 'answer', 'dream']) {
     assert.equal(countsForIdle(ev({ type })), true, `${type} 应该算`)
   }
-  assert.equal(countsForIdle(ev({ type: 'meta', text: `seen:${new Date(now).toISOString()}` })), true, 'seen: 算他来过')
+  // 2026-11-05 真机（用户 m02797）：`seen:` 不算。它会被别的会话的用户活动误写，
+  // 一写就把 idle 清零 → `minIdleHours` 永远不满足 → 主动搭话一次都开不出来。
+  assert.equal(countsForIdle(ev({ type: 'meta', text: `seen:${new Date(now).toISOString()}` })), false, 'seen: 不进 idle（会被别的会话误写）')
+  const seenOnly = [ev({ id: 'ev_s', type: 'meta', text: `seen:${new Date(now - 2_000).toISOString()}` })]
+  assert.equal(idleHoursOf(seenOnly, now), Infinity, '只有 seen: 时等于「一直没有话落进她房间」')
   assert.equal(countsForIdle(ev({ type: 'meta', text: `diary:2026-10-31` })), false, 'diary 不算')
   assert.equal(countsForIdle(ev({ type: 'meta', text: `sched:2026-11-01` })), false, 'sched 不算')
 })
