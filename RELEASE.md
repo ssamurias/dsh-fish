@@ -69,6 +69,7 @@ git push origin main
 ## 4. 发 npm 包（需要你手动跑，可整段复制）
 
 > 这一段是给维护者本人执行的：登录和 2FA 都在你的终端里完成，agent 不代跑发布。
+> **本机的 2FA 是 Windows 系统密钥（安全密钥）**，所以每次发布都要走一遍完整登录流程；发完后 npm 的 CDN 大约要 **3 分钟** 才看得到新版本，核对命令等一会儿再跑。
 > **本机 npm 默认 registry 是 `https://registry.npmmirror.com`，所以每条命令都必须显式带 `--registry=https://registry.npmjs.org/`**，否则会得到看似「包不存在 / 没权限」的 E404。
 
 ```bash
@@ -84,7 +85,7 @@ npm whoami --registry=https://registry.npmjs.org/
 # 2) 发布（开了 2FA 就在末尾加 --otp=123456）
 npm publish --registry=https://registry.npmjs.org/
 
-# 3) 核对：应为 0.9.x 和 latest -> 0.9.x
+# 3) 核对：等约 3 分钟再跑，应为 0.9.x 和 latest -> 0.9.x
 npm view @ssamurias/dsh-fish version dist-tags --registry=https://registry.npmjs.org/
 ```
 
