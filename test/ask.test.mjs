@@ -251,3 +251,64 @@ test('卡片回来的是对象还是字符串都要认出来，认不出也别�
   assert.equal(picked([{ id: 'q', custom: ' 我自己写 ' }], 'q'), '我自己写')
   assert.equal(picked([], 'q'), '')
 })
+
+// ---- issue #35：他直接在卡片里打字回答，不能当成「没答」 ----
+// 宿主（dsh-user-questions 0.2.2-rc.1）约定：custom 覆盖选项时 `selected` 传空数组。
+// 旧代码 `Array.isArray(one?.selected) ? one.selected[0] : one?.custom` 拿到 `[]` 就取
+// `undefined`，永远走不到 custom —— 于是手打的答案一律记成 NO_MATCH，事件流里没有 answer 行。
+// 另一半：`raw` 以前把整段回执 JSON 写进日志，他手打的私事就那样落进 dsh-fish.log。
+
+/** 假宿主：够了 ask.js 需要的三样——工具注册、live agent、提问服务。 */
+function askCtx(answer) {
+  const regs = new Map()
+  const agent = { id: 'session-abc' }
+  return {
+    regs,
+    tools: { register: (spec) => { regs.set(spec.name, spec); return () => regs.delete(spec.name) } },
+    get: (name) => (name === 'agents'
+      ? { get: () => agent, list: () => [agent], roots: () => [agent] }
+      : undefined),
+    userQuestions: { ask: async ({ questions }) => answer(questions) },
+  }
+}
+
+test('卡片里手打的答案能认出来，并落一条 answer（issue #35）', async () => withRoot(async (root) => {
+  const { registerAsk } = await import('../lib/ask.js')
+  // 选项都不选、直接打字：宿主回的是 selected: [] + custom
+  const ctx = askCtx(([q]) => ({ answers: [{ id: q.id, selected: [], custom: '可以' }] }))
+  registerAsk(ctx, { root })
+  const tool = ctx.regs.get('ask_owner')
+  assert.ok(tool, '工具必须注册')
+
+  const out = await tool.execute(
+    { question: '今天能不能歇一天。', kind: 'rest' },
+    { agent: { session: { id: 'session-abc' } } },
+  )
+  assert.equal(out.ok, true)
+  assert.equal(out.said, 'approved', '手打的「可以」= 选了第一个选项（修之前这里是空串）')
+
+  const { events } = await readEvents(root)
+  const answer = events.find((e) => e.type === 'answer')
+  assert.ok(answer, '事件流里要有 answer 行（修之前这里没有）')
+  assert.equal(answer.ask.verdict, 'approve')
+}))
+
+test('认不出的回答不落地原文：日志只留回执形状（issue #35）', async () => withRoot(async (root) => {
+  const { registerAsk } = await import('../lib/ask.js')
+  const secret = '我今天心情很不好，因为家里那件事，不想细说'
+  const ctx = askCtx(([q]) => ({ answers: [{ id: q.id, selected: [], custom: secret }] }))
+  registerAsk(ctx, { root })
+  const tool = ctx.regs.get('ask_owner')
+
+  const out = await tool.execute(
+    { question: '能不能换个作息。', kind: 'time', options: ['可以', '这次不行'] },
+    { agent: { session: { id: 'session-abc' } } },
+  )
+  assert.equal(out.ok, true, '认不出也是一次有效的提问')
+  assert.equal(out.said, '', '认不出就说认不出，不冒充答过')
+
+  const log = readFileSync(join(root, 'logs', 'dsh-fish.log'), 'utf8')
+  assert.ok(log.includes('回执形状'), '日志里要有排障用的形状摘要')
+  assert.ok(!log.includes(secret), '他手打的原文不许进日志')
+  assert.ok(log.includes(`"custom":${secret.length}`), '但要留下长度，够定位是哪种形状')
+}))

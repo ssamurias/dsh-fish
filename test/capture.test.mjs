@@ -7,6 +7,7 @@ import { join } from 'node:path'
 
 import { registerCapture, debrief } from '../lib/capture.js'
 import { readEvents, paths, writeConfig } from '../lib/store.js'
+import { saveChannel } from '../lib/channels.js'
 import { normalizeConfig } from '../lib/settings.js'
 import { deriveSelf } from '../lib/derive.js'
 
@@ -216,5 +217,37 @@ test('旅行日记：出门那趟写的日记带趟次标记，家里写的不�
       '出门那篇要带趟次标记',
     )
     assert.ok(metas.some((t) => /^diary:\S+$/.test(t) && !t.includes('trip:')), '家里那篇不带趟次标记')
+  })
+})
+
+// ---- issue #34：群里那轮她写东西，不能记成「他来过」 ----
+// 窗口外写 growth_commit 会补一条 `seen:`（冷落检测要的「他在场」证据）。
+// 但群房那一条会话不是他——群友说几百句也能把它刷成「今天聊过」，
+// 于是他一周没露面、面板还显示今天聊过。AGENTS.md §7.2 第 2 条：外客不动生命体征。
+const seenCount = async (root) => (await readEvents(root)).events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length
+
+test('群房里她写东西不记 seen:；家里那间照记（issue #34）', async () => {
+  await withRoot(async (root) => {
+    const ctx = fakeCtx()
+    registerCapture(ctx, { root })
+    const tool = ctx.regs.get('growth_commit')
+
+    // 一间群房，会话 id 是 s-group
+    await saveChannel(root, { channel: 'qq-group:1', scene: 'group', sessionId: 's-group', title: '摸鱼群' })
+
+    const inGroup = await tool.execute(
+      { type: 'utterance', text: '群里有人说这个游戏不错。' },
+      { agent: { session: { id: 's-group' } } },
+    )
+    assert.equal(inGroup.ok, true, '群里也要能写')
+    assert.equal(await seenCount(root), 0, '群房那轮不算他来过（修之前这里会 +1，冷落检测就废了）')
+
+    // 对照组：书房那条会话照旧记
+    const atHome = await tool.execute(
+      { type: 'utterance', text: '晚上想早点睡。' },
+      { agent: { session: { id: 's-home' } } },
+    )
+    assert.equal(atHome.ok, true)
+    assert.equal(await seenCount(root), 1, '家里那条会话照记 seen:')
   })
 })

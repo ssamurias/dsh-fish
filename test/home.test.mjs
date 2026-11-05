@@ -59,7 +59,7 @@ function fakeCtx({ hasRegistry = true, registry = {}, presetReject = false, inde
         const ws = sessions.get(workspaceId)
         const id = `ses-${created.length}`
         listed.push(id)
-        if (ws && !indexLag) ws.sessionIds.push(id)
+        if (ws && !indexLag) ws.sessionIds.unshift(id)
         return { sessionId: id, ...(agentPreset ? { agentPreset } : {}) }
       },
       list: async () => ({ items: listed.map((id) => ({ sessionId: id })) }),
@@ -571,6 +571,28 @@ test('记着的那条归档了，同屋还有另一条活的：认那一条，�
     const h = await homeStatus(root)
     assert.equal(h.sessionId, 'ses-other', 'home.json 要改指过去，重启后才不会又判一次')
     assert.equal(String(h.status), '', '认了新的之后不能还挂着 archived 标记')
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('同屋有两条以上活会话：认最新那条，不是最旧的（issue #33）', async () => {
+  // 宿主建会话时是 `sessionIds: [新id, ...旧的]`，往**前**插，头部才是最新的。
+  // 以前这里取 `live[live.length - 1]`，同一屋里有多条活会话时认回来的是最旧那条。
+  const root = await tmpRoot()
+  try {
+    const { ctx, sessions, created, reg } = fakeCtx()
+    const a = await bootstrapHome(ctx, { root })
+    assert.equal(a.ok, true, a.why)
+    const ws = sessions.get(a.wsId)
+
+    // home.json 指的那条被归档，同屋还留着两条活的：头部是后建的，尾部是更早的
+    reg.archivedSessionIds = [a.sessionId]
+    ws.sessionIds = ['ses-newer', 'ses-older']
+
+    const r = await ensureTalkSession(ctx, { root, wsId: a.wsId })
+    assert.equal(r.ok, true, r.why)
+    assert.equal(r.sessionId, 'ses-newer', '要认最新的那条，不是最旧的')
+    assert.equal(created.length, 1, '不该再建一条会话')
+    assert.equal((await homeStatus(root)).sessionId, 'ses-newer')
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
 

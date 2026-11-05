@@ -285,3 +285,64 @@ test('withFileLock：fn 抛错也要把锁收掉', async () => {
   await assert.rejects(withFileLock(lock, async () => { throw new Error('boom') }), /boom/)
   await assert.rejects(fs.stat(lock), /ENOENT/)
 })
+
+// ---- issue #37：Windows 上 open(...,'wx') 会在文件正被删除时抛 EPERM ----
+// 真机表现：换会话时 `ensureTalkSession` 偶尔直接返回「建会话的锁没拿到：EPERM…」，
+// 这次轮换就此失败；tenant.test.mjs 那条并发用例也是时好时坏（25 次里红 2 次）。
+// 修法是 EPERM 走一条**独立的、受 timeout 约束**的重试分支（不能并进 EEXIST：
+// 那里 stat 失败判 stale 后 continue 不看 timeout，真权限错误会死循环）。
+test('withFileLock：Windows 的 EPERM 是暂时性的，要重试而不是直接抛', async () => {
+  const root = await tmpRoot()
+  const lock = join(root, '.lock')
+  const realOpen = fs.open
+  let hits = 0
+  // 不管在哪个平台都把前两次 open 打成 EPERM：win32 上应当重试成功，
+  // POSIX 上应当原样抛出去（那里 EPERM 是真没权限）。
+  fs.open = async (...args) => {
+    if (hits < 2) {
+      hits += 1
+      const e = new Error('EPERM: operation not permitted, open')
+      e.code = 'EPERM'
+      throw e
+    }
+    return realOpen.apply(fs, args)
+  }
+  let ran = 0
+  try {
+    if (process.platform === 'win32') {
+      const out = await withFileLock(lock, async () => { ran += 1; return 'ok' }, { timeout: 2_000, wait: 5 })
+      assert.equal(out, 'ok', '两次 EPERM 之后要能拿到锁（修之前这里直接抛出去）')
+      assert.equal(hits, 2, '确实碰到了那两次 EPERM')
+      assert.equal(ran, 1, '临界区只进一次')
+      await assert.rejects(fs.stat(lock), /ENOENT/, '拿到之后锁也要收掉')
+    } else {
+      await assert.rejects(
+        withFileLock(lock, async () => { ran += 1; return 'ok' }, { timeout: 2_000, wait: 5 }),
+        /EPERM/,
+        'POSIX 上 EPERM 是真没权限：原样抛，不许偷偷重试 8 秒',
+      )
+      assert.equal(ran, 0, '非 win32 不该进临界区')
+    }
+  } finally {
+    fs.open = realOpen
+  }
+})
+
+test('withFileLock：EPERM 一直不停时受 timeout 约束，不死循环', async () => {
+  if (process.platform !== 'win32') return
+  const root = await tmpRoot()
+  const lock = join(root, '.lock')
+  const realOpen = fs.open
+  fs.open = async () => {
+    const e = new Error('EPERM: operation not permitted, open')
+    e.code = 'EPERM'
+    throw e
+  }
+  const t0 = Date.now()
+  try {
+    await assert.rejects(withFileLock(lock, async () => 'never', { timeout: 120, wait: 10 }), /EPERM/)
+    assert.ok(Date.now() - t0 < 5_000, '到点就抛，不能一直重试')
+  } finally {
+    fs.open = realOpen
+  }
+})

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeConfig, DEFAULTS, inWindow, dateKey, pickWakeTime, updateConfig, loadConfig } from '../lib/settings.js'
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -136,4 +136,29 @@ test('白名单校验：拼错的名字与不存在的工具都不许过，拿�
 
   // 空输入永远合法（留空 = 不额外给）
   assert.equal(validateToolNames('', known).ok, true)
+})
+
+// ---- issue #38：带 BOM 的 JSON 不能被当成坏文件 ----
+// PowerShell 5.1 的 `Set-Content -Encoding UTF8` 与记事本都会在开头写一个 U+FEFF。
+// 以前 `readJson` 直接 JSON.parse → SyntaxError → 文件被改名成 `.corrupt.<时间>`，
+// 配置回默认值（看起来像「设置全丢了」）、owner.json 变 null、home.json 变成新会话。
+test('配置文件带 UTF-8 BOM 也要读得出来，不能当成坏文件改名', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-bom-'))
+  try {
+    const body = JSON.stringify({ growthDays: 66, diary: { visible: true } }, null, 2)
+    await writeFile(join(root, 'config.json'), '\uFEFF' + body, 'utf8')
+
+    const r = await loadConfig(root)
+    assert.equal(r.fresh, false, '读到了文件，不是「没有配置文件」')
+    assert.equal(r.broken, false, '也不是「文件坏了退回默认」')
+    assert.equal(r.config.growthDays, 66, '值要读出来（修之前这里会退回默认 30）')
+    assert.equal(r.config.diary.visible, true)
+
+    // 关键：不能被改名成 .corrupt.*——那等于把她好好的设置封存掉
+    const files = await readdir(root)
+    assert.deepEqual(files.filter((f) => f.includes('.corrupt.')), [], `不该产生坏文件副本：${files.join(', ')}`)
+    assert.ok(files.includes('config.json'), '原文件名要还在')
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
 })

@@ -176,3 +176,66 @@ test('折叠按天算，不同日期的 quiet 各留一条', () => {
   // 昨天那条不在 today 里，本来就进不了时间线；今天两条折叠成一条
   assert.equal(st.timeline.filter((t) => t.text.includes('没有该问的事')).length, 1)
 })
+
+// ---- issue #32：聊天行不许挤占时间线，也不许把 idle 混进去 ----
+// `turns.js` 在她「答他的话」时写进事件流的那些行带 `flags: ['uncommitted']`。
+// 以前它们和「她自己认下的判断」一样记成 say：一次 wake 加 45 句聊天，
+// 时间线 40 条全是「说了：…」；`idleWakes` 也从 1 变 0（她明明什么正事都没做）。
+/** 一条对话行：她答他的话，不是自己认下的判断 */
+function chat(msAgo, text = '嗯，我在。') {
+  return {
+    id: 'ev_chat' + msAgo,
+    ts: new Date(NOW.getTime() - msAgo).toISOString(),
+    type: 'utterance',
+    text,
+    flags: ['uncommitted'],
+  }
+}
+
+test('聊了 N 句折成一行，不算「说」，也不让那一块变成「干了事」（issue #32）', () => {
+  const events = [
+    meta(60 * MIN, `wake:${DK} nightly`),
+    chat(50 * MIN, '在的。'),
+    chat(49 * MIN, '你问吧。'),
+    chat(48 * MIN, '这个我不太确定。'),
+    chat(47 * MIN, '嗯。'),
+  ]
+  const st = deriveStatus({ events, config: cfg, now: NOW })
+
+  assert.equal(st.today.chat, 4, '四句聊天单独计数')
+  assert.equal(st.today.said, 0, '聊天不是「她写过几句自己的判断」')
+  assert.equal(st.today.idleWakes, 1, '光聊天 = 这一块什么正事都没做（修之前这里是 0）')
+
+  const all = st.timeline.map((t) => t.text).join(' | ')
+  assert.ok(all.includes('聊了 4 句'), `要折成一行：${all}`)
+  assert.ok(!all.includes('说了：「在的。」'), '不许逐句展开成「说了：…」')
+  assert.equal(st.timeline.filter((t) => t.text.includes('聊了')).length, 1, '只留一行')
+})
+
+test('她自己认下的判断照旧算「说」，和聊天分得开（issue #32）', () => {
+  const st = deriveStatus({
+    events: [
+      meta(60 * MIN, `wake:${DK} nightly`),
+      chat(50 * MIN),
+      say(45 * MIN, '晚上比白天安静。'),
+      chat(40 * MIN),
+    ],
+    config: cfg,
+    now: NOW,
+  })
+  assert.equal(st.today.chat, 2)
+  assert.equal(st.today.said, 1, '不带 uncommitted 的那条才是「说」')
+  assert.equal(st.today.idleWakes, 0, '有真事做了，这一块不算发呆')
+  const all = st.timeline.map((t) => t.text).join(' | ')
+  assert.ok(all.includes('说了：「晚上比白天安静。」'), all)
+})
+
+test('聊天之后 phase 是「在想怎么回你」，不是「在写东西」', () => {
+  const st = deriveStatus({
+    events: [meta(60 * MIN, `wake:${DK} nightly`), chat(1 * MIN)],
+    config: cfg,
+    now: NOW,
+  })
+  assert.equal(st.phase, 'talking')
+  assert.equal(st.label, '在想怎么回你')
+})

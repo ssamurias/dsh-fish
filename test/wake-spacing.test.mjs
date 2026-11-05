@@ -280,6 +280,38 @@ test('turn/end 一直不来、她也不在忙：兜底把窗口和处境一起�
   })
 })
 
+// ---- issue #36：排队叫醒的处境不能被**别的回合**的 turn/end 收走 ----
+// 手动「叫她一次」时她正忙：投递走 agent.followup，宿主把它排进 next-turn，
+// 当前这一轮先 turn/end，再开真正醒来那一轮。以前的 watcher 认会话不认回合，
+// 于是那个 turn/end 一到就把 fish:wake 处境清掉——她真正醒来时处境是空的。
+// 修法：监听挂上之后必须先见到本条会话的 turn/start，之后的 turn/end 才算数。
+test('排队叫醒：前一轮的 turn/end 不许把处境收走，要等我们自己这一轮（issue #36）', async () => {
+  await withRoot(async (root) => {
+    const h = fakeHost()
+    const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
+    try {
+      await s.tick()
+      assert.equal(h.prompts.length, 1, '落点到了醒第一次')
+      const before = getWakeSection()
+      assert.match(before, /叫醒你的信号/, '投递时处境在')
+
+      // 上一轮（不是我们叫醒的这一轮）结束：没有 turn/start，不该算数
+      h.emit('turn/end')
+      assert.equal(getWakeSection(), before, '前一轮的 turn/end 把处境收走了（issue #36 的 bug）')
+      assert.equal(inWake(), true, '窗口也得还开着')
+
+      // 真正醒来那一轮
+      h.emit('turn/start')
+      assert.equal(inWake(), true, '我们这一轮开始了，窗口撑到它结束')
+      h.emit('turn/end')
+      assert.equal(getWakeSection(), '', '这一轮结束才撤处境')
+      assert.equal(inWake(), false, '窗口跟着关上')
+    } finally {
+      s.dispose()
+    }
+  })
+})
+
 test('消息没送进去：窗口当场关上', async () => {
   await withRoot(async (root) => {
     const h = fakeHost()
