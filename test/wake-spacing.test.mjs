@@ -163,7 +163,15 @@ test('落点之后不再一分钟一个地连着叫；第二次等时间到、�
 test('叫醒准备的几秒里她刚好开始了别的一轮：等那一轮说完再挂处境', async () => {
   await withRoot(async (root) => {
     let h
-    h = fakeHost(async () => { h.emit('turn/start'); setTimeout(() => h.emit('turn/end'), 60) })
+    // 一次叫醒调两次 resolveAgent（探活、投递），这个时机只该在探活那一拍发生。
+    // 发两遍的话，第二个 turn/end 要等本条结束后才来，这次叫醒的窗口就漏进后面的用例。
+    let fired = false
+    h = fakeHost(async () => {
+      if (fired) return
+      fired = true
+      h.emit('turn/start')
+      setTimeout(() => h.emit('turn/end'), 60)
+    })
     const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
     try {
       await s.tick()
