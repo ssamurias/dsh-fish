@@ -16,6 +16,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 
 import { appendEvent, readEvents } from '../lib/store.js'
 import { validateEvent, normalizeScene, SCENES } from '../lib/schema.js'
@@ -499,5 +500,76 @@ test('guest 但没传 room：私聊仍回书房，只是正文标外客、不碰
     const { events } = await readEvents(root)
     assert.equal(events.filter((e) => String(e.text).startsWith('seen:')).length, 0)
     assert.equal((await homeStatus(root)).turns, 0)
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+// ------------------------------------------------------------------ 真走 HTTP 路由
+//
+// 桥不装在本机也能测：桥对插件做的唯一一件事就是 POST /dsh-fish/say。
+// 这条用例从路由入口收 body、读 JSON、再交给 sayToHer，守的是「桥发什么，
+// 插件就落到哪儿」——中间的解析、白名单、字段透传都在这一层，漏了它，
+// 单测全绿也可能因为路由没透传 room 而白开一间房。
+
+function fakeObserveCtxWithSessions() {
+  const { ctx: base, calls } = fakeCtx()
+  const routes = []
+  const ctx = {
+    ...base,
+    get(k) {
+      if (k === 'webServer') return { register: (def) => { routes.push(def); return () => {} } }
+      if (k === 'connection') return { requestRejection: () => null }
+      return base.get(k)
+    },
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+  }
+  return { ctx, routes, calls }
+}
+
+async function postRoute(route, body) {
+  let status = 0
+  let out = ''
+  const res = {
+    writeHead: (s) => { status = s },
+    setHeader: () => {},
+    end: (s) => { out = String(s ?? '') },
+  }
+  const req = Readable.from([Buffer.from(JSON.stringify(body), 'utf8')])
+  req.method = 'POST'
+  req.url = route.path
+  req.headers = { 'content-type': 'application/json' }
+  await route.handler(req, res)
+  return { status, body: out }
+}
+
+test('POST /dsh-fish/say：桥只发 HTTP 就能开房，room/title/guest 原样落地', async () => {
+  const root = await tmpRoot()
+  try {
+    await seed(root)
+    const { ctx, routes, calls } = fakeObserveCtxWithSessions()
+    registerObserve(ctx, { root, version: '9.9.9' })
+    const route = routes.find((r) => String(r.path || '').endsWith('/say'))
+    assert.ok(route, '必须有 /dsh-fish/say 路由')
+
+    const { status, body } = await postRoute(route, {
+      text: '你好呀', channel: 'qq:dm:42', scene: 'private', room: 'channel',
+      guest: true, speaker: '阿明', title: '阿明',
+    })
+    assert.equal(status, 200, '桥发来的合法请求一律 200，被规则拦下也是 200')
+    const d = JSON.parse(body)
+    assert.equal(d.ok, true)
+    assert.equal(d.scene, 'private', 'room=channel 不改变场次')
+    assert.equal(d.sessionId, 's-room-1', '私聊 + room=channel 要另开一间，不能挤进书房')
+
+    const saved = await findChannel(root, 'qq:dm:42')
+    assert.match(saved.title, /私聊（阿明）/, 'title 字段要进侧栏标题')
+
+    const sent = calls.find((c) => c.op === 'prompt' && c.req?.sessionId === d.sessionId && String(c.req?.requestId).startsWith('say-'))
+    const text = sent?.req?.content?.[0]?.text ?? ''
+    assert.match(text, /不是他/, 'guest 要标成外客')
+    assert.match(text, /阿明/, 'speaker 要拼进正文')
+
+    const { events } = await readEvents(root)
+    assert.equal(events.filter((e) => String(e.text).startsWith('seen:')).length, 0, '外客不算他来过')
+    assert.equal((await homeStatus(root)).turns, 0, '外客不涨轮数')
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
