@@ -117,6 +117,17 @@ async function withRoot(fn) {
   }
 }
 
+test('wakeRetryBlocked：第一次失败很快再试，之后隔开，手动失败不算账', () => {
+  const dk = '2026-10-29'
+  const fail = (t, why = '会话没了') => ({ type: 'meta', text: `wakefail:${dk} ${why}`, ts: new Date(t).toISOString() })
+  const now = at(22, 0)
+  assert.equal(wakeRetryBlocked([fail(now - 6 * 60_000)], dk, now), false, '第一次失败，5 分钟后就能再试')
+  assert.equal(wakeRetryBlocked([fail(now - 60 * 60_000), fail(now - 6 * 60_000)], dk, now), true, '第二次之后要隔够 45 分钟')
+  assert.equal(wakeRetryBlocked([fail(now - 60 * 60_000), fail(now - 46 * 60_000)], dk, now), false)
+  const manual = [fail(now - 60_000, '手动 会话没了'), fail(now - 120_000, '手动 会话没了'), fail(now - 180_000, '手动 会话没了')]
+  assert.equal(wakeRetryBlocked(manual, dk, now), false, '手动失败不算定时的账')
+})
+
 test('wakeRetryBlocked：刚失败过要隔开，一天最多试三次，别的日子不算', () => {
   const dk = '2026-10-29'
   const fail = (t, day = dk) => ({ type: 'meta', text: `wakefail:${day} 屋子没接上`, ts: new Date(t).toISOString() })
