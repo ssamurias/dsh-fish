@@ -44,6 +44,36 @@ test('questions 配额用满后不再选 ask 类模板', () => {
   if (capped) assert.equal(capped.template.asks, false, '配额用满后只能选不问的模板')
 })
 
+test('notice_one：没有素材也能长出一条判断（stage 1 补位卡）', () => {
+  const t = CATALOG.find((x) => x.id === 'notice_one')
+  assert.ok(t, '卡池里要有这张补位卡')
+  assert.equal(t.stage, 1)
+  assert.equal(t.asks, false, '它不能变成「请她回答」')
+  assert.equal(t.once, false)
+  assert.equal(t.repeat.everyDays, 2)
+  assert.equal(t.cond(model({ beliefCount: 0 })), false, '第 1 天让给 first_bet')
+  assert.equal(t.cond(model({ beliefCount: 1 })), true)
+})
+
+test('stage 1 第 3 天：一次性卡用掉、test_first 冷却时由 notice_one 补位', () => {
+  const cfg = normalizeConfig({})
+  const now = Date.parse('2026-10-23T21:00:00+08:00')
+  const m = model({
+    day: 3,
+    beliefCount: 3,
+    beliefs: [{ id: 'a', text: '我猜他喜欢安静', since: new Date(now - 2 * 86400000).toISOString() }],
+  })
+  const firedEvents = [
+    { type: 'meta', text: 'fired:why_here' },
+    { type: 'meta', text: 'fired:first_bet' },
+    { type: 'meta', text: 'fired:name_offer' },
+    { type: 'meta', text: 'fired:test_first', ts: new Date(now - 86400000).toISOString() },
+  ]
+  const r = pick(m, cfg, today(), firedEvents, { now })
+  assert.ok(r, '这一天不该没有候选')
+  assert.equal(r.template.id, 'notice_one')
+})
+
 test('没有候选时返回 null（不打扰是正确行为）', () => {
   // 2026-10-24 起可重复模板（repeat.everyDays）不再"用掉就没了"，
   // 所以这里让**每一条**模板都刚 fired 过：once 的算用掉，可重复的处在冷却期。
