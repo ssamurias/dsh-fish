@@ -583,6 +583,29 @@ test('领养人两格自带保存键，只提交这两格、不碰 cookie（2026
   assert.ok(src.includes("'保存 cookie'"), 'cookie 那颗键要改名，别和新键一起都叫「保存」')
 })
 
+// issue #52（ntbgy，2026-11-06，0.9.0 / macOS）：默认停在「手机扫码」页签时，页签分支里
+// 的一切都不渲染。于是「领养人验证」两格没有保存键；「测试 cookie 能不能说话」也长在
+// 「粘贴 cookie」那支里，而状态行偏偏让你去点它。两颗键都该落在页签之外，两个页签都点得到。
+test('扫码页签下也点得到保存与测试两颗键（issue #52）', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+
+  const atQrBranch = src.indexOf("owTab === 'qr'")
+  const atSharedRow = src.lastIndexOf("owNote ? h('span', { className: 'dim' }, owNote) : null")
+  const atClear = src.indexOf("'清除登录'", atSharedRow)
+  assert.ok(atQrBranch > 0 && atSharedRow > atQrBranch && atClear > atSharedRow, '页签分支与共用的那一行都要在')
+
+  // 页签分支里只留「保存 cookie」；保存两格、测试这两颗粒都得挪出去。
+  const branch = src.slice(atQrBranch, atSharedRow)
+  assert.ok(!branch.includes('onClick: saveOwnerIdentity'), '存两格的键不许回到页签分支里（扫码页签下不会渲染）')
+  assert.ok(!branch.includes('onClick: testOwner'), '测试键也不许只长在粘贴 cookie 那支里')
+  assert.ok(branch.includes('onClick: saveOwnerCard'), '「保存 cookie」还是留在粘贴 cookie 那支')
+
+  // 测试键挪到和「清除登录」同一行：那行在两个页签下都渲染。
+  const shared = src.slice(atSharedRow, atClear)
+  assert.ok(shared.includes('onClick: testOwner'), '测试键要和「清除登录」同在一行（页签之外）')
+  assert.ok(src.includes('点下面的「测试 cookie 能不能说话」'), '状态行的指路要和按钮对得上')
+})
+
 // ---------------------------------------------------------------------------
 // 2026-10-28 晚：用户 m00416
 // ---------------------------------------------------------------------------
