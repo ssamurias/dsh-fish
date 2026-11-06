@@ -125,7 +125,7 @@ test('配了 sendTools：只写正文不算开口，正文到不了人', async (
   assert.ok(!r.meta.includes('proactive-turn'))
   // 日志照实说，不说成「没什么要说的」
   const line = r.logs.find((l) => l.includes('没有开口')) ?? ''
-  assert.match(line, /只写了正文，没调发送工具/)
+  assert.match(line, /只写了正文，没发出去/)
   assert.doesNotMatch(line, /没什么要说的/)
 })
 
@@ -133,6 +133,7 @@ test('配了 sendTools：发送失败再写一句正文，也不算开口', asyn
   const r = await run({ sendTools: ['send_chat'] }, { tool: 'send_chat', isError: true, text: '发不出去，算了，等会儿再说吧。' })
   assert.ok(r.meta.includes('proactive-silent'))
   assert.ok(!r.meta.includes('proactive-turn'))
+  assert.match(r.logs.find((l) => l.includes('没有开口')) ?? '', /只写了正文，没发出去/)
 })
 
 test('没配 sendTools：正文还是算开口', async () => {
