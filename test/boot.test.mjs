@@ -4,7 +4,7 @@ import { mkdtemp, rm, stat, readdir, readFile, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { apply, name, inject } from '../lib/index.js'
+import { apply, name, inject, VERSION } from '../lib/index.js'
 import { readEvents, paths, writeConfig, appendEvent } from '../lib/store.js'
 import { normalizeConfig } from '../lib/settings.js'
 import { deriveSelf } from '../lib/derive.js'
@@ -92,6 +92,11 @@ test('插件元信息：名字与 inject', () => {
   // 2026-10-30（m02961）：可选服务不能写进 inject。cordis 的规则是「少一个就整个插件不启动」，
   // 而且不报错——一个只影响一条功能的服务，不该有让插件整个消失的权力。
   assert.ok(!inject.includes('userQuestions'), 'userQuestions 必须运行时探测，不能进 inject')
+})
+
+test('VERSION 和 package.json 的 version 一致（不许分叉）', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(VERSION, pkg.version, '发版时 lib/index.js 的 VERSION 要跟着改')
 })
 
 test('插件停用时收得干净：宿主只认 ctx.effect，定时器要停，只收一次', async () => {
