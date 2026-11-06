@@ -438,11 +438,14 @@ test('醒来后没开口的那几次：不占当天额度，但单独限次数�
 // deriveSelf 是 scheduler.js 静态 import 的，从外面数不了次数，耗时又不稳，不拿来断言。
 // 所以往事件流里放一条它读不了的行：revise 的 refs 不是数组时它会抛，
 // tick 接住后记一行 `proactive failed`。日志里有这一行，就是这一趟算过了。
-async function twoTicks(root, over) {
-  // 时段排到三小时之后：走不到日程后面那次 deriveSelf，日志里只剩 maybeProactive 这一处。
-  const h = new Date().getHours() + 3
+async function twoTicks(root, over, windowOverride) {
+  // 2026-11-06：主动性现在也要过「每天几点醒」这一关，所以默认把窗口排到
+  // 此刻前后一小时——tick 才会真的走到 maybeProactive。要测「窗口外不开口」
+  // 就显式传一个不覆盖此刻的窗口。
+  const h = new Date().getHours()
   const hh = (n) => `${String(n % 24).padStart(2, '0')}:00`
-  await writeConfig(normalizeConfig({ window: [hh(h), hh(h + 1)], ...over }), root)
+  const win = windowOverride ?? [hh(h - 1), hh(h + 1)]
+  await writeConfig(normalizeConfig({ window: win, ...over }), root)
   line(root, { id: 'ev_unreadable', type: 'revise', ts: new Date().toISOString(), text: '合成', refs: 1 })
   const { events } = await readEvents(root)
   assert.throws(() => deriveSelf(events), TypeError, '这一行得让 deriveSelf 抛，否则下面的断言什么也没测')
@@ -466,14 +469,14 @@ async function twoTicks(root, over) {
 test('tick：主动说话关着不算 deriveSelf，跳过的原因照旧只记一行', async () => {
   await withRoot(async (root) => {
     const logs = await twoTicks(root, {})
-    assert.deepEqual(logs, ['proactive skip 主动说话是关着的'])
+    assert.deepEqual(logs.filter((l) => l.startsWith('proactive')), ['proactive skip 主动说话是关着的'], logs.join(' | '))
   })
 })
 
 test('tick：「主动性」关着仍然排在最前面，记的还是它自己那一行', async () => {
   await withRoot(async (root) => {
     const logs = await twoTicks(root, { drive: { enabled: false } })
-    assert.deepEqual(logs, ['proactive skip 主动性关着'])
+    assert.deepEqual(logs.filter((l) => l.startsWith('proactive')), ['proactive skip 主动性关着'], logs.join(' | '))
   })
 })
 
@@ -481,5 +484,17 @@ test('tick：主动说话开着，每一趟照旧先算 deriveSelf', async () =>
   await withRoot(async (root) => {
     const logs = await twoTicks(root, { proactive: { enabled: true } })
     assert.equal(logs.filter((l) => l.startsWith('proactive failed')).length, 2, logs.join(' | '))
+  })
+})
+
+test('tick：「每天几点醒」之外的时刻，主动性也不许开口', async () => {
+  await withRoot(async (root) => {
+    // 窗口排到 5 小时后：此刻一定不在里面。她要是在这种时刻还能主动找他，
+    // 「只在这个时段里自己醒」就成了摆设。
+    const t = new Date(Date.now() + 5 * 3600_000)
+    const hh2 = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    const logs = await twoTicks(root, { proactive: { enabled: true } },
+      [hh2(t), hh2(new Date(t.getTime() + 30 * 60_000))])
+    assert.equal(logs.filter((l) => l.startsWith('proactive')).length, 0, logs.join(' | '))
   })
 })

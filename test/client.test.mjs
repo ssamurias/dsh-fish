@@ -776,3 +776,16 @@ test('设置页切页不能把判据 showTab 当成开关用（issue #12）', as
   assert.match(src, /const showTab = \(id\) => tab === id/, 'showTab 的定义不能被删')
   assert.match(src, /showTab\('bili'\) \? biliPage : null/, '判据照旧用于渲染条件')
 })
+
+test('时段控件下面补一行 24 小时制：00:00 不会被读成中午十二点', async () => {
+  // 「每天几点醒」在「生长」页（lib/client.js 里 growPage 那张卡），默认停在「状态」页，
+  // 得把 tab 拨过去。tab 是本组件第 44 个 useState（lib/client.js:361，0 基下标 43）。
+  const react = fakeReact({ 43: 'grow' })
+  const { exports } = await loadClient({ react })
+  react.resetCursor()
+  const txt = textOf(exports.FishSection()).join(' ')
+  // 原生 time 控件跟随系统 12 小时制，00:00 会显示成「上午 12:00」；
+  // 用户看到窗口 00:00–23:00 里凌晨五点醒来，很容易当成 bug（2026-11-06 反馈）。
+  assert.ok(txt.includes('每天几点醒'), '生长页得真的渲染出来（tab 下标漂了就改这里）')
+  assert.ok(txt.includes('24 小时制：20:00 → 23:00'), '默认时段要按 24 小时写出来')
+})
