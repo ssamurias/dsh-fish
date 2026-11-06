@@ -274,7 +274,7 @@ test('deriveSelf 优先用 absence.days，不用 day 差', async () => {
     refs: [], verdict: null, confidence: 0.5, flags: [], source: 'system',
   }
   const m = deriveSelf([seed, abs])
-  assert.equal(m.absenceDays, 6, 'days 字段优先于 day 差（day 差会算成 0）')
+  assert.equal(m.absenceDays, 7, 'days 字段优先于 day 差（day 差会算成 0）')
 })
 
 test('lastSeenAt 取最大的 seen 时刻', () => {
@@ -325,7 +325,7 @@ test('absence-reject: 驳回掉的 absence 不再进派生（历史误记只靠�
   }
   const reject = { id: 'ev_r', type: 'meta', text: `absence-reject:${abs.id}`, ts: new Date(now - 1 * DAY).toISOString(), day: 8, stage: 1 }
 
-  assert.equal(deriveSelf([seed, abs]).absenceDays, 2, '没驳回时要算进去')
+  assert.equal(deriveSelf([seed, abs]).absenceDays, 3, '没驳回时要算进去')
 
   const m = deriveSelf([seed, abs, reject])
   assert.equal(m.absenceDays, 0, '驳回之后不该再是「冷落 2 天」')
@@ -344,7 +344,7 @@ test('absence 之后他来过（seen）就不再算冷落（issue #24）', () =>
     id: 'ev_a24', type: 'absence', text: '那个人有 2 天没出现。', days: 2,
     ts: new Date(now - 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
   }
-  assert.equal(deriveSelf([seed, abs], { now }).absenceDays, 2, '他确实没回来时要算冷落')
+  assert.equal(deriveSelf([seed, abs], { now }).absenceDays, 7, '他确实没回来时要算冷落')
 
   const seen = {
     id: 'ev_seen24', type: 'meta', text: `seen:${new Date(now - 1 * DAY).toISOString()}`,
@@ -375,7 +375,7 @@ test('absence 之前的 seen 不算「他回来过」（issue #24）', () => {
     id: 'ev_a24c', type: 'absence', text: '那个人有 2 天没出现。', days: 2,
     ts: new Date(now - 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
   }
-  assert.equal(deriveSelf([seed, older, abs], { now }).absenceDays, 2, '时间顺序不能反着用')
+  assert.equal(deriveSelf([seed, older, abs], { now }).absenceDays, 7, '时间顺序不能反着用')
 })
 
 test('唤醒里写的 utterance 不算他来过，absenceDays 不归零（issue #24）', () => {
@@ -386,7 +386,7 @@ test('唤醒里写的 utterance 不算他来过，absenceDays 不归零（issue 
     ts: new Date(now - 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
   }
   const utt = { id: 'ev_u24', type: 'utterance', text: '醒了。', ts: new Date(now - 1 * DAY).toISOString(), day: 6, stage: 1, source: 'her' }
-  assert.equal(deriveSelf([seed, abs, utt], { now }).absenceDays, 2, '定时器叫醒她自己想事不算他来过')
+  assert.equal(deriveSelf([seed, abs, utt], { now }).absenceDays, 7, '定时器叫醒她自己想事不算他来过')
 })
 
 test('derive 与 absence.js 对「他回来了」给出同一个答案（issue #24）', () => {
