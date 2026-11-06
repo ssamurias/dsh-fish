@@ -212,6 +212,22 @@ test('dsh-fish/answer：没选、对不上选项都不结算，这张卡还能�
   })
 })
 
+test('ask_owner：一天只能问一次，真写下去的事件也算得上', async () => {
+  await withRoot(async (root) => {
+    const { out } = await askRelayed(root)
+    assert.equal(out.ok, true)
+    const { ctx } = fakeCtx(() => ({ via: 'QQ 私聊' }))
+    registerAsk(ctx, { root })
+    const again = await ctx.spec.execute(
+      { question: '再问一件', kind: 'other' },
+      { session: { header: { id: 'session-abc' } }, agent: { session: { id: 'session-abc' } } },
+    )
+    assert.equal(again.ok, false)
+    assert.match(again.note, /今天已经问过/)
+    assert.equal((await readEvents(root)).events.filter((e) => e.type === 'ask').length, 1)
+  })
+})
+
 test('ask_owner：选项太长也能答回来，卡上的字和账上一样', async () => {
   await withRoot(async (root) => {
     const long = '可以，不过只改今天晚上这一次，明天起恢复原来的作息时间吧'
