@@ -989,3 +989,86 @@ test('注销之后就不再记了', async () => {
     await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
   }
 })
+
+// 2026-11-06（外部日志：只读实例照样往共享事件流里写 seen:）。
+// 观测者以前无条件写盘：看到「他来过」就 appendEvent，从不过问这个家是不是自己的。
+// 于是一个数据目录被两个实例开着时，日志里出现同一毫秒的重复 seen:。
+test('被占用的实例（tenant.ok=false）：一句都不许写进共享事件流', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const tenant = { ok: false, instanceId: 'inst-a', why: '这个数据目录已经被另一个插件实例占着' }
+    const off = registerTurns(ctx, { root, tenant, log: () => {} })
+    try {
+      ctx.emit('session/event', session(), humanMsg('在她屋里说一句'))
+      ctx.emit('session/event', session('s-qq'), humanMsg('在别的会话说一句'))
+      ctx.emit('session/event', session(), TURN_END)
+      await settled()
+
+      const { events } = await readEvents(root)
+      assert.equal(
+        events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length,
+        0,
+        '房主不是自己，连记账行都不该落盘',
+      )
+      assert.equal((await homeStatus(root)).turns, 0, '轮数也不该涨')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('占用权是中途丢的：拿到的是活引用，丢了之后立刻停写', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const tenant = { ok: true, instanceId: 'inst-a', why: '' }
+    const off = registerTurns(ctx, { root, tenant, log: () => {} })
+    try {
+      // 心跳续不上（真机日志里的「占用权丢了」）——同一个对象被原地改写
+      tenant.ok = false
+      tenant.why = '这个家已经被另一个实例接管了，之后不再写入。'
+
+      ctx.emit('session/event', session('s-qq'), humanMsg('丢了之后还说话'))
+      await settled()
+
+      const { events } = await readEvents(root)
+      assert.equal(
+        events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length,
+        0,
+        '注册时是房主不算数，写的那一刻才算',
+      )
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('同一进程里重复注册：只挂一个观察者，seen: 不会写两遍', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const off1 = registerTurns(ctx, { root, log: () => {} })
+    const off2 = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session('s-qq'), humanMsg('同一句话'))
+      await settled()
+
+      const { events } = await readEvents(root)
+      assert.equal(
+        events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length,
+        1,
+        '两个写者各写一遍 = 同一毫秒的两条 seen:，事件流就不能当证据了',
+      )
+    } finally {
+      off1()
+      off2()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
