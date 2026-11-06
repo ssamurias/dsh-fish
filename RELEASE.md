@@ -24,8 +24,8 @@ gh auth status              # 必须是 ssamurias
 
 ## 1. 发布前自检（每次都要跑，别跳）
 
-- [ ] `package.json` 的 `version` 就是要发的号（0.9.x 阶段只发 patch）
-- [ ] `node --test` 全绿（0.9.1 基线：**1512 pass / 0 fail**，约 22 秒）
+- [ ] `package.json` 的 `version` 就是要发的号（修 bug 发 patch，如 `0.10.1`；一批改动发 minor，如 `0.10.0`）
+- [ ] `node --test` 全绿（当前基线见 `AGENTS.md` 第 6 节；0.10.0 是 **1587 pass / 0 fail**，约 20 秒）
 - [ ] `CHANGELOG.md` 顶部有本节，条目按 issue 编号写全
 - [ ] `RELEASE-NOTES-x.y.z.md` 已写，且与 `CHANGELOG.md` 口径一致（issue 条数、PR 编号、日期）
 - [ ] `README.md` 顶部「当前版本」段已换成这一版
@@ -127,8 +127,8 @@ gh release view v0.9.x
 
 - `dist-tags.latest` 要指向新版本；`dist.tarball` 能取到 URL 就说明包在。
 - 想真装一遍：**先关 DSH Desktop**，用临时 profile 试装（不要直接动 `desktop` profile）——`bundles` 与 `dependencies` 必须一一对应，先只改依赖、装包，再用目录联接的临时 profile 跑 `--dump-config` 预演（避坑指南第 1 节）。
-- 回 issue：#32–#38、#41–#43 各回一条「0.9.1 已发布，装法见 README」，等作者确认后再关。
-- 给四个社区 PR 的作者（@BBleae 等）留一句「已随 0.9.1 发布」。
+- 回 issue：这一版修到的每条 issue 各回一条「x.y.z 已发布，装法见 README，有问题随时回」，等作者确认后再关。
+- 给这一版合入的 PR 作者留一句「已随 x.y.z 发布」；PR 没合并的不要在 GitHub 上点 merge，在回帖里说清「以提交形式合入」。
 
 ---
 
