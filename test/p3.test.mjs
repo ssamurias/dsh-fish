@@ -222,6 +222,38 @@ test('说一句话：落 seen 标记（唤醒窗外才算他来过），并带�
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
 
+test('issue #51：她在会话里回了、但没写事件流，said 与 herReply 都要带回原话', async () => {
+  const root = await tmpRoot()
+  try {
+    await appendEvent({ type: 'seed', text: '起点。' }, { day: 1, stage: 1, source: 'system' }, root)
+    const ctx = fakeCtx()
+    const handlers = new Map()
+    // 假宿主的事件总线：只记 handler，测试里自己 emit（真宿主由 plugin 的 ctx.on 提供）。
+    ctx.on = (name, fn) => {
+      handlers.set(name, fn)
+      return () => handlers.delete(name)
+    }
+    const emit = (event) => handlers.get('session/event')?.({ header: { id: 's-house' } }, event)
+    ctx.sessionController.prompt = async () => {
+      // 同一条消息被重放两次（interrupted / 续写），只能算一份。
+      const message = { id: 'm-51', content: [{ type: 'text', text: '听得见，两条都收到了。' }] }
+      emit({ type: 'assistant/message', data: { message } })
+      emit({ type: 'assistant/message', data: { message } })
+      emit({ type: 'turn/end' })
+    }
+
+    const r = await sayToHer(ctx, '在吗', { root, waitMs: 5_000 })
+    assert.equal(r.ok, true)
+    // 她没调 growth_commit，事件流里没落盘；但这次回话要带回来，标 uncommitted。
+    assert.equal(r.said.length, 1, '同一条消息重放两次也只算一句')
+    assert.equal(r.said[0].text, '听得见，两条都收到了。')
+    assert.equal(r.said[0].type, 'utterance')
+    assert.equal(r.said[0].uncommitted, true, '没认领的话只活在这条返回值里，不落盘')
+    assert.equal(r.herReply, '听得见，两条都收到了。')
+    assert.match(r.note, /没写进事件流|growth_commit/)
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
 test('她正在醒着时你说话，仍然算你来了（say 不看唤醒窗）', async () => {
   // 与 capture.js 的分工：
   //   capture 里 `if (!inWake())` 是因为「她在窗口内写字」可能只是她自己想事情；

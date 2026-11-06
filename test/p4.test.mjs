@@ -21,8 +21,8 @@ import { join } from 'node:path'
 import {
   targetsToday, commentCountToday, replyCountToday, herComments, herCommentsRecent,
   seenReplies, scanReplies, renderReplies, postComment, postReply,
-  readMyReplies, renderMyReplies, repliesScanDue,
-  REPLY_LOOKBACK_DAYS, MAX_SCAN_ROOTS,
+  readMyReplies, renderMyReplies, repliesScanDue, markRepliesSeen,
+  REPLY_LOOKBACK_DAYS, MAX_SCAN_ROOTS, REPLY_SHOW_MAX,
 } from '../lib/comment.js'
 import { speakOnce, registerSpeak, noteSpeakEnabled } from '../lib/speak.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
@@ -638,6 +638,81 @@ test('readMyReplies：她主动看时不受 cseen 限制，且带上回楼中楼
     assert.deepEqual(got.map((x) => x.rpid), [222])
     assert.equal(got[0].rootRpid, 111, '回楼中楼要的是她那条评论的编号')
     assert.equal(got[0].aid, 1001, '接口要 aid 不是 bvid')
+  })
+})
+
+// ------------------------- 递过去就算提醒过（2026-11-06 用户报的 bug：不回就一直重复投）
+
+test('递过去就算提醒过：她一句没回，下一轮扫描也不该再投同一条', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    await writeFile(paths(root).owner, JSON.stringify({ mid: 9 }), 'utf8')
+
+    const client = fakeClient({
+      subReplies: async () => ({
+        ok: true,
+        data: [
+          { rpid: 222, mid: 777, user: '永生ㄨ', text: '好的，阿留', ctime: 3 },
+          { rpid: 333, mid: 778, user: '另一个人', text: '在吗', ctime: 2 },
+        ],
+      }),
+    })
+
+    // 第一轮：扫到两条，摆到她眼前（只摆，不替她回）
+    const first = await scanReplies({ root, client, dateKey: dk })
+    assert.deepEqual(first.map((x) => x.rpid), [333, 222], '先回早的')
+    assert.match(renderReplies(first), /好的，阿留/)
+    await markRepliesSeen(root, first, { dateKey: dk })
+
+    // 她没回。旧代码在这里会把两条原样再递一遍，一轮一轮递到天荒地老。
+    assert.deepEqual(await scanReplies({ root, client, dateKey: dk }), [])
+
+    // 但她自己主动去看，仍然看得见（cseen 只管「别再提醒」，不管「不给她看」）
+    const got = await readMyReplies({ root, client, events: (await readEvents(root)).events })
+    assert.deepEqual(got.map((x) => x.rpid).sort(), [222, 333])
+  })
+})
+
+test('markRepliesSeen：同一批只记一次，坏的 rpid 跳过', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    const n = await markRepliesSeen(
+      root,
+      [{ rpid: 5 }, { rpid: 5 }, { rpid: '5' }, { rpid: 0 }, { rpid: 'x' }, {}],
+      { dateKey: dk },
+    )
+    assert.equal(n, 1)
+    const texts = (await readEvents(root)).events
+      .map((e) => e.text)
+      .filter((t) => String(t ?? '').startsWith('cseen:'))
+    assert.deepEqual(texts, [`cseen:${dk} 5`])
+    assert.deepEqual([...seenReplies((await readEvents(root)).events)], [5])
+  })
+})
+
+test('一次只摆 REPLY_SHOW_MAX 条：标的是真摆出去的那几条，剩下的下一轮还会来', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    await writeFile(paths(root).owner, JSON.stringify({ mid: 9 }), 'utf8')
+
+    const data = Array.from({ length: 6 }, (_, i) => ({
+      rpid: 500 + i, mid: 700 + i, user: `人${i}`, text: `第 ${i} 句`, ctime: i,
+    }))
+    const client = fakeClient({ subReplies: async () => ({ ok: true, data }) })
+
+    const waiting = await scanReplies({ root, client, dateKey: dk })
+    assert.equal(waiting.length, 6)
+    const shown = waiting.slice(0, REPLY_SHOW_MAX)
+    assert.equal(shown.length, 5)
+    // 渲染只出这 5 条——所以标 seen 也只能标这 5 条
+    assert.equal(renderReplies(waiting).match(/^- /gm).length, 5)
+    assert.doesNotMatch(renderReplies(waiting), /第 5 句/)
+    await markRepliesSeen(root, shown, { dateKey: dk })
+
+    const next = await scanReplies({ root, client, dateKey: dk })
+    assert.deepEqual(next.map((x) => x.rpid), [505], '没摆出去的那条不能被悄悄吞掉')
   })
 })
 
