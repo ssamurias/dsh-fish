@@ -204,6 +204,19 @@ test('absence：没到阈值不判，到了就判', () => {
   assert.equal(assess(ev, now, { afterDays: 1 }).absent, true)
 })
 
+test('absence：他回来过一次，之后又消失够久，是新的一次冷落', () => {
+  const now = Date.now()
+  const at = (days) => new Date(now - days * 86400000).toISOString()
+  const seenAt = (days) => ({ id: `ev_s${days}`, type: 'meta', text: `seen:${at(days)}`, ts: at(days) })
+  const abs = { id: 'ev_a', type: 'absence', text: '他有 3 天没出现。', days: 3, ts: at(38) }
+  // 回来才 1 天：这次冷落已经结束，不算新的
+  assert.equal(assess([seenAt(41), abs, seenAt(1)], now).reason, 'returned')
+  // 回来之后又 30 天没影：要能再记
+  const again = assess([seenAt(41), abs, seenAt(30)], now)
+  assert.equal(again.absent, true)
+  assert.equal(again.days, 30)
+})
+
 test('absence：同一次冷落不重复写；他回来之后才算结束', () => {
   const now = Date.now()
   const seenAt = now - 5 * DAY
