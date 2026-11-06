@@ -131,9 +131,9 @@ test('插件停用时收得干净：宿主只认 ctx.effect，定时器要停，
 
 test('首次启动会播种，且只播一次', async () => {
   await withRoot(async (root) => {
-    const { ctx } = fakeCtx()
+    const { ctx, routes } = fakeCtx()
     const h = apply(ctx, { root })
-    await new Promise((r) => setTimeout(r, 120))
+    assert.ok(await waitFor(() => routes.length > 0), '启动没走完')
 
     let { events } = await readEvents(root)
     const seeds = events.filter((e) => e.type === 'seed')
