@@ -301,7 +301,7 @@ test('认不出的回答不落地原文：日志只留回执形状（issue #35�
   const tool = ctx.regs.get('ask_owner')
 
   const out = await tool.execute(
-    { question: '能不能换个作息。', kind: 'time', options: ['可以', '这次不行'] },
+    { question: '能不能换个作息。', kind: 'time', wakesPerDay: 2, options: ['可以', '这次不行'] },
     { agent: { session: { id: 'session-abc' } } },
   )
   assert.equal(out.ok, true, '认不出也是一次有效的提问')

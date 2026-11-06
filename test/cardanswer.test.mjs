@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -181,6 +181,54 @@ test('dsh-fish/answer：放了一天才答，说的是放了一天，不是答�
   })
 })
 
+test('dsh-fish/answer：定时器没跑到也算过期，不会隔两天才生效', async () => {
+  await withRoot(async (root) => {
+    const old = new Date(Date.now() - 30 * 3600 * 1000)
+    writeFileSync(join(root, 'events.jsonl'), JSON.stringify({
+      id: 'ev_old1', v: 1, ts: old.toISOString(), day: 3, stage: 1, type: 'ask', source: 'system', text: '换作息', refs: [], verdict: null, confidence: 0.5, flags: [],
+      ask: { kind: 'time', subject: '', options: ['可以', '这次不行'], reason: '', value: { wakesPerDay: 3 } },
+    }) + '\n', 'utf8')
+    const before = (await loadConfig(root)).config.wakesPerDay
+    const r = await answerCard(root, { id: 'ask:ev_old1', selected: ['可以'] })
+    assert.equal(r.ok, false)
+    assert.match(r.why, /放了一天没人答/)
+    assert.equal((await loadConfig(root)).config.wakesPerDay, before)
+  })
+})
+
+test('dsh-fish/answer：数字不当下标，只认选项原文', async () => {
+  await withRoot(async (root) => {
+    const { out } = await askRelayed(root)
+    const id = `ask:${out.askId}`
+    for (const selected of [['0'], ['1'], ['2'], [0], [1]]) assert.equal((await answerCard(root, { id, selected })).ok, false, JSON.stringify(selected))
+    assert.equal((await readEvents(root)).events.filter((e) => e.type === 'answer').length, 0)
+  })
+  await withRoot(async (root) => {
+    const { out } = await askRelayed(root, { options: ['3', '4'] })
+    assert.deepEqual(await answerCard(root, { id: `ask:${out.askId}`, selected: ['4'] }), { ok: true })
+    assert.equal((await readEvents(root)).events.find((e) => e.type === 'answer').ask.verdict, 'reject')
+  })
+})
+
+test('kind=time：效果没落地就不算答过，再答一次还能生效', { skip: process.platform !== 'win32' }, async () => {
+  await withRoot(async (root) => {
+    const { out } = await askRelayed(root, { kind: 'time', wakesPerDay: 3 })
+    const id = `ask:${out.askId}`
+    writeFileSync(join(root, 'config.json'), '{}', 'utf8')
+    chmodSync(join(root, 'config.json'), 0o444)
+    try {
+      const r = await answerCard(root, { id, selected: ['可以'] })
+      assert.equal(r.ok, false)
+      assert.match(r.why, /没落地/)
+      assert.equal((await readEvents(root)).events.filter((e) => e.type === 'answer').length, 0)
+    } finally {
+      chmodSync(join(root, 'config.json'), 0o644)
+    }
+    assert.deepEqual(await answerCard(root, { id, selected: ['可以'] }), { ok: true })
+    assert.equal((await loadConfig(root)).config.wakesPerDay, 3)
+  })
+})
+
 test('settleAsk：几条路同时答，只有第一条算', async () => {
   await withRoot(async (root) => {
     const { out } = await askRelayed(root)
@@ -245,9 +293,42 @@ test('ask_owner：选项太长也能答回来，卡上的字和账上一样', as
   })
 })
 
+test('ask_owner：截断后两个选项一样就不问，半个 emoji 也不留', async () => {
+  await withRoot(async (root) => {
+    const same = '能不能让我明天下午自己一个人到外面去走一走看一看'
+    const { out } = await askRelayed(root, { options: [`${same}，可以`, `${same}，不可以`] })
+    assert.equal(out.ok, false)
+    assert.match(out.note, /不能一样/)
+    assert.equal((await readEvents(root)).events.filter((e) => e.type === 'ask').length, 0, '没问成不占额度')
+  })
+  await withRoot(async (root) => {
+    const cards = []
+    const { ctx } = fakeCtx((_, card) => { cards.push(card); return { via: 'QQ 私聊' } })
+    registerAsk(ctx, { root })
+    await ctx.spec.execute(
+      { question: '行吗', kind: 'other', options: [`${'字'.repeat(23)}😀`, '不行'] },
+      { session: { header: { id: 'session-abc' } }, agent: { session: { id: 'session-abc' } } },
+    )
+    assert.equal(cards[0].questions[0].options[0].label, '字'.repeat(23))
+  })
+})
+
+test('ask_owner：kind=time 写不出账上存得下的数就不问，null 不算 0', async () => {
+  for (const bad of [{}, { window: ['8:00', '22:00'] }, { window: ['09:00', '09:00'] }, { wakesPerDay: null }, { wakesPerDay: '' }, { wakesPerDay: 2, window: ['bad', '22:00'] }]) {
+    await withRoot(async (root) => {
+      const { out } = await askRelayed(root, { kind: 'time', ...bad })
+      assert.equal(out.ok, false, JSON.stringify(bad))
+      assert.match(out.note, /kind=time/)
+      assert.equal((await readEvents(root)).events.filter((e) => e.type === 'ask').length, 0)
+    })
+  }
+})
+
 test('kind=rest：隔天才答应，歇的是她问的那一天，不是答的这一天', async () => {
   await withRoot(async (root) => {
-    const yesterday = new Date(Date.now() - 24 * 3600 * 1000)
+    const yesterday = new Date()
+    yesterday.setHours(0, 0, 0, 0)
+    yesterday.setMinutes(-1)
     writeFileSync(join(root, 'events.jsonl'), JSON.stringify({
       id: 'ev_rest1', v: 1, ts: yesterday.toISOString(), day: 3, stage: 1, type: 'ask', source: 'system', text: '今天能歇吗', refs: [], verdict: null, confidence: 0.5, flags: [],
       ask: { kind: 'rest', subject: '', options: ['可以', '这次不行'], reason: '' },
@@ -335,6 +416,49 @@ test('bring_back：卡被接走就当场回话，不等 5 分钟，账上挂着'
     assert.match(cards[0].id, /^keepsake:/)
     assert.match(out.note, /等他点头/)
     assert.equal(pendingKeepsakes(root).length, 1)
+  })
+})
+
+test('规矩申请：两边同时答只有第一个算，读不到账时说真话', async () => {
+  await withRoot(async (root) => {
+    const offer = await appendEvent({ type: 'grant_offer', text: '想试试', grant: { rule: 'some-rule' } }, { day: 1, stage: 1, source: 'system' }, root)
+    const id = `grant:${offer.id}`
+    const rs = await Promise.all([answerCard(root, { id, selected: ['可以'] }), answerCard(root, { id, selected: ['这次不行'] })])
+    assert.equal(rs.filter((r) => r.ok).length, 1)
+    assert.equal((await readEvents(root)).events.filter((e) => e.type === 'grant').length, 1)
+  })
+  await withRoot(async (root) => {
+    const offer = await appendEvent({ type: 'grant_offer', text: '想试试', grant: { rule: 'some-rule' } }, { day: 1, stage: 1, source: 'system' }, root)
+    const file = join(root, 'events.jsonl')
+    const saved = readFileSync(file)
+    rmSync(file)
+    mkdirSync(file)
+    const r = await answerCard(root, { id: `grant:${offer.id}`, selected: ['可以'] })
+    assert.equal(r.ok, false)
+    assert.doesNotMatch(r.why, /不在等了/)
+    rmSync(file, { recursive: true })
+    writeFileSync(file, saved)
+    assert.deepEqual(await answerCard(root, { id: `grant:${offer.id}`, selected: ['可以'] }), { ok: true })
+  })
+})
+
+test('bring_back：复制失败不记成没带，再答一次还能带', async () => {
+  await withRoot(async (root) => {
+    const cwd = join(root, 'ws')
+    mkdirSync(cwd, { recursive: true })
+    writeFileSync(join(cwd, 'notes.txt'), 'a note\n', 'utf8')
+    const outing = { sessionId: 'session-abc', workspaceId: 'w-1', workspaceName: '素材区', cwd, startedAt: 1_700_000_000_000, status: 'active' }
+    const a = askKeepsake(root, { outing, sessionId: 'session-abc', rel: 'notes.txt', why: '想学' })
+    const id = `keepsake:${a.item.id}`
+    const dest = join(root, 'keepsakes')
+    writeFileSync(dest, '挡路的文件', 'utf8') // 放纪念品的目录建不出来
+    const r = await answerCard(root, { id, selected: [KEEP_YES] })
+    assert.equal(r.ok, false)
+    assert.equal(pendingKeepsakes(root).length, 1)
+    assert.ok(!r.why.includes(cwd), '不把本机路径说出去')
+    rmSync(dest)
+    assert.deepEqual(await answerCard(root, { id, selected: [KEEP_YES] }), { ok: true })
+    assert.equal(pendingKeepsakes(root).length, 0)
   })
 })
 
