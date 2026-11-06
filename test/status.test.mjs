@@ -161,7 +161,7 @@ test('一天几百条「没有该问的事」在时间线上折叠成一条（�
     events.push(meta(i * MIN, `quiet:${DK} 无候选模板，今天不打扰`))
   }
   const st = deriveStatus({ events, config: cfg, now: NOW })
-  const quietLines = st.timeline.filter((t) => t.text.includes('没有该问的事'))
+  const quietLines = st.timeline.filter((t) => t.text.includes('没有可出的事件'))
   assert.equal(quietLines.length, 1, st.timeline.map((t) => t.text).join(' | '))
 })
 
@@ -174,7 +174,45 @@ test('折叠按天算，不同日期的 quiet 各留一条', () => {
   ]
   const st = deriveStatus({ events, config: cfg, now: NOW })
   // 昨天那条不在 today 里，本来就进不了时间线；今天两条折叠成一条
-  assert.equal(st.timeline.filter((t) => t.text.includes('没有该问的事')).length, 1)
+  assert.equal(st.timeline.filter((t) => t.text.includes('没有可出的事件')).length, 1)
+})
+
+// ---- 0.9.1 反馈：quiet 不是「醒了」，也不是「今天都不会醒」 ----
+// 旧文案把 quiet 写成「醒了，但今天没有该问的事」，可它没有 wake: 事件：
+// 状态卡说「还没醒」、时间线说「醒了」，同一时刻两句话互相打脸。
+test('quiet 写了但一天没醒过：时间线不许冒出「醒了」，idleWakes 也不算（0.9.1 反馈）', () => {
+  const st = deriveStatus({
+    events: [
+      meta(9 * 60 * MIN, `sched:${DK} ${new Date(2026, 9, 23, 12, 0, 0).toISOString()}`),
+      meta(7 * 60 * MIN, `quiet:${DK} 无候选模板，今天不打扰`),
+    ],
+    config: cfg,
+    now: NOW,
+  })
+  assert.equal(st.today.wakes, 0)
+  assert.equal(st.today.idleWakes, 0, '没醒过就不该有「醒了但发呆」的块')
+  const all = st.timeline.map((t) => t.text)
+  assert.ok(!all.some((t) => t.includes('醒了')), all.join(' | '))
+  assert.ok(all.some((t) => t.includes('到点了，暂时没有可出的事件')), all.join(' | '))
+  // 此刻是落点之后、还没醒：状态卡说的是同一件事，不能一边「还没醒」一边「醒了」
+  assert.equal(st.phase, 'waiting')
+  assert.ok(st.detail.includes('暂时没有可出的事件'), st.detail)
+})
+
+test('quiet 不封当天：冷却到期后又真醒，那天照样有 wake（0.9.1 反馈 §三）', () => {
+  const st = deriveStatus({
+    events: [
+      meta(90 * MIN, `wake:${DK} nightly`),
+      meta(60 * MIN, `quiet:${DK} 没有可做的事`),
+      meta(10 * MIN, `wake:${DK} test_first`),
+    ],
+    config: cfg,
+    now: NOW,
+  })
+  assert.equal(st.today.wakes, 2)
+  const all = st.timeline.map((t) => t.text)
+  assert.ok(all.some((t) => t.includes('暂时没有可出的事件')), all.join(' | '))
+  assert.equal(all.filter((t) => /^\d{2}:\d{2} 醒了(，在发呆)?$/.test(t)).length, 2, all.join(' | '))
 })
 
 // ---- issue #32：聊天行不许挤占时间线，也不许把 idle 混进去 ----

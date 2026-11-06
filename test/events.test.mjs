@@ -44,6 +44,69 @@ test('questions 配额用满后不再选 ask 类模板', () => {
   if (capped) assert.equal(capped.template.asks, false, '配额用满后只能选不问的模板')
 })
 
+test('notice_one：没有素材也能长出一条判断（stage 1 补位卡）', () => {
+  const t = CATALOG.find((x) => x.id === 'notice_one')
+  assert.ok(t, '卡池里要有这张补位卡')
+  assert.equal(t.stage, 1)
+  assert.equal(t.asks, false, '它不能变成「请她回答」')
+  assert.equal(t.once, false)
+  assert.equal(t.repeat.everyDays, 2)
+  assert.equal(t.cond(model({ beliefCount: 0 })), false, '第 1 天让给 first_bet')
+  assert.equal(t.cond(model({ beliefCount: 1 })), true)
+})
+
+test('stage 1 第 3 天：一次性卡用掉、test_first 冷却时由 notice_one 补位', () => {
+  const cfg = normalizeConfig({})
+  const now = Date.parse('2026-10-23T21:00:00+08:00')
+  const m = model({
+    day: 3,
+    beliefCount: 3,
+    beliefs: [{ id: 'a', text: '我猜他喜欢安静', since: new Date(now - 2 * 86400000).toISOString() }],
+  })
+  const firedEvents = [
+    { type: 'meta', text: 'fired:why_here' },
+    { type: 'meta', text: 'fired:first_bet' },
+    { type: 'meta', text: 'fired:name_offer' },
+    { type: 'meta', text: 'fired:test_first', ts: new Date(now - 86400000).toISOString() },
+  ]
+  const r = pick(m, cfg, today(), firedEvents, { now })
+  assert.ok(r, '这一天不该没有候选')
+  assert.equal(r.template.id, 'notice_one')
+})
+
+test('notice_one 每次回来换一种问法，要求不减', () => {
+  const tpl = findTemplate('notice_one')
+  const m = model({ beliefCount: 3 })
+  const texts = [0, 1, 2, 3].map((occurrences) => tpl.prompt(m, { occurrences }))
+  assert.notEqual(texts[0], texts[1], '第二次不能还是同一句')
+  assert.notEqual(texts[1], texts[2], '第三次也不能还是同一句')
+  assert.equal(texts[0], texts[3], '轮完一圈回到第一句（可复现，不随机）')
+  for (const text of texts) {
+    assert.ok(text.includes('判断'), '每一条都要她下判断')
+    assert.ok(text.includes('核对'), '每一条的判断都要能被核对')
+    assert.ok(!text.includes('今天有东西'), '都不承诺今天有素材')
+  }
+})
+
+test('notice_one 不带「第 N 次回到这件事」的尾巴（每次换题，不是回到同一件）', () => {
+  const cfg = normalizeConfig({})
+  const now = Date.now()
+  const at = (daysAgo) => new Date(now - daysAgo * 86400000).toISOString()
+  const m = model({ day: 5, beliefCount: 3 })
+  const events = [
+    { type: 'meta', text: 'fired:why_here', ts: at(4) },
+    { type: 'meta', text: 'fired:first_bet', ts: at(4) },
+    { type: 'meta', text: 'fired:name_offer', ts: at(3) },
+    { type: 'meta', text: 'fired:test_first', ts: at(1) },
+    { type: 'meta', text: 'fired:notice_one', ts: at(3) },
+  ]
+  const r = pick(m, cfg, today(), events, { now })
+  assert.equal(r?.template?.id, 'notice_one', '2 天冷却已过，这张卡回到候选')
+  assert.equal(r.occurrences, 1, '这是她第二次遇到它')
+  assert.ok(!r.prompt.includes('回到这件事'), '换题的卡不该说她回到了同一件事')
+  assert.ok(r.prompt.includes('判断'))
+})
+
 test('没有候选时返回 null（不打扰是正确行为）', () => {
   // 2026-10-24 起可重复模板（repeat.everyDays）不再"用掉就没了"，
   // 所以这里让**每一条**模板都刚 fired 过：once 的算用掉，可重复的处在冷却期。
