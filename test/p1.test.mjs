@@ -337,6 +337,16 @@ test('absence-reject: 驳回掉的 absence 不再进派生（历史误记只靠�
 // 以前 derive 只认 reunion 事件，而 absence.js 的 assess() 认 seen / heard。
 // 结果是他明明回来了（甚至刚说过话），persona 还是每天念「他有 N 天没出现」，
 // 而且除了她恰好写一条 reunion 之外没有任何自动恢复路径。
+test('冷落天数只加不减：系统时间回拨、ts 落在未来时，不能把写下的天数算没', () => {
+  const now = Date.now()
+  const seed = { id: 'ev_s', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1, source: 'system' }
+  const abs = {
+    id: 'ev_a', type: 'absence', text: '那个人有 2 天没出现。', days: 2,
+    ts: new Date(now + 5 * DAY).toISOString(), day: 2, stage: 1, source: 'system',
+  }
+  assert.equal(deriveSelf([seed, abs], { now }).absenceDays, 2)
+})
+
 test('absence 之后他来过（seen）就不再算冷落（issue #24）', () => {
   const now = Date.now()
   const seed = { id: 'ev_s', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1, source: 'system' }
