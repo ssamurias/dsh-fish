@@ -25,7 +25,7 @@ gh auth status              # 必须是 ssamurias
 ## 1. 发布前自检（每次都要跑，别跳）
 
 - [ ] `package.json` 的 `version` 就是要发的号（修 bug 发 patch，如 `0.9.3`；一批改动发 minor，如 `0.10.0`）
-- [ ] `node --test` 全绿（当前基线见 `AGENTS.md` 第 6 节；0.9.2 是 **1596 pass / 0 fail**，约 20 秒）
+- [ ] `node --test` 全绿（当前基线见 `AGENTS.md` 第 6 节；0.9.3 是 **1617 pass / 0 fail**，约 22 秒）
 - [ ] `CHANGELOG.md` 顶部有本节，条目按 issue 编号写全
 - [ ] `RELEASE-NOTES-x.y.z.md` 已写，且与 `CHANGELOG.md` 口径一致（issue 条数、PR 编号、日期）
 - [ ] `README.md` 顶部「当前版本」段已换成这一版

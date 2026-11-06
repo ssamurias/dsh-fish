@@ -299,7 +299,11 @@ test('工具名一直登记不齐：不收窄，但兜底守卫仍然在（挡�
   }
   ctx.emit('agent/created', { agent })
   assert.equal(guards.length, 1, 'restrict 挂了，guard 也必须在')
-  assert.equal(guards[0]({ name: 'subagent' }), '这件事我做不到。', '挡不住名字就靠执行时拦')
+  // 0.9.3（issue #54）：拒的时候要念一遍清单，否则她会换着名字接着试
+  const denied = guards[0]({ name: 'subagent' })
+  assert.match(denied, /^这件事我做不到。/, '挡不住名字就靠执行时拦')
+  assert.match(denied, /我手上没有这样东西——能用的只有：/, '要说清此刻手上到底有什么')
+  assert.match(denied, /her_recall/, '清单里得有真放行的名字')
   assert.equal(guards[0]({ name: 'her_recall' }), undefined)
   await new Promise((r) => setTimeout(r, 40))
   assert.equal(seen.at(-1).why, 'deferred', '如实报「这次没挂上」，不能假装成功')
@@ -391,7 +395,7 @@ test('own 层（dsh-ops 的 ops_*）能进白名单，但不会被塞给 restric
 
   // 守卫放行名单是配置里的全量：写进白名单 = 守卫不再拦
   assert.equal(guards[0]({ name: 'ops_bash' }), undefined)
-  assert.equal(guards[0]({ name: 'web_search' }), '这件事我做不到。')
+  assert.match(guards[0]({ name: 'web_search' }), /^这件事我做不到。/)
 })
 
 test('rememberFromView：restrictable ∪ visible 才算「认得的名字」', () => {
@@ -483,7 +487,7 @@ test('别的插件注册在 own 层的工具（不是 ops_）一样能存、能�
 
   assert.equal(guards[0]({ name: 'team_task_list' }), undefined, '白名单放行 = 守卫不拦')
   assert.equal(guards[0]({ name: 'helper_paint' }), undefined)
-  assert.equal(guards[0]({ name: 'web_search' }), '这件事我做不到。', '没授权的照旧拦')
+  assert.match(guards[0]({ name: 'web_search' }), /^这件事我做不到。/, '没授权的照旧拦')
 })
 
 test('插件在 agent 建好之后才注册的工具，不重启也能认出来（2026-10-29）', () => {

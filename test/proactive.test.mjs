@@ -442,7 +442,8 @@ async function twoTicks(root, over, windowOverride) {
   // 2026-11-06：主动性现在也要过「每天几点醒」这一关，所以默认给全天的窗口——
   // tick 才会真的走到 maybeProactive，几点跑都一样。要测「窗口外不开口」
   // 就显式传一个不覆盖此刻的窗口。
-  // （不要按此刻现算：0 点时算出 `-1:00` 这种坏值，normalizeConfig 会悄悄退回默认窗口。）
+  // （2026-11-07 PR #55 @BBleae：不要按此刻现算——0 点时 `hh(-1)` 算出 `-1:00`，
+  //  validWindow 不认，normalizeConfig 悄悄退回默认 20:00–23:00，那三条就红。）
   const win = windowOverride ?? ['00:00', '23:59']
   await writeConfig(normalizeConfig({ window: win, ...over }), root)
   line(root, { id: 'ev_unreadable', type: 'revise', ts: new Date().toISOString(), text: '合成', refs: 1 })

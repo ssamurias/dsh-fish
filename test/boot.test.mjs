@@ -94,6 +94,9 @@ test('插件元信息：名字与 inject', () => {
   assert.ok(!inject.includes('userQuestions'), 'userQuestions 必须运行时探测，不能进 inject')
 })
 
+// 2026-11-07（PR #55 @BBleae）：0.9.1 那次发版只改了 package.json，VERSION 留在 0.9.1，
+// 结果「已经装着最新的还是提示有更新」「源目录和装进去的都是 0.9.2 也判 stale」。
+// 这条就是拦住下次只改一半。
 test('VERSION 和 package.json 的 version 一致（不许分叉）', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
   assert.equal(VERSION, pkg.version, '发版时 lib/index.js 的 VERSION 要跟着改')
