@@ -161,6 +161,26 @@ ctx.on('dsh-fish/busy', (sessionId) => stillPlaying(sessionId) ? true : undefine
 
 定时叫醒和主动回合投递前都会问一声。监听要同步返回，只有 `true` 算忙；不忙返回 `undefined`、`null` 或 `false`，返回别的值会挡住后面的插件，返回 Promise 按不忙算。忙的标记卡住时她就一直不被叫醒，所以结束时记得放开。不挂也没事，调度器自己知道家里那条会话正在跑的那一轮。
 
+她问人的卡片（`ask_owner`、`bring_back`、规矩申请）默认挂在她那条会话的输入框上方，只等 5 分钟。人不在这台机器前就看不见，她这一轮还要白等，`ask_owner` 一天后记成「一直没人答」。插件能把话送到人在的地方时，把卡接走：
+
+```js
+ctx.on('dsh-fish/card', async (card) => {
+  // card: { id, sessionId, questions, detail }。questions 和宿主 userQuestions.ask 的同形；detail 是她说的「为什么」，可能是空串
+  if (card.sessionId !== mySession) return undefined
+  await sendSomewhere(render(card)) // 发不出去就抛，这张卡退回会话上
+  remember(card.id)                 // 自己存好，人可能隔几个小时才答，中间宿主可能重启
+  return { via: 'QQ 私聊' }          // 会写进她的回执：[已问，送到了QQ 私聊，还没答]
+})
+
+// 人答了。id 不用背，原样还回来
+const r = await ctx.bail('dsh-fish/answer', { id, selected: ['可以'] }) // → { ok: true } 或 { ok: false, why }
+```
+
+- 只有回了 `{ via }` 才算接走。不接返回 `undefined`；抛错、15 秒没回都算没接，这张卡照常弹在会话上。`bail` 停在第一个非空返回值上，async 监听只有排第一的那个算数。
+- `selected` 填选项原文，和宿主的回答同形。空数组是「回了话，没选」，`ask_owner` 记成「以后再说」，理由写 `note`；别把人的原话放进 `note`，事件流只追加。`bring_back` 和规矩申请不写，还挂着。
+- 回答不会自己进她的对话。人说的那句话照常交给她，或者自己告诉她。
+- 重复答、过期了的，`ok` 是 `false`，`why` 说明原因，可以转告人。
+
 ### 7.4 另一条老路：工具白名单（仍然有效）
 
 桥如果是以插件形式装进来、暴露工具给她的，仍然可以在 `config.tools.allow`（设置页「插件能力白名单」）里放行工具名。qq-bridge 默认要放行的是：
