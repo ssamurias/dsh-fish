@@ -169,7 +169,7 @@ ctx.on('dsh-fish/card', async (card) => {
   if (card.sessionId !== mySession) return undefined
   await sendSomewhere(render(card)) // 发不出去就抛，这张卡退回会话上
   remember(card.id)                 // 自己存好，人可能隔几个小时才答，中间宿主可能重启
-  return { via: 'QQ 私聊' }          // 会写进她的回执：[已问，送到了QQ 私聊，还没答]
+  return { via: 'QQ 私聊' }          // ask_owner 的回执会写：[已问，送到了QQ 私聊，还没答]
 })
 
 // 人答了。id 不用背，原样还回来
@@ -177,9 +177,9 @@ const r = await ctx.bail('dsh-fish/answer', { id, selected: ['可以'] }) // →
 ```
 
 - 只有回了 `{ via }` 才算接走。不接返回 `undefined`；抛错、15 秒没回都算没接，这张卡照常弹在会话上。`bail` 停在第一个非空返回值上，async 监听只有排第一的那个算数。
-- `selected` 填选项原文，和宿主的回答同形。空数组是「回了话，没选」，`ask_owner` 记成「以后再说」，理由写 `note`；别把人的原话放进 `note`，事件流只追加。`bring_back` 和规矩申请不写，还挂着。
+- `selected` 填选项原文，和宿主的回答同形。没选、对不上选项都是 `ok: false`，什么都不写。人回的不是选项时别猜成同意：只结算一次，错了改不回来。
 - 回答不会自己进她的对话。人说的那句话照常交给她，或者自己告诉她。
-- 重复答、过期了的，`ok` 是 `false`，`why` 说明原因，可以转告人。
+- `ok: false` 时 `why` 说明原因，可以转告人。它不代表这张卡结了（写盘失败也是它），id 留着，人再答一次就再发一次。答过的、过期的会再说一遍原因。过没过期由这边判断，`ask_owner` 放一天，规矩申请放三天，`bring_back` 不过期，插件不用自己算。
 
 ### 7.4 另一条老路：工具白名单（仍然有效）
 

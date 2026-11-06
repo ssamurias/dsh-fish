@@ -4,7 +4,8 @@
  * 人不在她那条会话前的部署：卡片他看不见，她这一轮还白等 5 分钟。守这几件事：
  *   1. 只有回了 { via } 才算接走；没人接、抛错、拒绝、超时都退回卡片，绝不抛；
  *   2. 接走了不弹卡、不等，回执写清楚送到哪儿了、还没答；
- *   3. 回答隔多久都能结算，走的是观测台和卡片同一条路，只结算一次；
+ *   3. 回答隔几个小时、中间重启过都能结算，走的是观测台和卡片同一条路，只结算一次；
+ *      回的不是选项就不结算，卡还开着；
  *   4. 接卡的插件不认任何具体的 IM，也不用知道 dsh-fish 的包名。
  */
 import { test } from 'node:test'
@@ -14,10 +15,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { askInChat } from '../lib/askinchat.js'
-import { registerAsk, settleStaleAsks } from '../lib/ask.js'
+import { registerAsk, restedToday, settleAsk, settleStaleAsks } from '../lib/ask.js'
 import { answerCard } from '../lib/cardanswer.js'
 import { registerBringBack, YES as KEEP_YES, NO as KEEP_NO } from '../lib/keep.js'
 import { askKeepsake, pendingKeepsakes, readKeepsakes } from '../lib/keepsake.js'
+import { dateKey, loadConfig } from '../lib/settings.js'
 import { appendEvent, readEvents } from '../lib/store.js'
 
 const ONE = [{ id: 'q', header: '想问', question: '行吗', options: [{ label: '可以' }, { label: '这次不行' }] }]
@@ -158,7 +160,7 @@ test('dsh-fish/answer：隔多久答都能结算，选项对上第几个就是�
   })
 })
 
-test('dsh-fish/answer：只结算一次，过期结算之后也不再改', async () => {
+test('dsh-fish/answer：只结算一次，第二次说明原因', async () => {
   await withRoot(async (root) => {
     const { out } = await askRelayed(root)
     assert.equal((await answerCard(root, { id: `ask:${out.askId}`, selected: ['可以'] })).ok, true)
@@ -166,35 +168,95 @@ test('dsh-fish/answer：只结算一次，过期结算之后也不再改', async
     assert.equal(again.ok, false)
     assert.match(again.why, /答过/)
   })
+})
+
+test('dsh-fish/answer：放了一天才答，说的是放了一天，不是答过了', async () => {
   await withRoot(async (root) => {
     const { out } = await askRelayed(root)
     assert.equal(await settleStaleAsks(root, { now: Date.now() + 25 * 3600 * 1000 }), 1)
-    assert.equal((await answerCard(root, { id: `ask:${out.askId}`, selected: ['可以'] })).ok, false)
+    const late = await answerCard(root, { id: `ask:${out.askId}`, selected: ['可以'] })
+    assert.equal(late.ok, false)
+    assert.match(late.why, /放了一天没人答/)
+    assert.doesNotMatch(late.why, /答过/)
   })
 })
 
-test('dsh-fish/answer：回了话没选记成以后再说，理由只写 note，不留人的原话', async () => {
+test('settleAsk：几条路同时答，只有第一条算', async () => {
   await withRoot(async (root) => {
     const { out } = await askRelayed(root)
-    const r = await answerCard(root, { id: `ask:${out.askId}`, selected: [], custom: '可以，不过这是私事', note: '回了话，没选' })
-    assert.equal(r.ok, true)
+    const rs = await Promise.all([
+      answerCard(root, { id: `ask:${out.askId}`, selected: ['可以'] }),
+      answerCard(root, { id: `ask:${out.askId}`, selected: ['这次不行'] }),
+      settleAsk(root, { askId: out.askId, verdict: 'later', via: 'ui' }),
+      settleStaleAsks(root, { now: Date.now() + 25 * 3600 * 1000 }),
+    ])
+    assert.equal(rs.slice(0, 3).filter((r) => r.ok).length, 1)
+    assert.equal(rs[3], 0)
+    const { events } = await readEvents(root)
+    assert.equal(events.filter((e) => e.type === 'answer').length, 1)
+    assert.equal(events.filter((e) => e.type === 'meta' && /^ask-/.test(e.text)).length, 1)
+  })
+})
+
+test('dsh-fish/answer：没选、对不上选项都不结算，这张卡还能答', async () => {
+  await withRoot(async (root) => {
+    const { out } = await askRelayed(root)
+    const id = `ask:${out.askId}`
+    for (const bad of [{ id }, { id, selected: [] }, { id, selected: [], custom: '可以，不过这是私事' }, { id, selected: ['当然'] }]) {
+      assert.equal((await answerCard(root, bad)).ok, false, JSON.stringify(bad))
+    }
     const raw = readFileSync(join(root, 'events.jsonl'), 'utf8')
     assert.ok(!raw.includes('私事'))
-    const { events } = await readEvents(root)
-    const a = events.find((e) => e.type === 'answer')
-    assert.equal(a.ask.verdict, 'later')
-    assert.equal(a.text, '回了话，没选')
-    assert.ok(events.some((e) => e.type === 'meta' && e.text === `ask-later:${out.askId}`))
+    assert.equal((await readEvents(root)).events.filter((e) => e.type === 'answer').length, 0)
+    assert.deepEqual(await answerCard(root, { id, selected: ['可以'] }), { ok: true })
   })
 })
 
-test('dsh-fish/answer：对不上选项不结算，也不当成同意', async () => {
+test('ask_owner：选项太长也能答回来，卡上的字和账上一样', async () => {
   await withRoot(async (root) => {
-    const { out } = await askRelayed(root)
-    const r = await answerCard(root, { id: `ask:${out.askId}`, selected: ['当然'] })
-    assert.equal(r.ok, false)
+    const long = '可以，不过只改今天晚上这一次，明天起恢复原来的作息时间吧'
+    const cards = []
+    const { ctx } = fakeCtx((_, card) => { cards.push(card); return { via: 'QQ 私聊' } })
+    registerAsk(ctx, { root })
+    const out = await ctx.spec.execute(
+      { question: '能换吗', kind: 'other', options: [long, '这次不行'] },
+      { session: { header: { id: 'session-abc' } }, agent: { session: { id: 'session-abc' } } },
+    )
+    const label = cards[0].questions[0].options[0].label
+    assert.equal(label, long.slice(0, 24))
+    assert.deepEqual(await answerCard(root, { id: `ask:${out.askId}`, selected: [label] }), { ok: true })
+    assert.equal((await readEvents(root)).events.find((e) => e.type === 'answer').ask.verdict, 'approve')
+  })
+})
+
+test('kind=rest：隔天才答应，歇的是她问的那一天，不是答的这一天', async () => {
+  await withRoot(async (root) => {
+    const yesterday = new Date(Date.now() - 24 * 3600 * 1000)
+    writeFileSync(join(root, 'events.jsonl'), JSON.stringify({
+      id: 'ev_rest1', v: 1, ts: yesterday.toISOString(), day: 3, stage: 1, type: 'ask', source: 'system', text: '今天能歇吗', refs: [], verdict: null, confidence: 0.5, flags: [],
+      ask: { kind: 'rest', subject: '', options: ['可以', '这次不行'], reason: '' },
+    }) + '\n', 'utf8')
+    assert.deepEqual(await answerCard(root, { id: 'ask:ev_rest1', selected: ['可以'] }), { ok: true })
     const { events } = await readEvents(root)
-    assert.equal(events.filter((e) => e.type === 'answer').length, 0)
+    assert.equal(restedToday(events, dateKey(yesterday)), true)
+    assert.equal(restedToday(events), false)
+  })
+})
+
+test('kind=time：卡上写着答应了会改成什么，不止她那句话', async () => {
+  await withRoot(async (root) => {
+    const cards = []
+    const { ctx } = fakeCtx((_, card) => { cards.push(card); return { via: 'QQ 私聊' } })
+    registerAsk(ctx, { root })
+    const out = await ctx.spec.execute(
+      { question: '我想换个作息', kind: 'time', wakesPerDay: 2, window: ['09:00', '21:00'] },
+      { session: { header: { id: 'session-abc' } }, agent: { session: { id: 'session-abc' } } },
+    )
+    assert.equal(cards[0].questions[0].question, '我想换个作息（答应了就改成：每天醒 2 次，09:00–21:00）')
+    assert.deepEqual(await answerCard(root, { id: `ask:${out.askId}`, selected: ['可以'] }), { ok: true })
+    const { config } = await loadConfig(root)
+    assert.equal(config.wakesPerDay, 2)
+    assert.deepEqual(config.window, ['09:00', '21:00'])
   })
 })
 
@@ -217,10 +279,10 @@ test('bring_back：卡被接走时账上还挂着，答了才动文件', async (
     const a = askKeepsake(root, { outing, sessionId: 'session-abc', rel: 'notes.txt', why: '想学' })
     assert.equal(a.ok, true)
     const id = `keepsake:${a.item.id}`
-    // 回了话没选：还挂着
-    assert.deepEqual(await answerCard(root, { id, selected: [] }), { ok: true })
-    assert.equal(pendingKeepsakes(root).length, 1)
+    // 没选、对不上：还挂着
+    assert.equal((await answerCard(root, { id, selected: [] })).ok, false)
     assert.equal((await answerCard(root, { id, selected: ['当然'] })).ok, false)
+    assert.equal(pendingKeepsakes(root).length, 1)
     assert.deepEqual(await answerCard(root, { id, selected: [KEEP_YES] }), { ok: true })
     assert.equal(pendingKeepsakes(root).length, 0)
     assert.notEqual(readKeepsakes(root).items.find((it) => it.id === a.item.id)?.status, 'asked')
@@ -233,7 +295,7 @@ test('规矩申请：只认还在等的那一张', async () => {
     const ctxArg = { day: 1, stage: 1, source: 'system' }
     const offer = await appendEvent({ type: 'grant_offer', text: '想试试', grant: { rule: 'some-rule' } }, ctxArg, root)
     assert.equal((await answerCard(root, { id: 'grant:ev_other', selected: ['可以'] })).ok, false)
-    assert.deepEqual(await answerCard(root, { id: `grant:${offer.id}`, selected: [] }), { ok: true })
+    assert.equal((await answerCard(root, { id: `grant:${offer.id}`, selected: [] })).ok, false)
     assert.deepEqual(await answerCard(root, { id: `grant:${offer.id}`, selected: ['这次不行'] }), { ok: true })
     const { events } = await readEvents(root)
     assert.equal(events.find((e) => e.type === 'grant')?.grant?.verdict, 'reject')
