@@ -350,7 +350,8 @@ test('启动时挂上 dsh-fish/answer：别的插件不用知道包名就能送�
     const { apply } = await import('../lib/index.js')
     const h = apply(seen, { root })
     try {
-      await new Promise((resolve) => setTimeout(resolve, 120))
+      // apply() 的登记不是同步的，固定等多久在慢机上都可能不够（boot.test.mjs 同理）
+      for (let i = 0; i < 300 && !listeners.has('dsh-fish/answer'); i++) await new Promise((resolve) => setTimeout(resolve, 20))
       const fn = listeners.get('dsh-fish/answer')
       assert.equal(typeof fn, 'function')
       const ev = await appendEvent({ type: 'ask', text: '问一句', ask: { kind: 'other', options: ['可以', '这次不行'] } }, { day: 1, stage: 1, source: 'system' }, root)
