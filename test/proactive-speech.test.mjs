@@ -85,12 +85,13 @@ function playTurn(h, { tool = 'send_chat', isError = false, text = '' } = {}) {
 async function run(proactive, turn) {
   const root = await setup(proactive)
   const h = host()
-  const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
+  const logs = []
+  const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: (...a) => logs.push(a.join(' ')) })
   await s.tick()
   assert.equal(h.followups.length, 1, '这一拍应该投递一次')
   playTurn(h, turn)
   await sleep(60)
-  const out = { meta: await metas(root), folded: h.appended.length, section: h.followups[0].section }
+  const out = { meta: await metas(root), folded: h.appended.length, section: h.followups[0].section, logs }
   s.dispose()
   clearWakeSection()
   return out
@@ -122,6 +123,10 @@ test('配了 sendTools：只写正文不算开口，正文到不了人', async (
   const r = await run({ sendTools: ['send_chat'] }, { tool: null, text: '我想了想，还是算了，先不打扰他。' })
   assert.ok(r.meta.includes('proactive-silent'))
   assert.ok(!r.meta.includes('proactive-turn'))
+  // 日志照实说，不说成「没什么要说的」
+  const line = r.logs.find((l) => l.includes('没有开口')) ?? ''
+  assert.match(line, /只写了正文，没调发送工具/)
+  assert.doesNotMatch(line, /没什么要说的/)
 })
 
 test('配了 sendTools：发送失败再写一句正文，也不算开口', async () => {
