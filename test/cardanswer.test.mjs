@@ -229,6 +229,23 @@ test('kind=time：效果没落地就不算答过，再答一次还能生效', { 
   })
 })
 
+test('kind=time：账写不进去就不改配置，不会「没记上」却已经变了', { skip: process.platform !== 'win32' }, async () => {
+  await withRoot(async (root) => {
+    const { out } = await askRelayed(root, { kind: 'time', wakesPerDay: 3 })
+    const before = (await loadConfig(root)).config.wakesPerDay
+    const events = join(root, 'events.jsonl')
+    chmodSync(events, 0o444)
+    try {
+      const r = await answerCard(root, { id: `ask:${out.askId}`, selected: ['可以'] })
+      assert.equal(r.ok, false)
+      assert.ok(!r.why.includes(root), '不带本机路径')
+    } finally {
+      chmodSync(events, 0o644)
+    }
+    assert.equal((await loadConfig(root)).config.wakesPerDay, before)
+  })
+})
+
 test('settleAsk：几条路同时答，只有第一条算', async () => {
   await withRoot(async (root) => {
     const { out } = await askRelayed(root)
@@ -436,6 +453,7 @@ test('规矩申请：两边同时答只有第一个算，读不到账时说真�
     const r = await answerCard(root, { id: `grant:${offer.id}`, selected: ['可以'] })
     assert.equal(r.ok, false)
     assert.doesNotMatch(r.why, /不在等了/)
+    assert.ok(!r.why.includes(root), '不带本机路径')
     rmSync(file, { recursive: true })
     writeFileSync(file, saved)
     assert.deepEqual(await answerCard(root, { id: `grant:${offer.id}`, selected: ['可以'] }), { ok: true })
