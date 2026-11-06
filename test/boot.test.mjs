@@ -98,9 +98,14 @@ test('插件停用时收得干净：宿主只认 ctx.effect，定时器要停，
   await withRoot(async (root) => {
     const realSet = globalThis.setInterval
     const realClear = globalThis.clearInterval
+    const realSetT = globalThis.setTimeout
+    const realClearT = globalThis.clearTimeout
     const live = new Set()
     globalThis.setInterval = (...a) => { const t = realSet(...a); live.add(t); return t }
     globalThis.clearInterval = (t) => { live.delete(t); return realClear(t) }
+    // 只记 1 秒以上的：调度器的 wakeTimer 是这种，下面轮询用的 20ms 不算
+    globalThis.setTimeout = (fn, ms, ...a) => { const t = realSetT((...x) => { live.delete(t); fn(...x) }, ms, ...a); if (ms >= 1000) live.add(t); return t }
+    globalThis.clearTimeout = (t) => { live.delete(t); return realClearT(t) }
     try {
       const { ctx } = fakeCtx()
       const cleanups = []
@@ -118,6 +123,8 @@ test('插件停用时收得干净：宿主只认 ctx.effect，定时器要停，
     } finally {
       globalThis.setInterval = realSet
       globalThis.clearInterval = realClear
+      globalThis.setTimeout = realSetT
+      globalThis.clearTimeout = realClearT
     }
   })
 })
@@ -379,9 +386,10 @@ test('日记可见时一天一页：默认只给最新一天，?day= 取指定�
 
 test('dispose 之后不再有后台活动（定时器真的停了）', async () => {
   await withRoot(async (root) => {
-    const { ctx } = fakeCtx()
+    const { ctx, routes } = fakeCtx()
     const h = apply(ctx, { root })
-    await new Promise((r) => setTimeout(r, 120))
+    // 等启动走完。固定等 120ms 在慢机上不够：还没写 seed 就收尾，seed 算成收尾之后的活动
+    assert.ok(await waitFor(() => routes.length > 0), '启动没走完')
     h.dispose?.()
 
     const before = (await readEvents(root)).events.length
