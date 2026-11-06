@@ -32,6 +32,8 @@ import {
   attachAssembleFix,
   attachIdentity,
   clearWakeSection,
+  clearWakeSectionFor,
+  getWakeSection,
   identityText,
   lastTrimReport,
   mountedCount,
@@ -544,4 +546,50 @@ test('reorderForHer：没有这四段就不多出一段空段', () => {
   }
   const out = reorderForHer(assembly)
   assert.equal(out.sections.filter((s) => s.name === BELIEFS_SECTION).length, 0)
+})
+
+// 2026-11-06（用户报「叫醒之后连着好几轮只思考不说话」）：
+// 处境段原来是一个进程级变量，一个进程里她可能同时住着好几条会话，
+// A 房间的一次叫醒会被塞进 B 房间正在跑的那一轮。下面三条守新口径。
+
+test('处境按会话分开存：A 房间的一次叫醒，不许进 B 房间那一轮', () => {
+  clearWakeSection()
+  setWakeSection('这一轮是你自己的，不用回应任何人。', 'session-a')
+  assert.equal(getWakeSection('session-a'), '这一轮是你自己的，不用回应任何人。')
+  assert.equal(getWakeSection('session-b'), '', 'B 房间不该看见 A 的处境')
+
+  // 挂在 agent 上的那段闭包也得取自己那条会话的
+  const seen = []
+  const mk = (id) => ({
+    session: { header: { id } },
+    ctx: { systemPrompt: { section: (o) => seen.push({ id, o }) } },
+  })
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  fs.writeFileSync(selfDocPath(root), '我是她', 'utf8')
+  attachIdentity(mk('session-a'), root)
+  attachIdentity(mk('session-b'), root)
+  const wakeOf = (id) => seen.find((s) => s.id === id && s.o.name === WAKE_SECTION).o.text()
+  assert.equal(wakeOf('session-a'), '这一轮是你自己的，不用回应任何人。')
+  assert.equal(wakeOf('session-b'), '', '另一条会话的这一轮必须是干净的')
+  clearWakeSection()
+})
+
+test('他一开口，那次叫醒就作废（哪怕 turn/end 没认到）', () => {
+  clearWakeSection()
+  setWakeSection('这一轮是你自己的，不用回应任何人。', 'session-a')
+  // 认不出会话的那份残留也一起清
+  setWakeSection('没人认领的处境', '')
+  clearWakeSectionFor('session-a')
+  assert.equal(getWakeSection('session-a'), '')
+  assert.equal(getWakeSection(''), '', '无主残留一并清掉')
+})
+
+test('处境最多活十分钟：turn/end 一直不来也不会挂到进程退出', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  clearWakeSection()
+  setWakeSection('这一轮是你自己的。', 'session-t')
+  assert.equal(getWakeSection('session-t'), '这一轮是你自己的。')
+  t.mock.timers.tick(10 * 60_000)
+  assert.equal(getWakeSection('session-t'), '', '到点无条件清掉')
 })
