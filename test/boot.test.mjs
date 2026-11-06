@@ -94,6 +94,34 @@ test('插件元信息：名字与 inject', () => {
   assert.ok(!inject.includes('userQuestions'), 'userQuestions 必须运行时探测，不能进 inject')
 })
 
+test('插件停用时收得干净：宿主只认 ctx.effect，定时器要停，只收一次', async () => {
+  await withRoot(async (root) => {
+    const realSet = globalThis.setInterval
+    const realClear = globalThis.clearInterval
+    const live = new Set()
+    globalThis.setInterval = (...a) => { const t = realSet(...a); live.add(t); return t }
+    globalThis.clearInterval = (t) => { live.delete(t); return realClear(t) }
+    try {
+      const { ctx } = fakeCtx()
+      const cleanups = []
+      ctx.effect = (fn) => { cleanups.push(fn()) }
+      let disposeHandlers = 0
+      ctx.on = (name) => { if (name === 'dispose') disposeHandlers += 1 }
+      const h = apply(ctx, { root })
+      for (let i = 0; i < 300 && live.size < 2; i++) await new Promise((r) => setTimeout(r, 20))
+      assert.ok(live.size >= 1, '启动后应该有定时器在跑')
+      assert.equal(cleanups.length, 1)
+      assert.equal(disposeHandlers, 0)
+      cleanups[0]()
+      assert.equal(live.size, 0, '定时器都要停')
+      assert.doesNotThrow(() => { cleanups[0](); h.dispose?.() })
+    } finally {
+      globalThis.setInterval = realSet
+      globalThis.clearInterval = realClear
+    }
+  })
+})
+
 test('首次启动会播种，且只播一次', async () => {
   await withRoot(async (root) => {
     const { ctx } = fakeCtx()
