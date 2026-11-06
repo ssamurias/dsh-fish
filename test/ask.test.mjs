@@ -220,6 +220,11 @@ test('观测台 /ask：GET 带列表与配额，POST 能补答', async () => wit
   const g2 = await call('GET')
   assert.equal(g2.json.pending.length, 0)
   assert.equal(g2.json.items[0].verdict, 'reject')
+
+  // 别的地方先答过时，页面要读得到原因：jpost 只认 error，不认 why
+  const again = await call('POST', { action: 'answer', askId: ask.id, verdict: 'approve' })
+  assert.equal(again.status, 409)
+  assert.match(again.json.error, /答过/)
 }))
 
 test('她得知道自己有 ask_owner：白名单、手边清单、身份文档三处都写上', () => {

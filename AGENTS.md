@@ -164,19 +164,24 @@ ctx.on('dsh-fish/busy', (sessionId) => stillPlaying(sessionId) ? true : undefine
 她问人的卡片（`ask_owner`、`bring_back`、规矩申请）默认挂在她那条会话的输入框上方，只等 5 分钟。人不在这台机器前就看不见，她这一轮还要白等，`ask_owner` 一天后记成「一直没人答」。插件能把话送到人在的地方时，把卡接走：
 
 ```js
-ctx.on('dsh-fish/card', async (card) => {
-  // card: { id, sessionId, questions, detail }。questions 和宿主 userQuestions.ask 的同形；detail 是她说的「为什么」，可能是空串
-  if (card.sessionId !== mySession) return undefined
+// card: { id, sessionId, questions, detail }。questions 和宿主 userQuestions.ask 的同形；detail 是她说的「为什么」，可能是空串
+ctx.on('dsh-fish/card', (card) => {
+  if (!isHers(card.sessionId)) return undefined // 同步返回：async 监听会挡住后面的插件。bring_back 来自她出门那条会话，不是家里那条
+  return relay(card)
+})
+
+async function relay(card) {
   await sendSomewhere(render(card)) // 发不出去就抛，这张卡退回会话上
   remember(card.id)                 // 自己存好，人可能隔几个小时才答，中间宿主可能重启
   return { via: 'QQ 私聊' }          // ask_owner 的回执会写：[已问，送到了QQ 私聊，还没答]
-})
+}
 
 // 人答了。id 不用背，原样还回来
-const r = await ctx.bail('dsh-fish/answer', { id, selected: ['可以'] }) // → { ok: true } 或 { ok: false, why }
+const r = await ctx.bail('dsh-fish/answer', { id, selected: ['可以'] }) // → { ok: true } 或 { ok: false, why }；dsh-fish 没装或停用时是 undefined
 ```
 
-- 只有回了 `{ via }` 才算接走。不接返回 `undefined`；抛错、35 秒没回都算没接，这张卡照常弹在会话上。`bail` 停在第一个非空返回值上，async 监听只有排第一的那个算数。
+- 只有回了 `{ via }` 才算接走。不接返回 `undefined`；抛错、35 秒没回、这一轮被取消都算没接，这张卡照常弹在会话上。`via` 会过 guard.js，看着像改写指令的不念给她，只写「别的地方」。
+- 卡上看着带凭据（她的问题、理由、选项）时不发这个事件，只留在本机的卡片上。`bail` 停在第一个非空返回值上，async 监听只有排第一的那个算数。
 - `selected` 填选项原文，和宿主的回答同形。没选、对不上选项都是 `ok: false`，什么都不写，数字也不当下标。人回的不是选项时别猜成同意：只结算一次，错了改不回来。
 - 回答不会自己进她的对话。人说的那句话照常交给她，或者自己告诉她。
 - `ok: false` 时 `why` 说明原因，可以转告人。它不代表这张卡结了（写盘失败也是它），id 留着，人再答一次就再发一次。答过的、过期的会再说一遍原因。过没过期由这边判断，`ask_owner` 放一天，规矩申请放三天，`bring_back` 不过期，插件不用自己算。
