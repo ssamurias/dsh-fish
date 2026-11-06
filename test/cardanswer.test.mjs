@@ -18,7 +18,7 @@ import { askInChat } from '../lib/askinchat.js'
 import { registerAsk, restedToday, settleAsk, settleStaleAsks } from '../lib/ask.js'
 import { answerCard } from '../lib/cardanswer.js'
 import { registerBringBack, YES as KEEP_YES, NO as KEEP_NO } from '../lib/keep.js'
-import { askKeepsake, pendingKeepsakes, readKeepsakes } from '../lib/keepsake.js'
+import { askKeepsake, decideKeepsake, pendingKeepsakes, readKeepsakes } from '../lib/keepsake.js'
 import { dateKey, loadConfig } from '../lib/settings.js'
 import { appendEvent, readEvents } from '../lib/store.js'
 
@@ -128,6 +128,21 @@ for (const [name, cardOpts, questions] of [
     assert.equal(asked.length, 1)
   })
 }
+
+test('ask_owner：长 token 截断后判断够不上，也看原文，不转走', async () => {
+  for (const args of [
+    { options: ['Bearer abcdefghij0123456789', '不行'] },
+    { options: ['abcdefghijklmnopqrstuvwxyz0123456789abcdefgh', '不行'] },
+    { why: `${'字'.repeat(190)}sk-abcdefghijklmnop1234` },
+  ]) {
+    await withRoot(async (root) => {
+      const { out, asked } = await askRelayed(root, args)
+      assert.notEqual(out.said, 'relayed', JSON.stringify(args))
+      assert.equal(asked.length, 1, '留在本机的卡片上')
+      assert.ok(readFileSync(join(root, 'logs', 'dsh-fish.log'), 'utf8').includes('没转给别的插件'), '留一行日志')
+    })
+  }
+})
 
 test('dsh-fish/card：去处是别的插件写的，换行压掉，像改写指令的不念给她，但卡还是接走了', async () => {
   const relayed = async (via) => {
@@ -521,6 +536,50 @@ test('bring_back：人在卡上点了准，复制失败时回执照实说，下�
     const next = await ctx.spec.execute({ path: 'b.txt', why: '再带一个' }, exec)
     assert.equal(next.ok, false)
     assert.match(next.note, /点了头/)
+  })
+})
+
+test('bring_back：卡开着时别处先答了，回执照账上的说', async () => {
+  for (const [elsewhere, clicked, want, status] of [[false, KEEP_YES, '别处先答了，没带。', 'declined'], [true, KEEP_NO, '别处先答了，带回来了。', 'kept']]) {
+    await withRoot(async (root) => {
+      const cwd = join(root, 'ws')
+      mkdirSync(cwd, { recursive: true })
+      writeFileSync(join(cwd, 'a.txt'), 'a\n', 'utf8')
+      writeFileSync(join(root, 'outings.json'), JSON.stringify({ version: 1, outings: [{ sessionId: 'session-abc', workspaceId: 'w-1', workspaceName: '素材区', cwd, startedAt: Date.now(), status: 'active' }] }), 'utf8')
+      const { ctx } = fakeCtx()
+      ctx.userQuestions.ask = async () => {
+        decideKeepsake(root, { id: pendingKeepsakes(root)[0].id, yes: elsewhere })
+        return { answers: [{ id: 'keepsake', selected: [clicked] }] }
+      }
+      registerBringBack(ctx, { root, tenant: { root, herDir: join(root, 'her'), tenant: { ok: true } } })
+      const out = await ctx.spec.execute({ path: 'a.txt', why: '想学' }, { session: { header: { id: 'session-abc', cwd } }, cwd })
+      assert.equal(ctx.spec.output.render({}, out)[0].text, `[${want}]`)
+      assert.equal(readKeepsakes(root).items[0].status, status)
+    })
+  }
+})
+
+test('dsh-fish/answer：启动没走到认领那一步，不知道家是不是自己的，就不写', async () => {
+  await withRoot(async (root) => {
+    const listeners = new Map()
+    const { ctx } = fakeCtx()
+    const seen = { ...ctx, on: (name, fn) => { listeners.set(name, fn); return () => {} }, logger: { info() {}, warn() {}, error() {} }, webServer: { register: () => () => {} }, connection: { requestRejection: () => null } }
+    seen.tools = { register: () => () => {} }
+    seen.get = (key) => seen[key]
+    const prev = process.env.DSH_FISH_HOMES
+    process.env.DSH_FISH_HOMES = join(root, 'homes.json')
+    mkdirSync(join(root, 'config.json')) // 读配置就抛错，启动走不到认领
+    const { apply } = await import('../lib/index.js')
+    const h = apply(seen, { root })
+    try {
+      const r = await listeners.get('dsh-fish/answer')({ id: 'ask:ev_x', selected: ['可以'] })
+      assert.equal(r.ok, false)
+      assert.match(r.why, /启动没走完/)
+    } finally {
+      h.dispose?.()
+      if (prev === undefined) delete process.env.DSH_FISH_HOMES
+      else process.env.DSH_FISH_HOMES = prev
+    }
   })
 })
 
