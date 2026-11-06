@@ -310,6 +310,47 @@ test('他真回来过时，同一份事件不再判冷落（heard 兜住旧档�
   assert.equal(assess(evs, now, { afterDays: 2 }).reason, 'returned')
 })
 
+// 2026-11-06（issue #49 的时钟盲点）：系统时间被往前跳过、再改回来时，
+// absence 会带一条 ts 在未来的时间戳。之后所有 seen 的 ts 都比它小，
+// 老代码只看时间戳 → 「他回来了」永远判不出来，身份里那句冷落一直挂着。
+// 判据改成「事件流先后 OR 时间戳」，这一条守住前者。
+test('absence：absence 的 ts 落在未来时，按事件流先后也能判出「他回来了」', () => {
+  const now = Date.now()
+  const iso = (ms) => new Date(ms).toISOString()
+  const abs = { id: 'ev_a', type: 'absence', text: '他有 5 天没出现。', days: 5, ts: iso(now + 30 * DAY) }
+  const evs = [
+    { id: 'ev_s0', type: 'meta', text: `seen:${iso(now - 6 * DAY)}`, ts: iso(now - 6 * DAY) },
+    abs,
+    { id: 'ev_s1', type: 'meta', text: `seen:${iso(now - 1 * DAY)}`, ts: iso(now - 1 * DAY) },
+  ]
+  assert.equal(assess(evs, now, { afterDays: 2 }).reason, 'returned')
+})
+
+// 反方向：seen 自己落在未来（时钟回拨）时，天数不能是负数，更不能判成冷落。
+test('absence：seen 落在未来时天数按 0 算，不判冷落', () => {
+  const now = Date.now()
+  const at = new Date(now + 5 * DAY).toISOString()
+  const a = assess([{ id: 'ev_s', type: 'meta', text: `seen:${at}`, ts: at }], now, { afterDays: 2 })
+  assert.equal(a.days, 0)
+  assert.equal(a.absent, false)
+})
+
+test('deriveSelf：absence 的 ts 在未来，追加在后面的 seen 也算回来过', () => {
+  const now = Date.now()
+  const iso = (ms) => new Date(ms).toISOString()
+  const seed = { id: 'ev_01J0000000000000000000000S', type: 'seed', text: '起点。', ts: iso(now - 30 * DAY), day: 1, stage: 1 }
+  const abs = {
+    id: 'ev_01J0000000000000000000001A', type: 'absence', text: '那个人有 5 天没出现。', days: 5,
+    day: 6, stage: 1, ts: iso(now + 30 * DAY), refs: [], verdict: null, confidence: 0.5, flags: [], source: 'system',
+  }
+  const seen = { id: 'ev_01J0000000000000000000002S', type: 'meta', text: `seen:${iso(now - 1 * DAY)}`, ts: iso(now - 1 * DAY), day: 7, stage: 1 }
+  const m = deriveSelf([seed, abs, seen], { now })
+  assert.equal(m.absenceDays, 0, 'seen 追加在 absence 之后，冷落已经结束')
+  // lastAbsence 只是「冷落发生过」的标记（重聚窗口要用），真正进提示词的是 absenceDays；
+  // 这里守的是那句「他有 N 天没出现」不再出现。
+  assert.equal(m.lastAbsence?.at, abs.ts)
+})
+
 test('absence-reject: 驳回掉的 absence 不再进派生（历史误记只靠追加排除）', () => {
   const now = Date.now()
   const seed = { id: 'ev_01J0000000000000000000000S', type: 'seed', text: '起点。', ts: new Date(now - 10 * DAY).toISOString(), day: 1, stage: 1 }

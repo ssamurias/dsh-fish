@@ -61,8 +61,33 @@ test('growth_commit 落库，且返回值不含任何状态数字', async () => 
   })
 })
 
-test('她不能用工具写系统侧类型', async () => {
+// 2026-11-06：schema 写盘时会把 confidence 悄悄夹到 0–1，越界的入参她以为记下了。
+// 和 wakesPerDay 是同一类问题——入口先拒，别让「说好的」和「落地」不一样。
+test('confidence 越界在入口就拒，不让写盘时悄悄夹到边上', async () => {
   await withRoot(async (root) => {
+    const ctx = fakeCtx()
+    registerCapture(ctx, { root })
+    const tool = ctx.regs.get('growth_commit')
+
+    for (const c of [5, -1, 1.2, 'abc']) {
+      const out = await tool.execute({ type: 'utterance', text: '随便一句。', confidence: c })
+      assert.equal(out.ok, false, `${String(c)} 必须被拒`)
+      assert.match(out.note, /0–1/, '要说清正确范围')
+    }
+    assert.equal((await readEvents(root)).events.length, 0, '被拒时不能落库')
+
+    const ok = await tool.execute({ type: 'utterance', text: '随便一句。', confidence: '0.6' })
+    assert.equal(ok.ok, true)
+    const { events } = await readEvents(root)
+    assert.equal(events.find((e) => e.type === 'utterance').confidence, 0.6)
+
+    // verdict 认不出来时 schema 会落成 null，她以为写了 confirmed——同样入口拒。
+    const badVerdict = await tool.execute({ type: 'revise', text: '改一句。', refs: [ok.id], verdict: 'CONFIRMED' })
+    assert.equal(badVerdict.ok, false)
+  })
+})
+
+test('她不能用工具写系统侧类型', async () => {  await withRoot(async (root) => {
     const ctx = fakeCtx()
     registerCapture(ctx, { root })
     const tool = ctx.regs.get('growth_commit')
