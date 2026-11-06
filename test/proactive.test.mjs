@@ -439,12 +439,11 @@ test('醒来后没开口的那几次：不占当天额度，但单独限次数�
 // 所以往事件流里放一条它读不了的行：revise 的 refs 不是数组时它会抛，
 // tick 接住后记一行 `proactive failed`。日志里有这一行，就是这一趟算过了。
 async function twoTicks(root, over, windowOverride) {
-  // 2026-11-06：主动性现在也要过「每天几点醒」这一关，所以默认把窗口排到
-  // 此刻前后一小时——tick 才会真的走到 maybeProactive。要测「窗口外不开口」
+  // 2026-11-06：主动性现在也要过「每天几点醒」这一关，所以默认给全天的窗口——
+  // tick 才会真的走到 maybeProactive，几点跑都一样。要测「窗口外不开口」
   // 就显式传一个不覆盖此刻的窗口。
-  const h = new Date().getHours()
-  const hh = (n) => `${String(n % 24).padStart(2, '0')}:00`
-  const win = windowOverride ?? [hh(h - 1), hh(h + 1)]
+  // （不要按此刻现算：0 点时算出 `-1:00` 这种坏值，normalizeConfig 会悄悄退回默认窗口。）
+  const win = windowOverride ?? ['00:00', '23:59']
   await writeConfig(normalizeConfig({ window: win, ...over }), root)
   line(root, { id: 'ev_unreadable', type: 'revise', ts: new Date().toISOString(), text: '合成', refs: 1 })
   const { events } = await readEvents(root)
