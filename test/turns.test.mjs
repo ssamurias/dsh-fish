@@ -418,6 +418,13 @@ test('她在侧栏里说出口的话，也要进 talkmem（原来 her 永远是�
     const off = registerTurns(ctx, { root, log: () => {} })
     try {
       ctx.emit('session/event', session(), humanMsg('外面下雨了吗'))
+      // 等这一轮真的被认下来（seen 已写进事件流、pending 已建好）再发她的话。
+      // 原来只给 80ms：Windows CI 上 onHuman 的读盘还没回来，assistant/message
+      // 会按「没有 pending」被丢掉，her 就成了空串（2026-11-06 run 42235339312）。
+      await waitFor(async () => {
+        const { events } = await readEvents(root)
+        return events.some((e) => e.type === 'meta' && String(e.text ?? '').startsWith('seen:'))
+      })
       await settled()
       // 宿主把她说的话作为 assistant/message 追加进来（不是 events.jsonl）
       ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '下了，我把窗关上了。' }]))
