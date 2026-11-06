@@ -371,7 +371,7 @@ lib/
   toolschema.js 简写参数 DSL → 标准 JSON Schema
   observe.js    宿主侧 JSON API（/dsh-fish/state、/events、/beliefs、/diary、/config、/wake、/browse、/reports、/update）
   client.js     浏览器半边：设置 → 大肥鱼
-test/           1576 个测试，node --test 全绿
+test/           1587 个测试，node --test 全绿
 ```
 
 ## 跑测试
