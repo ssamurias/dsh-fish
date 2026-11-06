@@ -14,7 +14,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { startScheduler, nextWakeAt } from '../lib/scheduler.js'
+import { startScheduler, nextWakeAt, wakeRetryBlocked } from '../lib/scheduler.js'
 import { appendEvent, readEvents, writeConfig } from '../lib/store.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
 import { getWakeSection, clearWakeSection } from '../lib/identity.js'
@@ -116,6 +116,37 @@ async function withRoot(fn) {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 }
+
+test('wakeRetryBlocked：刚失败过要隔开，一天最多试三次，别的日子不算', () => {
+  const dk = '2026-10-29'
+  const fail = (t, day = dk) => ({ type: 'meta', text: `wakefail:${day} 屋子没接上`, ts: new Date(t).toISOString() })
+  const now = at(12, 0)
+  assert.equal(wakeRetryBlocked([], dk, now), false)
+  assert.equal(wakeRetryBlocked([fail(now - 60_000)], dk, now), true, '一分钟前刚失败')
+  assert.equal(wakeRetryBlocked([fail(now - 46 * 60_000)], dk, now), false, '隔够了可以再试')
+  assert.equal(wakeRetryBlocked([fail(at(8, 0)), fail(at(9, 0)), fail(at(10, 0))], dk, now), true, '第三次之后今天不再试')
+  assert.equal(wakeRetryBlocked([fail(at(8, 0), '2026-10-28'), fail(at(9, 0), '2026-10-28'), fail(at(10, 0), '2026-10-28')], dk, now), false, '昨天的不算')
+  assert.equal(wakeRetryBlocked([{ type: 'meta', text: `wake:${dk} x`, ts: new Date(now - 1000).toISOString() }], dk, now), false, '成功的叫醒不算')
+})
+
+test('叫醒一直失败：不再每分钟试一次、写一行', async () => {
+  await withRoot(async (root, { advance }) => {
+    const h = fakeHost()
+    h.ctx.sessionController.resolveAgent = async () => { throw new Error('会话没了') }
+    const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
+    try {
+      for (let i = 0; i < 5; i++) {
+        await s.tick()
+        advance(61_000)
+      }
+      const { events } = await readEvents(root)
+      assert.equal(events.filter((e) => e.type === 'meta' && String(e.text).startsWith('wakefail:')).length, 1, '45 分钟内只试一次')
+      assert.equal(h.prompts.length, 0)
+    } finally {
+      s.dispose()
+    }
+  })
+})
 
 test('落点之后不再一分钟一个地连着叫；第二次等时间到、也等她说完', async () => {
   await withRoot(async (root, { advance, sleep }) => {
