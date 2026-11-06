@@ -373,3 +373,55 @@ test('verifyWoke：没有会话 id 时安静退出，不抛', async () => {
   assert.equal(r.landed, false)
   assert.equal(r.rewoke, false)
 })
+
+test('verifyWoke：会话在列表里但还空着 → 这一声没落地，再叫一次', async () => {
+  // 换房报告里最容易骗过旧判据的一条：宿主的 list() 连空白会话一起推，
+  // 旧代码只要「在列表里」就当成功，于是那句「再叫一次」从来没执行过。
+  const root = await mkdtemp(join(tmpdir(), 'fish-wake-'))
+  const calls = []
+  const logs = []
+  let blank = true
+  await writeFile(join(root, 'home.json'), JSON.stringify({ sessionId: 's1', wokeFor: 's1' }, null, 2))
+  const sc = {
+    list: async () => ({ items: [{ sessionId: 's1', blank }] }),
+    prompt: async (req) => { calls.push(req); blank = false },
+  }
+  const r = await verifyWoke(ctxWith(sc), { root, sessionId: 's1', delayMs: 0, log: (m) => logs.push(m) })
+  assert.equal(r.landed, false)
+  assert.equal(r.rewoke, true)
+  assert.equal(calls.length, 1)
+  assert.ok(logs.some((m) => m.includes('还是空的')))
+})
+
+test('verifyWoke：同一条正在复核时再来一次，直接跳过（别叫两声）', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-wake-'))
+  let release
+  const gate = new Promise((ok) => { release = ok })
+  let calls = 0
+  const sc = {
+    // 第一次 list 卡住，让两次复核重叠
+    list: () => gate.then(() => ({ items: [{ sessionId: 's1', blank: false }] })),
+    prompt: async () => { calls += 1 },
+  }
+  const first = verifyWoke(ctxWith(sc), { root, sessionId: 's1', delayMs: 0 })
+  await tick()
+  const second = await verifyWoke(ctxWith(sc), { root, sessionId: 's1', delayMs: 0 })
+  assert.equal(second.skipped, true, '换房与 /reset 各挂一次时，不该在她那里变成两声')
+  release()
+  const r = await first
+  assert.equal(r.landed, true)
+  assert.equal(calls, 0)
+})
+
+test('wakeIfBlank 默认不复核：测试里的替身不会真跑 turn，12 秒后的复查会污染断言', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-wake-'))
+  const calls = []
+  const sc = {
+    list: async () => ({ items: [{ sessionId: 's1', blank: true }] }),
+    prompt: async (req) => { calls.push(req) },
+  }
+  const r = await wakeIfBlank(ctxWith(sc), { sessionId: 's1', root, freshOnly: true })
+  assert.equal(r.woke, true)
+  await new Promise((ok) => setTimeout(ok, 30))
+  assert.equal(calls.length, 1, '不传 verify 时不该自己再挂一次复核')
+})

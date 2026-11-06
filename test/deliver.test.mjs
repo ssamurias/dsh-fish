@@ -19,6 +19,7 @@ import {
   fishMessage,
   resolveLiveAgent,
   deliverWake,
+  reviveIfBlank,
 } from '../lib/deliver.js'
 import { classifyMessage } from '../lib/turns.js'
 
@@ -155,4 +156,68 @@ test('没有会话 id 直接拒绝，不去碰宿主', async () => {
   const out = await deliverWake({}, fakeSc({ agent }), '')
   assert.equal(out.ok, false)
   assert.equal(agent.got.length, 0)
+})
+
+// ---- 退路不能再造空壳（2026-11-06 换房报告） ----
+// 宿主 create 是「按 cwd 开一条」，不是「恢复这一条」：跑过 turn 的会话给不出来，
+// 请求的 sessionId 被丢掉、换成新 id。以前三处退路都是裸 create，于是每递一次话
+// 就多一条空壳（本机 52 条会话里 39 条是这么来的）。
+
+test('reviveIfBlank：跑过 turn 的会话不新建，免得宿主另开一条空壳', async () => {
+  let creates = 0
+  const sc = {
+    list: async () => ({ items: [{ sessionId: 's1', blank: false }] }),
+    create: async () => { creates += 1; return { sessionId: 's1' } },
+  }
+  const logs = []
+  const r = await reviveIfBlank(sc, 's1', 'C:\\her', (m) => logs.push(m))
+  assert.equal(r.revived, false)
+  assert.equal(r.reason, 'has-turns')
+  assert.equal(creates, 0, '这一条已经跑过，create 只会换来一条新 id 的空壳')
+  assert.ok(logs.some((m) => m.includes('跑过 turn')))
+})
+
+test('reviveIfBlank：宿主列表里没有 → 按原 id 新建', async () => {
+  const seen = []
+  const sc = {
+    list: async () => ({ items: [] }),
+    create: async (req) => { seen.push(req); return { sessionId: req.sessionId } },
+  }
+  const r = await reviveIfBlank(sc, 's1', 'C:\\her')
+  assert.equal(r.revived, true)
+  assert.equal(r.created, 's1')
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].sessionId, 's1')
+})
+
+test('reviveIfBlank：还空着的会话可以按原 id 叫起来', async () => {
+  const sc = {
+    list: async () => ({ items: [{ sessionId: 's1', blank: true }] }),
+    create: async (req) => ({ sessionId: req.sessionId }),
+  }
+  const r = await reviveIfBlank(sc, 's1', 'C:\\her')
+  assert.equal(r.revived, true, '还没 turn/start，宿主的 claim 会复用原 id')
+})
+
+test('reviveIfBlank：宿主另开了别的 id → 判失败，别把空壳当成功', async () => {
+  const sc = {
+    list: async () => ({ items: [] }),
+    create: async () => ({ sessionId: 'brand-new' }),
+  }
+  const logs = []
+  const r = await reviveIfBlank(sc, 's1', 'C:\\her', (m) => logs.push(m))
+  assert.equal(r.revived, false)
+  assert.equal(r.reason, 'new-id')
+  assert.equal(r.created, 'brand-new')
+  assert.ok(logs.some((m) => m.includes('另开了 brand-new')))
+})
+
+test('reviveIfBlank：create 自己抛了就报失败，不往上冒', async () => {
+  const sc = {
+    list: async () => ({ items: [] }),
+    create: async () => { throw new Error('host down') },
+  }
+  const r = await reviveIfBlank(sc, 's1', 'C:\\her')
+  assert.equal(r.revived, false)
+  assert.equal(r.reason, 'failed')
 })
