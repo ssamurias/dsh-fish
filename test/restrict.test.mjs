@@ -12,6 +12,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { HER_TOOLS, currentToolSurface, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
 
@@ -344,6 +347,28 @@ test('currentToolSurface：默认就是放行清单；收窄关掉时为空', ()
 
   registerToolRestrict(fakeCtx(), { herDir: 'C:\\\\h', enabled: false, log: () => {} })
   assert.equal(currentToolSurface(), '', '收窄关着就不能替她列家当')
+})
+
+// issue #20：那位最后是关掉收窄才让她用上 vision_*。关掉之后 fish:tools 那一段已经是空的，
+// 身份文档「我手上有什么」里却还留着「在自己屋里，眼下能碰到的就是这些」——同一件事两个说法。
+test('收窄关着时，身份文档也不说「在自己屋里，眼下能碰到的就是这些」（issue #20）', async () => {
+  const { writeSelfDoc, selfDocPath } = await import('../lib/selfdoc.js')
+  const root = await mkdtemp(join(tmpdir(), 'fish-restrict-doc-'))
+  try {
+    registerToolRestrict(fakeCtx(), { herDir: 'C:\\\\h', enabled: true, log: () => {} })
+    await writeSelfDoc(root)
+    assert.match(await readFile(selfDocPath(root), 'utf8'), /眼下能碰到的就是这些/, '开着时照旧说')
+
+    registerToolRestrict(fakeCtx(), { herDir: 'C:\\\\h', enabled: false, log: () => {} })
+    await writeSelfDoc(root)
+    const doc = await readFile(selfDocPath(root), 'utf8')
+    assert.doesNotMatch(doc, /眼下能碰到的就是这些/, '收窄关着，家里的工具表就不止这些')
+    assert.match(doc, /growth_commit/, '她自己的工具照旧念')
+  } finally {
+    // 复位，别把「关着」漏给后面的用例
+    registerToolRestrict(fakeCtx(), { herDir: 'C:\\\\h', log: () => {} })
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
 })
 
 test('currentToolSurface：白名单里额外放行的会跟着进提示词', () => {

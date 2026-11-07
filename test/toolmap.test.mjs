@@ -35,6 +35,19 @@ test('第一层：手上有什么，名字要念出来', () => {
   assert.match(withExtra, /不是屋子里的东西/, '工具跟着她走，不是屋子里的东西')
 })
 
+test('收窄关着时，第一层不说「在自己屋里，眼下能碰到的就是这些」（issue #20）', () => {
+  // 那时她在家里看得见宿主给的全部工具；这句话会让她把真在手边的东西（比如看图的工具）当成没有。
+  assert.match(TOOL_BRIEF, /眼下能碰到的就是这些/, '默认（收窄开着）照旧说')
+  assert.match(toolBrief(['ops_bash'], { restricted: true }), /眼下能碰到的就是这些/)
+  const open = toolBrief(['ops_bash'], { restricted: false })
+  assert.doesNotMatch(open, /眼下能碰到的就是这些/)
+  // 只摘这一句，名字和别的说法都还在
+  assert.match(open, /growth_commit/)
+  assert.match(open, /ops_bash/)
+  assert.match(open, /不是屋子里的东西/)
+  assert.match(open, /卡在哪一步/)
+})
+
 test('第二层：从处境想起工具，不从名字往下数', () => {
   // 这是 2026-11-07 补的那一层。反例是「her_note 可以记录待办事项」（产品广告）。
   assert.match(TOOL_BRIEF, /卡在哪一步/, '要先让她从眼前的处境进入，而不是从清单进入')
