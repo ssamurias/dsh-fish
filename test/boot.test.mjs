@@ -583,7 +583,8 @@ test('手动唤醒：卡池空也照醒，给一句「今天没有待办」而�
   })
 })
 
-// 配额是「今天该不该自己醒」，手动不该突破——卡池空照醒，但当天次数用满仍然拦。
+// 配额设成 0 是关掉：定时不醒，手动也不叫；卡池空照醒（上一条）。
+// 手动叫醒传给 plan() 的当天计数全是 0，不看今天已经用了几次，所以这里只测设成 0 的情况。
 test('手动唤醒：每天事件数设成 0，仍然拒绝（配额不因手动而放开）', async () => {
   await withRoot(async (root) => {
     await writeConfig(normalizeConfig({ browse: { enabled: false }, daily: { events: 0 } }), root)
