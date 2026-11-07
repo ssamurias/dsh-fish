@@ -18,7 +18,7 @@ import { join } from 'node:path'
 
 import { pickHearSentence, hearTurn, HEAR_SNIPPET, HEAR_MIN_CHARS } from '../lib/hear.js'
 import { hearMark, bumpTurns } from '../lib/home.js'
-import { readEvents } from '../lib/store.js'
+import { readEvents, writeAtomic, paths } from '../lib/store.js'
 import { validateEvent } from '../lib/schema.js'
 import { searchEvents, renderRecall, RECALL_LIMIT, RECALL_DAYS } from '../lib/recall.js'
 
@@ -107,6 +107,53 @@ test('旁听：轮次标记记在 home.json 的 hearAt 上，普通记账不会�
     await bumpTurns(root, 1)
     assert.equal(await hearMark(root), 3)
     assert.equal((await hearTurn(root, { text, turns: 4, day: 2, stage: 1, config: cfg })).written, false)
+  })
+})
+
+test('旁听：hearAt 比 turns 还大（换会话没归零留下的）就当这一段没记过，升级后这一段照常记（issue #60）', async () => {
+  await withRoot(async (root) => {
+    const cfg = { memory: { hearEvery: 3 } }
+    const text = '今天我在想一件事，想了很久'
+    const homeFile = join(paths(root).root, 'home.json')
+    // 0.8.4 起换会话时 hearAt 原样继承：上一段在第 39 轮记过，换完 turns 从 0 数，hearAt 还是 39。
+    // 升级前已经卡住的安装就是这个样子；不自愈的话这一段一句不记，要等下一次换会话。
+    await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-1', turns: 5, hearAt: 39 }))
+    let turns = await bumpTurns(root, 1)
+    assert.equal(turns, 6)
+    assert.equal((await hearTurn(root, { text, turns, day: 2, stage: 1, config: cfg })).written, true)
+    assert.equal(await hearMark(root), 6)
+    // 自愈之后照常数：7、8 不记，9 记
+    const got = []
+    for (let i = 0; i < 3; i++) {
+      turns = await bumpTurns(root, 1)
+      got.push((await hearTurn(root, { text, turns, day: 2, stage: 1, config: cfg })).written)
+    }
+    assert.deepEqual(got, [false, false, true])
+    assert.equal(await hearMark(root), 9)
+
+    // 两条结账路径并发时的同类情况：一条刚换完会话（turns、hearAt 都是 0），
+    // 另一条拿着换之前的第 39 轮随后写了 hearAt。下一段从第 3 轮起照常记，不卡一整段。
+    await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-2', turns: 0, hearAt: 39 }))
+    const seg = []
+    for (let i = 0; i < 6; i++) {
+      turns = await bumpTurns(root, 1)
+      seg.push((await hearTurn(root, { text, turns, day: 2, stage: 1, config: cfg })).written)
+    }
+    assert.deepEqual(seg, [false, false, true, false, false, true])
+  })
+})
+
+test('旁听：另一条结账路径刚在更后面一轮记过，这一轮不跟着再记一句（自愈不能误伤）', async () => {
+  await withRoot(async (root) => {
+    const cfg = { memory: { hearEvery: 3 } }
+    const text = '今天我在想一件事，想了很久'
+    // 两条路径各 bumpTurns 一次，拿到 10 和 11；拿 11 的那条先记了，hearAt = 11。
+    // 拿 10 的这条看到 hearAt 比自己的轮次大，但 home.json 的 turns 也是 11，不是卡住。
+    await writeAtomic(join(paths(root).root, 'home.json'), JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-1', turns: 11, hearAt: 11 }))
+    assert.equal((await hearTurn(root, { text, turns: 10, day: 2, stage: 1, config: cfg })).written, false)
+    assert.equal(await hearMark(root), 11)
+    const { events } = await readEvents(root)
+    assert.equal(events.filter((e) => e.type === 'heard').length, 0)
   })
 })
 
