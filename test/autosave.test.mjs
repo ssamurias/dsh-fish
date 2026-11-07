@@ -14,7 +14,7 @@ test('设置页不再有底部保存条，改成改完即存', async () => {
   assert.ok(!src.includes('saveBar'), 'saveBar 必须整个删掉，不要留空壳')
   // 2026-11-08：措辞压短；上网页另说明 uid、昵称和登录有自己的保存键（那两处要手点）。
   assert.ok(src.includes("'改完自动保存。'"), '页面顶部要写明不需要点保存')
-  assert.ok(src.includes('你的 uid、昵称和登录各有自己的保存键'), '上网页要说清哪几样不是自动保存')
+  assert.ok(src.includes('uid 和昵称、B 站登录各有自己的保存键'), '上网页要说清哪几样不是自动保存')
   assert.ok(src.includes('const buildConfig = () => ({'), '字段表要集中在一处（自动保存与手动保存共用）')
   assert.ok(src.includes('const badNumber = () =>'), '数字框半截值要先判，不写盘')
   assert.ok(src.includes('}, 700)'), '自动保存要防抖（连点加减号只写一次）')
