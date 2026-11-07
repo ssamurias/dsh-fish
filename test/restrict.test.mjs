@@ -726,7 +726,7 @@ test('issue #61：宿主什么都有时一次收窄，留 12 个（新宿主）'
   assert.equal(h.calls[0].allow.length, 12)
   assert.equal(seen.at(-1).why, 'applied')
   assert.deepEqual(seen.at(-1).absent, [])
-  assert.ok(!say.some((m) => m.includes('这次宿主没有')), '什么都有就不该说缺了什么')
+  assert.ok(!say.some((m) => m.includes('下收窄时宿主还没有')), '什么都有就不该说缺了什么')
 })
 
 test('issue #61：宿主没有 read_image（新宿主）：剔掉它照常收窄，不延后', async () => {
@@ -748,7 +748,7 @@ test('issue #61：宿主没有 read_image（新宿主）：剔掉它照常收窄
   assert.ok(last.allow.includes('read_image'), '配置里的 allow 照记（守卫与提示词用它）')
   assert.ok(!last.effective.includes('read_image'), '真下给宿主的那份里没有它')
   assert.deepEqual(readRestrictState().absent, ['read_image'], '自检读的模块级结论也要记下')
-  assert.ok(say.some((m) => m.includes('read_image') && m.includes('这次宿主没有')), '要记一行日志说剔了谁')
+  assert.ok(say.some((m) => m.includes('read_image') && m.includes('下收窄时宿主还没有')), '要记一行日志说剔了谁')
 })
 
 test('issue #61：白名单里有一个这次没注册的名字（新宿主）：剔掉它照常收窄，守卫照旧放行它', async () => {
@@ -764,7 +764,7 @@ test('issue #61：白名单里有一个这次没注册的名字（新宿主）�
   assert.ok(h.calls[0].allow.includes('read_image'), '宿主有的照常放进去')
   assert.equal(seen.at(-1).why, 'applied')
   assert.deepEqual(seen.at(-1).absent, ['qq_send_message'])
-  assert.ok(say.some((m) => m.includes('qq_send_message') && m.includes('这次宿主没有')))
+  assert.ok(say.some((m) => m.includes('qq_send_message') && m.includes('下收窄时宿主还没有')))
   // 白名单是用户放行的：守卫不拦它（那个插件晚些挂在 own 层时她照样调得到）
   assert.equal(h.guards[0]({ name: 'qq_send_message' }), undefined)
   assert.match(h.guards[0]({ name: 'bash' }), /^这件事我做不到。/)
@@ -817,7 +817,7 @@ test('issue #61：插件自己的工具缺席时仍然等（新宿主），等�
   assert.equal(seen.at(-1).why, 'applied-late')
   assert.deepEqual(seen.at(-1).absent, ['read_image'])
   assert.ok(!seen.some((r) => r.why === 'deferred'), '外来的没到不能让整条收窄落空')
-  assert.ok(say.some((m) => m.includes('read_image') && m.includes('这次宿主没有')))
+  assert.ok(say.some((m) => m.includes('read_image') && m.includes('下收窄时宿主还没有')))
 })
 
 // issue #61 审查：启动时她的 agent 比鱼自己的工具先建好（index.js 里 bootstrapHome 在注册工具之前），
@@ -843,7 +843,7 @@ test('issue #61：鱼自己的工具晚到、白名单里的外来工具紧跟�
   for (const n of OURS) assert.ok(h.calls[0].allow.includes(n))
   assert.equal(seen.at(-1).why, 'applied-late')
   assert.deepEqual(seen.at(-1).absent, [])
-  assert.ok(!say.some((m) => m.includes('这次宿主没有')), '都到了就不该说谁没有')
+  assert.ok(!say.some((m) => m.includes('下收窄时宿主还没有')), '都到了就不该说谁没有')
 })
 
 test('issue #61：鱼自己的工具晚到、read_image 紧跟着到（新宿主）：窗口里到了就一起收进去', async () => {
@@ -901,7 +901,7 @@ test('issue #61：老宿主上剔掉的名字只说「没交给 restrict」，�
   assert.equal(last.absentSure, false)
   assert.equal(readRestrictState().absentSure, false)
   assert.ok(say.some((m) => m.includes('ops_bash') && m.includes('不在 restrict 认得的名单里')), say.join('\n'))
-  assert.ok(!say.some((m) => m.includes('这次宿主没有')), '老宿主分不清，不能说宿主没有')
+  assert.ok(!say.some((m) => m.includes('下收窄时宿主还没有')), '老宿主分不清，不能说宿主没有')
   assert.equal(h.guards[0]({ name: 'ops_bash' }), undefined, '守卫放行它')
 })
 

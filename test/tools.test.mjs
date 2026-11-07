@@ -179,7 +179,7 @@ test('收窄挂上了但 read_image 是这次剔掉的：自检不能说宿主�
   // 「手上的工具」那一项也不能把剔掉的算进「看得见几个」
   const toolsItem = noAttach.items.find((i) => i.id === 'tools')
   assert.match(toolsItem.detail, new RegExp(`只看得见 ${HER_TOOLS.length - 1} 个工具`), toolsItem.detail)
-  assert.match(toolsItem.detail, /read_image 这次宿主没有/)
+  assert.match(toolsItem.detail, /read_image 下收窄时宿主还没有/)
 
   // 没有别的旁证：说判不准，不说「宿主认了」
   const unclear = await runChecks({ root: ROOT, config: cfg, host: {}, tools: noImage, restrict: R, net: false })
