@@ -157,6 +157,22 @@ test('旁听：另一条结账路径刚在更后面一轮记过，这一轮不�
   })
 })
 
+test('旁听：hearAt 被手改或写坏成非数字时按 0 算，照常数轮（PR #71 审查）', async () => {
+  await withRoot(async (root) => {
+    const cfg = { memory: { hearEvery: 3 } }
+    const text = '今天我在想一件事，想了很久'
+    await writeAtomic(join(paths(root).root, 'home.json'), JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-1', turns: 0, hearAt: 'abc' }))
+    assert.equal(await hearMark(root), 0, '读出来不能是 NaN')
+    assert.equal(await hearMark(root, { turns: 1 }), 0)
+    const got = []
+    for (let i = 0; i < 6; i++) {
+      const turns = await bumpTurns(root, 1)
+      got.push((await hearTurn(root, { text, turns, day: 2, stage: 1, config: cfg })).written)
+    }
+    assert.deepEqual(got, [false, false, true, false, false, true], 'NaN 不能让每一轮都被当成到点了，也不能一句都不记')
+  })
+})
+
 test('旁听：hearEvery=0 就是完全不记', async () => {
   await withRoot(async (root) => {
     const r = await hearTurn(root, { text: '今天我在想一件事，想了很久', turns: 30, day: 5, stage: 1, config: { memory: { hearEvery: 0 } } })
