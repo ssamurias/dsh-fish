@@ -67,7 +67,7 @@ test('planMove：不能搬进自己里面，也不能搬到会把自己套进去
     // 目标本身已经是一份档（里面有 events.jsonl），而 src 就在它下面
     // → 这条必须在复制之前拦住。
     // issue #65 之前，有 events.jsonl 的目标会被直接当成新根，所以拦它的是「上级」那条；
-    // 现在放着一份档的文件夹一律不搬（会盖掉那份），拦它的换成了这条，结果还是不搬。
+    // 现在本身就是一份档的文件夹一律不搬（她会和那份套在一起），拦它的换成了这条，结果还是不搬。
     const parent = join(box, 'parent')
     await mkdir(join(parent, 'home'), { recursive: true })
     await writeFile(join(parent, 'events.jsonl'), '{}\n')
@@ -76,9 +76,9 @@ test('planMove：不能搬进自己里面，也不能搬到会把自己套进去
     await writeFile(join(nested, 'events.jsonl'), '{}\n')
     const r2 = await planMove(nested, parent)
     assert.equal(r2.ok, false)
-    assert.match(r2.why, /已经放着一份档/)
+    assert.match(r2.why, /本身就是一份档/)
 
-    // 选的就是她现在住的文件夹：说「里面」，不说「会盖掉那份」
+    // 选的就是她现在住的文件夹：说「里面」，不说「本身就是一份档」
     const self = await planMove(src, src)
     assert.equal(self.ok, false)
     assert.match(self.why, /里面/)
@@ -122,8 +122,10 @@ test('目标文件夹里已经放着一份档：不搬，那份档一个字节�
 
     const plan = await planMove(src, other)
     assert.equal(plan.ok, false, '放着一份档的文件夹不能当目标')
-    assert.match(plan.why, /已经放着一份档/)
-    assert.match(plan.why, /盖掉/, '要说清楚为什么不行')
+    assert.match(plan.why, /本身就是一份档/)
+    assert.match(plan.why, /套在一起/, '要说清楚为什么不行')
+    // 新位置一律是 <选中的文件夹>\dsh-fish，不拦也不会盖掉那份；理由要照现在的代码说
+    assert.doesNotMatch(plan.why, /盖掉|覆盖/)
 
     const r = await moveRoot(null, { root: src, target: other })
     assert.equal(r.ok, false)
@@ -218,4 +220,13 @@ test('设置页的迁移说明跟着改：放着一份档的文件夹「不行�
   const c = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.ok(c.includes('本身就放着一份档的文件夹，都不行'), '要明说放着一份档的文件夹不行')
   assert.ok(!c.includes('同名文件会被覆盖'), '迁移已经不会覆盖了，旧的提醒要拿掉')
+})
+
+test('moveRoot 复制带 COPYFILE_EXCL：目标里已有同名文件就失败，不覆盖（issue #65 的第二道保护）', async () => {
+  // planMove 已经只给空的或还不存在的 dsh-fish，正常走不到这一步；这条守的是「哪天判断漏了」。
+  // 没有办法在 planMove 和复制之间插一个文件进去，所以直接看源码：去掉它全套照样是绿的。
+  const m = await readFile(new URL('../lib/move.js', import.meta.url), 'utf8')
+  assert.match(m, /import \{[^}]*constants as fsConstants[^}]*\} from 'node:fs'/)
+  assert.match(m, /copyFile\(src, dst, fsConstants\.COPYFILE_EXCL\)/)
+  assert.doesNotMatch(m, /copyFile\([^)]*\)(?<!COPYFILE_EXCL\))/, '不能再有不带 EXCL 的复制')
 })
