@@ -366,6 +366,33 @@ test('认知矛盾的总数按两句原话去重：同一句说三遍不算三�
     ev('ev_b', 'utterance', 5, '我不喜欢在海边听浪的声音'),
   ]
   const m = deriveSelf(evs, { now: T0 + 6 * DAY_MS })
-  assert.equal(m.tensions.length, 3, '列表里还是三对（每一遍都和反面那句配一对）')
-  assert.equal(m.facts.tensionsTotal, 1, '但说的是同一处矛盾')
+  assert.equal(m.facts.tensionsTotal, 1, '说的是同一处矛盾')
+  // 列表也先去重再截：每一遍都和反面那句配一对，不去重就是同一对占三个位置
+  assert.equal(m.tensions.length, 1, JSON.stringify(m.tensions.map((t) => [t.a.id, t.b.id])))
+  assert.equal(m.facts.tensions, 1)
+  assert.match(m.tensions[0].a.text + m.tensions[0].b.text, /海边/)
+})
+
+// issue #67 复核：前 3 个位置原来会被同一对占满，体检就只剩 1 处可列，明明还有别的矛盾。
+test('认知矛盾的列表先去重再截前 3 处：同一句说三遍不占满三个位置（issue #67）', () => {
+  // id 用能反解出先后的数字（idTime），让说了三遍的那句排在最前、先配成对
+  let k = 0
+  const id = () => `ev_${String(++k).padStart(2, '0')}`
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev(id(), 'utterance', 2, '我喜欢在海边听浪的声音'),
+    ev(id(), 'utterance', 3, '我喜欢在海边听浪的声音'),
+    ev(id(), 'utterance', 4, '我喜欢在海边听浪的声音'),
+    ev(id(), 'utterance', 5, '我不喜欢在海边听浪的声音'),
+  ]
+  for (const t of LIKES.slice(1)) {
+    evs.push(ev(id(), 'utterance', 6, t))
+    evs.push(ev(id(), 'utterance', 7, t.replace('我喜欢', '我不喜欢')))
+  }
+  const m = deriveSelf(evs, { now: T0 + 8 * DAY_MS })
+  assert.match(m.tensions[0].a.text + m.tensions[0].b.text, /海边/, '前提：说了三遍的那句先配成对')
+  assert.equal(m.facts.tensionsTotal, 5)
+  assert.equal(m.tensions.length, 3)
+  const keys = m.tensions.map((t) => [t.a.text, t.b.text].sort().join('|'))
+  assert.equal(new Set(keys).size, 3, `前 3 处得是三对不同的话：${keys.join(' / ')}`)
 })

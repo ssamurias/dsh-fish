@@ -211,3 +211,20 @@ test('体检：冷掉的天数是距最后一次提起的天数', () => {
   assert.ok(cold.days >= 59 && cold.days <= 60, `应当按 60 天前那次算，实际 ${cold.days}`)
   assert.ok(!r.stale.some((s) => /云/.test(s.text)), '昨天说的不该算冷')
 })
+
+// issue #67 复核：derive 的矛盾列表原来不去重就截前 3 处，同一句说三遍会占满三个位置，
+// 体检去重后只剩 1 处可列，卡片写「对不上 5 处，列出 1 处」。
+test('体检：同一句说过好几遍，矛盾照样列满前几处', () => {
+  const events = [
+    said('我喜欢在海边听浪的声音', 9),
+    said('我喜欢在海边听浪的声音', 9),
+    said('我喜欢在海边听浪的声音', 9),
+    said('我不喜欢在海边听浪的声音', 8),
+  ]
+  for (const t of ['我喜欢一个人看老电影', '我喜欢吃很辣的火锅', '我喜欢冬天堆雪人', '我喜欢收集好看的石头']) {
+    events.push(said(t, 7), said(t.replace('我喜欢', '我不喜欢'), 6))
+  }
+  const r = examine(events)
+  assert.equal(r.tensionsTotal, 5)
+  assert.equal(r.tensions.length, HEALTH_TOP, JSON.stringify(r.tensions))
+})
