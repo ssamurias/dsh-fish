@@ -80,6 +80,45 @@ test('放一天没人答的卡不被说成「他说以后再说」：仍是还�
   assert.equal(wishesOf(events, { now: NOW + 4 * DAY }).length, 0, '还是 3 天窗口，不是 30 天')
 })
 
+test('要的那件工具已经在她手上（issue #58）：不管怎么答的，都不再摆', () => {
+  // need-tool 的裁决只记录、不落实权限（lib/ask.js），主人真要给只能在卡外面给
+  // （装插件、放开工具），事件流里不会留下「已经给了」。以前这里不看她手上有什么，
+  // 东西到了，桌上照样摆 14 天「他答应了，还没见到」、3 天「你问过，还没有答复」。
+  const has = (name) => name === 'web_search'
+  const wanted = ask({ id: 'a1', text: '想要一个能上网搜东西的工具', subject: 'web_search' })
+
+  const approved = [wanted, answer({ id: 'x1', askId: 'a1', verdict: 'approve' })]
+  assert.equal(wishesOf(approved, { now: NOW + 10 * DAY }).length, 1, '不传 has：一个字都不变')
+  assert.equal(wishesOf(approved, { now: NOW + 10 * DAY, has }).length, 0, '到手了就不是「还没见到」')
+
+  // 卡放一天没人答（按 pending 算），主人在别处把工具给了。
+  const timedOut = [wanted, answer({ id: 'x1', askId: 'a1', verdict: 'later', via: 'timeout' })]
+  assert.equal(wishesOf(timedOut, { now: NOW }).length, 1)
+  assert.equal(wishesOf(timedOut, { now: NOW, has }).length, 0, '到手了就不是「还没有答复」')
+
+  // 还没答、「以后再说」的也一样：东西已经在手上，这件事就办完了。
+  assert.equal(wishesOf([wanted], { now: NOW, has }).length, 0)
+  const later = [wanted, answer({ id: 'x1', askId: 'a1', verdict: 'later' })]
+  assert.equal(wishesOf(later, { now: NOW + 10 * DAY, has }).length, 0)
+})
+
+test('has 只认 subject 正好是那个工具名；别的照摆，has 坏了也照摆', () => {
+  const has = (name) => name === 'bili_watch'
+  const events = [
+    // 原话里提到了工具名，但 subject 写的是一件事：猜不准是不是同一样东西，照摆。
+    ask({ id: 'a1', text: '想用 bili_watch 看整条视频', subject: '整条视频的画面', at: NOW - 2 * 3_600_000 }),
+    // 到手了的那一件。
+    ask({ id: 'a2', text: '想要能看视频画面的工具', subject: 'bili_watch', at: NOW - 3_600_000 }),
+    // 没到手的那一件。
+    ask({ id: 'a3', text: '想要一个能翻译的工具', subject: 'translate', at: NOW - 1000 }),
+  ]
+  assert.deepEqual(wishesOf(events, { now: NOW, has }).map((x) => x.id), ['a3', 'a1'])
+  // 只有明确返回 true 才算到手；抛错、返回别的都按「不知道」，宁可多摆。
+  const broken = () => { throw new Error('boom') }
+  assert.deepEqual(wishesOf(events, { now: NOW, has: broken }).map((x) => x.id), wishesOf(events, { now: NOW }).map((x) => x.id))
+  assert.deepEqual(wishesOf(events, { now: NOW, has: () => 1 }).map((x) => x.id), wishesOf(events, { now: NOW }).map((x) => x.id))
+})
+
 test('「这次不行」不摆：不同意就是不问了，再提一次就成了追问', () => {
   const events = [ask({ id: 'a1', text: '想要一个能看全片的工具' }), answer({ id: 'x1', askId: 'a1', verdict: 'reject' })]
   assert.equal(wishesOf(events, { now: NOW }).length, 0)
