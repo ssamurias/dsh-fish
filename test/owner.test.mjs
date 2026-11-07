@@ -279,11 +279,20 @@ test('saveAccount 只记登录账号，不覆盖领养人', async () => {
   }
 })
 
-test('loginMid：认登录账号，没有才退回领养人', async () => {
+test('loginMid：认登录账号；没有就看 cookie 里的 DedeUserID；都没有不拿领养人顶替', async () => {
   const root = await mkdtemp(join(tmpdir(), 'fish-ow6-'))
   try {
     await saveOwner({ mid: '42', nickname: '大号' }, root)
-    assert.equal(await loginMid(root), 42, '没存过账号时用领养人（兼容老数据）')
+    // issue #63 之前这里断言 42（没 account 就退回领养人）。可领养人那格常是他的大号，
+    // 拿它当她自己会把他的回复当成她补的话丢掉，所以改成认不出就是 0。
+    // 0 不等于「一条都不跳过」：扫回复时还会看楼主（她那条评论）是谁，见 p4 的老数据那条。
+    assert.equal(await loginMid(root), 0, '认不出登录号时不拿领养人当她自己')
+    // 粘了整条 Cookie 请求头、或者扫码登录存下的 cookie 里有 DedeUserID，就是这份 cookie 登的号。
+    // 只粘 SESSDATA 和 bili_jct 的（设置页一直这么教）没有它，那种还是 0。
+    await saveOwner({ cookie: 'SESSDATA=a; bili_jct=b' }, root)
+    assert.equal(await loginMid(root), 0, '只有 SESSDATA 和 bili_jct 时认不出')
+    await saveOwner({ cookie: 'SESSDATA=a; bili_jct=b; DedeUserID=42; DedeUserID__ckMd5=c' }, root)
+    assert.equal(await loginMid(root), 42, '没存过账号时认 cookie 里的 DedeUserID')
     await saveAccount({ mid: 777, uname: '小号' }, root)
     assert.equal(await loginMid(root), 777, '存过账号后，判断「她自己」要用小号')
   } finally {

@@ -27,6 +27,7 @@ import {
 import { speakOnce, registerSpeak, noteSpeakEnabled } from '../lib/speak.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
 import { readEvents, appendEvent, paths, writeConfig, readConfig } from '../lib/store.js'
+import { createClient, resetRisk } from '../lib/bili.js'
 import { describeState, resetAll, backupDirFor } from '../lib/reset.js'
 
 async function withRoot(fn) {
@@ -124,8 +125,12 @@ test('扫回复会跳过她自己发的、已看过的、以及别人的（只�
     await appendEvent({ type: 'meta', text: `cseen:${dk} 333` }, { day: 1, stage: 1, source: 'system' }, root)
 
     const client = fakeClient({
-      subReplies: async () => ({
+      subReplies: async (aid, rootRpid) => ({
         ok: true,
+        // 楼主（她那条评论）是 9 → 444 是她自己。
+        // issue #63 之前靠的是「没有 account 就拿 owner.mid 当她自己」；可 mid 也可能是他的大号，
+        // 那样会把他的回复当成她补的话丢掉。现在没有 account、cookie 里也没有 DedeUserID 时看楼主。
+        root: { rpid: rootRpid, mid: 9 },
         data: [
           { rpid: 222, mid: 777, user: '路人甲', text: '说得挺对的', ctime: 3 },
           { rpid: 333, mid: 778, user: '路人乙', text: '已经看过这条了', ctime: 2 },
@@ -133,7 +138,6 @@ test('扫回复会跳过她自己发的、已看过的、以及别人的（只�
         ],
       }),
     })
-    // owner.mid = 9 → 444 是她自己
     await writeFile(paths(root).owner, JSON.stringify({ mid: 9, uname: '她' }), 'utf8')
 
     const out = await scanReplies({ root, client, dateKey: dk })
@@ -515,6 +519,343 @@ test('没在视频下说过话就不能回楼中楼；关掉 replyToReplies 也�
   })
 })
 
+// ------------------------------------------- issue #63：评论回复三处对不上
+
+test('postReply：昨天那条评论下的回复也回得了（找主楼和查回复用同一个回看期）', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    const yday = dateKey(new Date(Date.now() - 86_400_000))
+    await enableComment(root)
+    await appendEvent({ type: 'meta', text: `comment:${yday} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    const client = fakeClient({
+      subReplies: async () => ({ ok: true, data: [{ rpid: 4242, mid: 777, user: '路人甲', text: '昨天那条说得对', ctime: 1 }] }),
+    })
+
+    // 查回复看得到它……
+    const waiting = await scanReplies({ root, client, dateKey: dk })
+    assert.deepEqual(waiting.map((x) => [x.rpid, x.rootRpid]), [[4242, 111]])
+
+    // ……回它就不能被拒成「今天还没在那个视频下说过话」
+    const r = await postReply({ root, client, bvid: 'BV1', parentRpid: 4242, text: '嗯', dateKey: dk })
+    assert.equal(r.ok, true, r.why)
+    const call = client.calls.find((c) => c[0] === 'replyReply')
+    assert.deepEqual(call.slice(1), [1001, 111, 4242, '嗯'])
+    // 额度仍按今天记
+    const { events } = await readEvents(root)
+    assert.ok(events.some((e) => e.text === `creply:${dk} BV1 111 4242`))
+  })
+})
+
+test('postReply：同一视频下她说过不止一次时，rootRpid 指定回哪个楼；对不上就按视频找', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    const old = dateKey(new Date(Date.now() - (REPLY_LOOKBACK_DAYS + 1) * 86_400_000))
+    await enableComment(root, { replyPerDay: 10 })
+    for (const t of [`comment:${old} BV3 444`, `comment:${dk} BV1 111`, `comment:${dk} BV1 222`, `comment:${dk} BV2 333`]) {
+      await appendEvent({ type: 'meta', text: t }, { day: 1, stage: 1, source: 'system' }, root)
+    }
+    const client = fakeClient()
+    const lastRoot = () => client.calls.filter((c) => c[0] === 'replyReply').at(-1)?.[2]
+
+    // 888 挂在 222 下面：给了 rootRpid 就用它，不再拿这个视频下的第一条顶上
+    const r = await postReply({ root, client, bvid: 'BV1', rootRpid: '222', parentRpid: 888, text: '嗯', dateKey: dk })
+    assert.equal(r.ok, true, r.why)
+    assert.equal(lastRoot(), 222)
+    const r1 = await postReply({ root, client, bvid: 'BV1', rootRpid: 111, parentRpid: 889, text: '嗯', dateKey: dk })
+    assert.equal(r1.ok, true, r1.why)
+    assert.equal(lastRoot(), 111)
+
+    // rootRpid 不是她最近的评论（比如把回复的编号填进来了），或者和 bvid 对不上：
+    // 主楼只能是她自己的评论，所以不拿它当主楼，退回按视频找最近那条
+    for (const bad of ['888', '333', '']) {
+      const r2 = await postReply({ root, client, bvid: 'BV1', rootRpid: bad, parentRpid: 890, text: '嗯', dateKey: dk })
+      assert.equal(r2.ok, true, r2.why)
+      assert.equal(lastRoot(), 222, `rootRpid=${bad || '空'} 时主楼应是她在 BV1 下最近那条`)
+    }
+
+    // 两个编号填反了（rootRpid 填了回复的编号、parentRpid 填了她那条评论的编号），或者 parentRpid
+    // 填的是她自己的另一条评论：原样发出去就是 replyReply(aid, 222, 222) 这类，回复平铺在主楼下、
+    // 谁也收不到通知，B 站还不报错。拒，并说清 parentRpid 该填哪个
+    const before = client.calls.filter((c) => c[0] === 'replyReply').length
+    for (const o of [{ rootRpid: '888', parentRpid: 222 }, { parentRpid: 222 }, { rootRpid: '222', parentRpid: '111' }]) {
+      const r4 = await postReply({ root, client, bvid: 'BV1', ...o, text: '嗯', dateKey: dk })
+      assert.equal(r4.ok, false, JSON.stringify(o))
+      assert.match(r4.why, /reply=/, '拒绝理由要能照着改：说清该填 reply= 后面那个')
+      assert.ok(r4.why.length <= 40, `softReason 只留前 40 个字：${r4.why}`)
+    }
+    assert.equal(client.calls.filter((c) => c[0] === 'replyReply').length, before, '填反了不该发出去')
+
+    // 超出回看期的楼不回（查回复也看不到它）；这个视频下她这几天没说过话
+    const sent = client.calls.filter((c) => c[0] === 'replyReply').length
+    const r3 = await postReply({ root, client, bvid: 'BV3', rootRpid: 444, parentRpid: 777, text: '嗯', dateKey: dk })
+    assert.equal(r3.ok, false)
+    assert.match(r3.why, /还没在那个视频下说过话/)
+    assert.equal(client.calls.filter((c) => c[0] === 'replyReply').length, sent)
+  })
+})
+
+test('bili_speak：参数表里有可选的 rootRpid，一路传到 postReply', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root, { replyPerDay: 5 })
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 222` }, { day: 1, stage: 1, source: 'system' }, root)
+    const client = fakeClient()
+    const ctx = fakeCtxForSpeak()
+    registerSpeak(ctx, { root, client, log: () => {} })
+    const def = ctx.defs.find((d) => d.name === 'bili_speak')
+    assert.ok(def.parameters.properties.rootRpid, '参数表里得有 rootRpid')
+    assert.ok(!(def.parameters.required ?? []).includes('rootRpid'), 'rootRpid 是可选的')
+    // 她在 bili_look 看回复时，每行末尾 parent= 后面那个就是它
+    assert.match(def.parameters.properties.rootRpid.description, /parent=/)
+    // parentRpid 对应的是 reply=：两个说明都点名，她才不会填反
+    assert.match(def.parameters.properties.parentRpid.description, /reply=/)
+
+    const out = await def.execute({ kind: 'reply', bvid: 'BV1', rootRpid: '111', parentRpid: '888', text: '嗯' }, { sessionId: 's' })
+    assert.equal(out.ok, true, out.note)
+    const call = client.calls.find((c) => c[0] === 'replyReply')
+    assert.deepEqual(call.slice(1), [1001, 111, 888, '嗯'])
+  })
+  noteSpeakEnabled(false)
+})
+
+test('postReply：路人把额度用完了，回他照样放行，也照样不占额度', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root, { replyPerDay: 1 })
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    await appendEvent({ type: 'meta', text: `creply:${dk} BV1 111 222` }, { day: 1, stage: 1, source: 'system' }, root)
+    await writeFile(paths(root).owner, JSON.stringify({ mid: 555, nickname: '他', account: { mid: 999, name: '她' } }), 'utf8')
+    const client = fakeClient({
+      subReplies: async () => ({
+        ok: true,
+        data: [
+          { rpid: 333, mid: 555, user: '他', text: '我在呢', ctime: 1 },
+          { rpid: 444, mid: 777, user: '路人乙', text: '还有我', ctime: 2 },
+          { rpid: 666, mid: 999, user: '她', text: '我补一句', ctime: 3 },
+        ],
+      }),
+    })
+    const sentCount = () => client.calls.filter((c) => c[0] === 'replyReply').length
+
+    const r = await postReply({ root, client, bvid: 'BV1', parentRpid: 333, text: '看到啦', dateKey: dk })
+    assert.equal(r.ok, true, r.why)
+    assert.equal(sentCount(), 1)
+    const ev = (await readEvents(root)).events
+    assert.ok(ev.some((e) => e.text === `creply:${dk} BV1 111 333 owner`), '记账和额度没满时一样，标 owner')
+    assert.equal(replyCountToday(ev, dk), 1, '回他不占额度')
+
+    // 路人还是回不了
+    const r2 = await postReply({ root, client, bvid: 'BV1', parentRpid: 444, text: '谢谢', dateKey: dk })
+    assert.equal(r2.ok, false)
+    assert.match(r2.why, /回够/)
+    assert.equal(sentCount(), 1, '额度满了，回路人不发')
+
+    // 她自己（登录号）补的那句也不算「他」：不然额度满了还能一直回自己
+    const r3 = await postReply({ root, client, bvid: 'BV1', parentRpid: 666, text: '再补一句', dateKey: dk })
+    assert.equal(r3.ok, false)
+    assert.match(r3.why, /回够/)
+    assert.equal(sentCount(), 1)
+  })
+})
+
+test('postReply：replyPerDay=0 时回他也放行；认不出他时额度满了直接拒、不打接口', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root, { replyPerDay: 0 })
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    await writeFile(paths(root).owner, JSON.stringify({ mid: 555, nickname: '他', account: { mid: 999, name: '她' } }), 'utf8')
+    const client = fakeClient({
+      subReplies: async () => ({ ok: true, data: [{ rpid: 333, mid: 555, user: '他', text: '我在呢', ctime: 1 }] }),
+    })
+    const r = await postReply({ root, client, bvid: 'BV1', parentRpid: 333, text: '看到啦', dateKey: dk })
+    assert.equal(r.ok, true, r.why)
+
+    // 没有 owner.json：认不出他，额度满了和以前一样直接拒，一个接口都不打
+    await withRoot(async (root2) => {
+      await enableComment(root2, { replyPerDay: 0 })
+      await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root2)
+      const c2 = fakeClient()
+      const r2 = await postReply({ root: root2, client: c2, bvid: 'BV1', parentRpid: 333, text: '看到啦', dateKey: dk })
+      assert.equal(r2.ok, false)
+      assert.match(r2.why, /回够/)
+      assert.deepEqual(c2.calls, [], '额度满了又认不出他，不该打 B 站接口')
+    })
+
+    // 只记下了登录号、领养人那格没填：去掉她自己以后一个他的号都没有，同样当场拒、不打接口
+    await withRoot(async (root3) => {
+      await enableComment(root3, { replyPerDay: 0 })
+      await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root3)
+      await writeFile(paths(root3).owner, JSON.stringify({ account: { mid: 999, name: '她' } }), 'utf8')
+      const c3 = fakeClient()
+      const r3 = await postReply({ root: root3, client: c3, bvid: 'BV1', parentRpid: 333, text: '看到啦', dateKey: dk })
+      assert.equal(r3.ok, false)
+      assert.match(r3.why, /回够/)
+      assert.deepEqual(c3.calls, [], '她自己的登录号不算他，名单空了就不该打 B 站接口')
+    })
+  })
+})
+
+test('扫回复：没记下登录号、cookie 里也没有 DedeUserID 时，不拿领养人号当她自己', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    const client = fakeClient({
+      subReplies: async (aid, rootRpid) => ({
+        ok: true,
+        // 楼主（她那条评论）是她拿小号 999 发的：认她自己靠这个，不靠领养人那格
+        root: { rpid: rootRpid, mid: 999 },
+        data: [
+          { rpid: 222, mid: 777, user: '路人甲', text: '说得挺对', ctime: 1 },
+          { rpid: 333, mid: 555, user: '他', text: '我在呢', ctime: 2 },
+        ],
+      }),
+    })
+    // 存 cookie 时没认出登的是谁（account 没写上），领养人那格是他的大号
+    await writeFile(paths(root).owner, JSON.stringify({ mid: 555, nickname: '他', cookie: 'SESSDATA=x; bili_jct=y' }), 'utf8')
+
+    const scanned = await scanReplies({ root, client, dateKey: dk })
+    assert.deepEqual(scanned.map((x) => [x.rpid, x.fromOwner]), [[222, false], [333, true]], '他那条不能被当成她自己补的话丢掉')
+    const read = await readMyReplies({ root, client })
+    assert.deepEqual(read.map((x) => [x.rpid, x.fromOwner]), [[222, false], [333, true]])
+  })
+})
+
+test('扫回复：没有 account 时从 cookie 的 DedeUserID 认她自己', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    const client = fakeClient({
+      subReplies: async () => ({
+        ok: true,
+        data: [
+          { rpid: 222, mid: 777, user: '路人甲', text: '说得挺对', ctime: 1 },
+          { rpid: 333, mid: 555, user: '他', text: '我在呢', ctime: 2 },
+          { rpid: 444, mid: 999, user: '她', text: '我又补了一句', ctime: 3 },
+        ],
+      }),
+    })
+    await writeFile(paths(root).owner, JSON.stringify({
+      mid: 555, nickname: '他', cookie: 'SESSDATA=x; bili_jct=y; DedeUserID=999; DedeUserID__ckMd5=abc',
+    }), 'utf8')
+
+    const scanned = await scanReplies({ root, client, dateKey: dk })
+    assert.deepEqual(scanned.map((x) => [x.rpid, x.fromOwner]), [[222, false], [333, true]])
+    const read = await readMyReplies({ root, client })
+    assert.deepEqual(read.map((x) => [x.rpid, x.fromOwner]), [[222, false], [333, true]])
+  })
+})
+
+test('老数据（没有 account，cookie 只有 SESSDATA 和 bili_jct）：拿她那条评论的楼主认她自己', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root, { replyPerDay: 0 })
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    // 设置页一直只让粘 SESSDATA 和 bili_jct；10-25～10-27 测 cookie 时把她的登录号自动填进了 mid。
+    // 这种部署 cookie 里没有 DedeUserID，loginMid 是 0。
+    await writeFile(paths(root).owner, JSON.stringify({ mid: '9', nickname: '小鱼', cookie: 'SESSDATA=x; bili_jct=y' }), 'utf8')
+    const thread = (rows) => fakeClient({
+      subReplies: async (aid, rootRpid) => ({ ok: true, root: { rpid: rootRpid, mid: 9 }, data: rows }),
+    })
+    const client = thread([
+      { rpid: 222, mid: 777, user: '路人', text: '说得对', ctime: 1 },
+      { rpid: 444, mid: 9, user: '小鱼', text: '我自己补一句', ctime: 2 },
+    ])
+
+    // 她自己补的那句照旧跳过，更不能写成「他在你下面说话了」
+    const scanned = await scanReplies({ root, client, dateKey: dk })
+    assert.deepEqual(scanned.map((x) => [x.rpid, x.fromOwner]), [[222, false]])
+    assert.doesNotMatch(renderReplies(scanned), /他在你下面说话了/)
+    const read = await readMyReplies({ root, client })
+    assert.deepEqual(read.map((x) => [x.rpid, x.fromOwner]), [[222, false]])
+
+    // 额度满了（replyPerDay=0）：回她自己补的那句不算回他，不发
+    const r = await postReply({ root, client, bvid: 'BV1', parentRpid: 444, text: '嗯', dateKey: dk })
+    assert.equal(r.ok, false)
+    assert.match(r.why, /回够/)
+    assert.equal(client.calls.filter((c) => c[0] === 'replyReply').length, 0, '不能靠回自己绕开额度')
+
+    // 领养人那格是他的大号（和楼主不是同一个号）：他的回复认得出来，额度满了也回得了
+    await writeFile(paths(root).owner, JSON.stringify({ mid: '555', nickname: '他', cookie: 'SESSDATA=x; bili_jct=y' }), 'utf8')
+    const c2 = thread([
+      { rpid: 333, mid: 555, user: '他', text: '我在呢', ctime: 1 },
+      { rpid: 444, mid: 9, user: '小鱼', text: '我自己补一句', ctime: 2 },
+    ])
+    const s2 = await scanReplies({ root, client: c2, dateKey: dk })
+    assert.deepEqual(s2.map((x) => [x.rpid, x.fromOwner]), [[333, true]])
+    const r2 = await postReply({ root, client: c2, bvid: 'BV1', parentRpid: 333, text: '看到啦', dateKey: dk })
+    assert.equal(r2.ok, true, r2.why)
+    const ev = (await readEvents(root)).events
+    assert.ok(ev.some((e) => e.text === `creply:${dk} BV1 111 333 owner`))
+  })
+})
+
+test('认不出她自己（没有 account、没有 DedeUserID、回包里也没有楼主）：领养人号不标成他，也不给额度豁免', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root, { replyPerDay: 0 })
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    // mid 9 可能是她（老数据），也可能是他的大号：分不出来
+    await writeFile(paths(root).owner, JSON.stringify({ mid: '9', nickname: '小鱼', cookie: 'SESSDATA=x; bili_jct=y' }), 'utf8')
+    const client = fakeClient({
+      subReplies: async () => ({
+        ok: true,
+        data: [
+          { rpid: 222, mid: 777, user: '路人', text: '说得对', ctime: 1 },
+          { rpid: 444, mid: 9, user: '小鱼', text: '我自己补一句', ctime: 2 },
+        ],
+      }),
+    })
+
+    // 不丢（可能是他的话），也不说成是他（可能是她自己的话）
+    const scanned = await scanReplies({ root, client, dateKey: dk })
+    assert.deepEqual(scanned.map((x) => [x.rpid, x.fromOwner]), [[222, false], [444, false]])
+    assert.doesNotMatch(renderReplies(scanned), /他在你下面说话了/)
+    const read = await readMyReplies({ root, client })
+    assert.doesNotMatch(renderMyReplies(read), /他在你那条评论下面/)
+    // 回包里的楼主编号对不上她问的那条楼：不拿它认人，和没有一样
+    const odd = fakeClient({
+      subReplies: async () => ({ ok: true, root: { rpid: 12345, mid: 9 }, data: [{ rpid: 444, mid: 9, user: '小鱼', text: '我自己补一句', ctime: 2 }] }),
+    })
+    assert.deepEqual((await scanReplies({ root, client: odd, dateKey: dk })).map((x) => [x.rpid, x.fromOwner]), [[444, false]])
+
+    // 额度满了：分不清是不是他，就按路人算，不发
+    const r = await postReply({ root, client, bvid: 'BV1', parentRpid: 444, text: '嗯', dateKey: dk })
+    assert.equal(r.ok, false)
+    assert.match(r.why, /回够/)
+    assert.equal(client.calls.filter((c) => c[0] === 'replyReply').length, 0)
+
+    // 额度没满：照发，但记成路人、占一份额度
+    await enableComment(root, { replyPerDay: 5 })
+    const r2 = await postReply({ root, client, bvid: 'BV1', parentRpid: 444, text: '嗯', dateKey: dk })
+    assert.equal(r2.ok, true, r2.why)
+    const ev = (await readEvents(root)).events
+    assert.ok(ev.some((e) => e.text === `creply:${dk} BV1 111 444`))
+    assert.equal(replyCountToday(ev, dk), 1)
+  })
+})
+
+test('subReplies 把回包里的楼主（data.root）带出来：认她自己要用它', async () => {
+  resetRisk()
+  const reply = (rpid, mid) => ({ rpid, mid, member: { uname: `u${mid}` }, content: { message: `m${rpid}` }, ctime: rpid })
+  const bodies = [
+    { code: 0, data: { page: { count: 1 }, root: reply(111, 9), replies: [reply(222, 777)] } },
+    { code: 0, data: { page: { count: 1 }, replies: [reply(222, 777)] } },
+  ]
+  const fetchImpl = async () => {
+    const text = JSON.stringify(bodies.shift())
+    return { status: 200, text: async () => text }
+  }
+  const c = createClient({ fetchImpl, cookie: 'buvid3=T; SESSDATA=x', minIntervalMs: 1, jitterMs: 0 })
+  const r = await c.subReplies(1001, 111)
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.root, { rpid: 111, mid: 9 })
+  assert.deepEqual(r.data.map((x) => [x.rpid, x.mid]), [[222, 777]])
+  // 回包里没有楼主：root 是 null，调用方按「认不出」处理
+  const r2 = await c.subReplies(1001, 111)
+  assert.equal(r2.root, null)
+})
+
 // ------------------------------------------------------------- 她听到的话
 
 test('speakOnce 拒绝时只说状态，不说配额和开关', async () => {
@@ -787,8 +1128,10 @@ test('readMyReplies：她主动看时不受 cseen 限制，且带上回楼中楼
     await appendEvent({ type: 'meta', text: `cseen:${dk} 222` }, { day: 1, stage: 1, source: 'system' }, root)
 
     const client = fakeClient({
-      subReplies: async () => ({
+      subReplies: async (aid, rootRpid) => ({
         ok: true,
+        // issue #63：光有 { mid: 9 } 不再直接认成她自己（mid 可能是他的大号），看楼主是谁
+        root: { rpid: rootRpid, mid: 9 },
         data: [
           { rpid: 222, mid: 777, user: '路人甲', text: '说得好', ctime: 3 },
           { rpid: 444, mid: 9, user: '她自己', text: '再补一句', ctime: 2 },
