@@ -212,8 +212,9 @@ test('组件在"有数据"时把关键信息渲染出来', async () => {
   const srcAll = await readFile(CLIENT, 'utf8')
   assert.ok(!/\[\s*'all'\s*,/.test(srcAll), '源码里不该再留 all 页签')
   assert.ok(src.includes('让我看日记'), '日记可见性开关必须在')
-  assert.ok(src.includes('黑名单（逗号分隔'), '黑名单可追加必须在')
-  assert.ok(src.includes('允许她上网（B 站）'), '上网总开关必须在')
+  // 2026-11-08 文案重写：名字压短，括号里的补充说明拿掉（见 test/settings-copy.test.mjs）。
+  assert.ok(src.includes("label: '屏蔽关键词'"), '黑名单可追加必须在')
+  assert.ok(src.includes("label: '允许她上网'"), '上网开关必须在')
   delete globalThis.fetch
 })
 
@@ -602,7 +603,8 @@ test('领养人两格自带保存键，只提交这两格、不碰 cookie（2026
   const src = await readFile(CLIENT, 'utf8')
 
   // 1) 保存键要长在这一组里。位置比文案更要紧：挂错了组等于没修。
-  const atGroup = src.indexOf("group('领养人验证'")
+  // 2026-11-08：这一组改名「你的 B 站账号」（原名「领养人验证」，组里并没有验证什么）。
+  const atGroup = src.indexOf("group('你的 B 站账号'")
   const atBili = src.indexOf("group('B 站登录'", atGroup)
   const atSave = src.indexOf("'保存这两格'", atGroup)
   assert.ok(atGroup > 0 && atBili > atGroup, '两组都要在，且 B 站登录排在后面')

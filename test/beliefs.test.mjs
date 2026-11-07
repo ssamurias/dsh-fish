@@ -90,9 +90,11 @@ test('配置项：默认 3，越界被夹回 1–8', () => {
 
 test('客户端：设置项、buildConfig、上限表都在', () => {
   const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.ok(src.includes('每轮对话认知记忆条数'), '设置项标签')
+  // 2026-11-08：标签改名「眼前的判断条数」——它只决定逐条摆几条，不决定她记得住多少。
+  assert.ok(src.includes("label: '眼前的判断条数'"), '设置项标签')
   assert.ok(src.includes('beliefsShown: Number(beliefsShown)'), 'buildConfig 要提交它')
-  assert.ok(src.includes("['一次看见几条', beliefsShown, 1, 8]"), '坏值校验表')
+  // 校验表里的名字跟控件名一致，报错时才对得上是哪一项（上下限不变）。
+  assert.ok(src.includes("['眼前的判断条数', beliefsShown, 1, 8]"), '坏值校验表')
   assert.ok(src.includes('setBeliefsShown(Number(cfg.memory?.beliefsShown ?? 3))'), 'load 要读它')
 })
 
