@@ -189,6 +189,21 @@ test('收窄挂上了但 read_image 是这次剔掉的：自检不能说宿主�
   assert.match(unclearItem.detail, /查不准|判不准/)
 })
 
+// 审查 nit：老宿主不给 visible，剔掉的名字可能只是在 own 层（ops_bash 这类她看得见、守卫也放行）。
+// 自检不能说它「这次宿主没有」，也不能说她「只看得见」收窄名单里那几个。
+test('老宿主上剔掉的名字：自检只说没交给收窄，不说宿主没有', async () => {
+  const cfg = { growthDays: 30, window: { start: '20:00', end: '23:00' }, tools: {} }
+  const reg = { get: (n) => ({ name: n }) }
+  const R = { allow: [...HER_TOOLS, 'ops_bash'], applied: 1, failed: '', absent: ['ops_bash'], absentSure: false }
+  const out = await runChecks({ root: ROOT, config: cfg, host: {}, tools: reg, restrict: R, net: false })
+  const item = out.items.find((i) => i.id === 'tools')
+  assert.equal(item.ok, true, item.detail)
+  assert.doesNotMatch(item.detail, /宿主没有/, item.detail)
+  assert.doesNotMatch(item.detail, /只看得见/, item.detail)
+  assert.match(item.detail, /ops_bash 不在 restrict 认得的名单里/)
+  assert.match(item.detail, new RegExp(`收窄名单里有 ${HER_TOOLS.length} 个工具`))
+})
+
 // 2026-10-30（0.8.1 发版前自查）：公开版装完自检必然报红的一条误报。
 //
 // `her_dream` 是「梦」那个本机实验功能的工具，只有 `.dev` 存在时 `lib/index.js`
