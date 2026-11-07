@@ -164,3 +164,50 @@ test('体检：矛盾和「记得很牢」都给截断前的总数，列表照�
   // 10 句各说 3 遍，30 条判断都够格固化；原来这里是 8
   assert.equal(r.solid, 30)
 })
+
+// issue #67：「冷掉」原来按 since（第一次说出口）算天数。30 天前说过、昨天又说一遍的那句，
+// 旧的那条 since 是 30 天前，于是同一句话同时出现在「冷掉」和「快固化」里。
+test('体检：冷掉按最后一次被提起算，昨天刚说过的不算冷', () => {
+  const events = [
+    said('我想成为一个靠得住的人', 30),
+    said('我想成为一个靠得住的人', 1),
+  ]
+  const r = examine(events)
+  assert.equal(r.stale.length, 0, JSON.stringify(r.stale))
+  assert.equal(r.nearSolid.length, 1)
+  assert.match(r.nearSolid[0].text, /靠得住/)
+})
+
+test('体检：很久以前说的、昨天被检验过，也不算冷', () => {
+  const b = said('我更喜欢夜里干活', 40)
+  const events = [
+    b,
+    { id: 't1', v: 1, type: 'test', ts: at(1), text: '她真是这么想的吗？', refs: [b.id] },
+  ]
+  const r = examine(events)
+  assert.equal(r.stale.length, 0, JSON.stringify(r.stale))
+  assert.equal(r.nearSolid.length, 1)
+})
+
+test('体检：已经在「快固化」里的不再报成冷掉', () => {
+  // 两遍都在 40 天前：按最后一次提起也冷了，但差一次就固定，只报在快固化里
+  const events = [
+    said('我不喜欢别人替我做决定', 41),
+    said('我不喜欢别人替我做决定', 40),
+  ]
+  const r = examine(events)
+  assert.equal(r.nearSolid.length, 1)
+  assert.equal(r.stale.length, 0, JSON.stringify(r.stale))
+})
+
+test('体检：冷掉的天数是距最后一次提起的天数', () => {
+  const events = [
+    said('我想去看一次真正的雪', 60),
+    said('今天的云很低', 1),
+  ]
+  const r = examine(events)
+  const cold = r.stale.find((s) => /雪/.test(s.text))
+  assert.ok(cold, JSON.stringify(r.stale))
+  assert.ok(cold.days >= 59 && cold.days <= 60, `应当按 60 天前那次算，实际 ${cold.days}`)
+  assert.ok(!r.stale.some((s) => /云/.test(s.text)), '昨天说的不该算冷')
+})

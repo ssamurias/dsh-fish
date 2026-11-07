@@ -856,3 +856,16 @@ test('记忆体检：矛盾印总数，多于列出的才说列出几处', async
   assert.ok(txt.includes('两句话对不上 2 处'))
   assert.ok(!txt.includes('列出 2 处'), '全都列出来了就不用再说列出几处')
 })
+
+// issue #67：体检的「冷掉」改成按最后一次被提起或检验算天数，界面不能再写「说出来 N 天以上」「N 天前说的」。
+test('记忆体检：冷掉那几条写「没再提起」，不写「说出来」「天前说的」', async () => {
+  const base = { ok: true, empty: false, events: 20, days: 40, beliefs: 3, solid: 0, faded: 0, byType: [], tensions: [], tensionsTotal: 0, nearSolid: [], staleDays: 21 }
+  const react = fakeReact({ 17: { ...base, stale: [{ text: '我想去看一次真正的雪', since: null, days: 35, faded: false }] }, 43: 'memory' })
+  const { exports } = await loadClient({ react })
+  react.resetCursor()
+  const txt = textOf(exports.FishSection()).join(' ')
+  assert.ok(txt.includes('21 天以上没再提起、眼下没固定的，列出 1 条'), txt.slice(txt.indexOf('账本'), txt.indexOf('账本') + 200))
+  assert.ok(txt.includes('「我想去看一次真正的雪」 · 35 天没再提起'))
+  assert.ok(!txt.includes('天前说的'))
+  assert.ok(!txt.includes('说出来 21 天'))
+})
