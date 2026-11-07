@@ -48,7 +48,10 @@ test('说明书讲清三件事：怎么定、到点怎么做、出门时先别�
 test('身份文档只在放行时挂这段说明书', () => {
   const src = readFileSync(join(libDir, 'selfdoc.js'), 'utf8')
   assert.ok(/import .*SCHEDULE_BRIEF/.test(src), 'selfdoc 得 import 它')
-  assert.ok(/schedule \? \[SCHEDULE_BRIEF/.test(src), '得有条件地挂：没放行就不能告诉她「你有」')
+  // issue #64 之前这里钉的是 `schedule ? [SCHEDULE_BRIEF`：只要放了 schedule_create 就挂四个工具
+  // 都在的那一版，只放 create 时也说「你还有四个工具」。现在按放行的名字现拼（scheduleBrief），
+  // 「没放行就不挂」的行为由 test/selfdoc-sync.test.mjs 直接跑 writeSelfDoc 来守，这里只认还有条件。
+  assert.ok(/scheduleText \? \[scheduleText/.test(src), '得有条件地挂：没放行就不能告诉她「你有」')
   assert.ok(src.includes("=== 'schedule_create'"), '判据要读白名单里的 schedule_create')
 })
 
