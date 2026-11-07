@@ -7,6 +7,7 @@
  *   2. 「允许她记梦」关着，身份文档不念 her_dream——和 writeDream 用同一个判据。
  *   3. 定时说明书只念白名单里真放行的 schedule_*：只放 schedule_create 就只说它，
  *      不能说「你还有四个工具」，另外三个她一伸手就是「这件事我做不到」。
+ *      收窄在这个进程里真关着时守卫不挂，四个都在手边，照旧念四个。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -20,7 +21,7 @@ import { selfDocPath, writeSelfDoc } from '../lib/selfdoc.js'
 import { registerObserve } from '../lib/observe.js'
 import { DREAM_BRIEF, DIARY_BRIEF, SLEEP_BRIEF, SPEAK_BRIEF, SPEAK_OFF_BRIEF, SCHEDULE_BRIEF, scheduleBrief } from '../lib/persona.js'
 import { LOOK_BRIEF, LOOK_OFF_BRIEF } from '../lib/browse.js'
-import { SCHEDULE_TOOLS } from '../lib/restrict.js'
+import { SCHEDULE_TOOLS, registerToolRestrict, currentToolSurface, toolSurfaceText } from '../lib/restrict.js'
 
 async function withRoot(fn) {
   const root = await mkdtemp(join(tmpdir(), 'fish-selfdoc-sync-'))
@@ -165,6 +166,33 @@ test('定时说明书只念白名单里真放行的 schedule_*', () => withRoot(
   await writeConfig(normalizeConfig({ tools: { allow: ['schedule_list'] } }), root)
   await writeSelfDoc(root)
   assert.equal(sectionOf(await doc(root)), '')
+}))
+
+test('收窄关着时守卫不挂，宿主的四个她都拿得到：定时说明书照旧念四个', () => withRoot(async (root) => {
+  const line = async () => {
+    const text = await doc(root)
+    const at = text.indexOf('可以自己给自己定定时提醒')
+    return at < 0 ? '' : text.slice(text.lastIndexOf('\n', at) + 1, text.indexOf('\n', at))
+  }
+  // 和 test/restrict.test.mjs 同形的假 ctx：registerToolRestrict 只要 on。
+  const restrictCtx = () => ({ on: () => () => {} })
+  try {
+    // 这个进程里收窄真关着（启动时就关了）：只放 schedule_create 也念四个。
+    registerToolRestrict(restrictCtx(), { herDir: 'C:\\\\h', enabled: false, log: () => {} })
+    await writeConfig(normalizeConfig({ tools: { restrict: false, allow: ['schedule_create'] } }), root)
+    await writeSelfDoc(root)
+    assert.equal(await line(), SCHEDULE_BRIEF.split('\n')[0], '守卫不挂，另外三个也在手边，少说就是把真有的东西藏起来')
+    assert.ok((await doc(root)).includes(SCHEDULE_BRIEF))
+
+    // 收窄还开着、只是设置里刚关掉（要重启才生效）：守卫还挡着另外三个，照白名单只念放行的。
+    registerToolRestrict(restrictCtx(), { herDir: 'C:\\\\h', enabled: true, dream: true, log: () => {} })
+    await writeSelfDoc(root)
+    assert.equal(await line(), '你还有一个工具 schedule_create：可以自己给自己定定时提醒。', '看的是这个进程里真生效的那一份，不是 config')
+  } finally {
+    // 复位成模块默认那份（HER_TOOLS 全量），别把「关着」漏给同进程里后面的用例
+    registerToolRestrict(restrictCtx(), { herDir: 'C:\\\\h', enabled: true, dream: true, log: () => {} })
+  }
+  assert.equal(currentToolSurface(), toolSurfaceText(), '复位后和模块默认那份一样')
 }))
 
 test('scheduleBrief：四个都在时就是原来那段，空名单是空串', () => {
