@@ -281,3 +281,34 @@ test('重置之后新的一局没有豁免（事件流被搬走，config 抄回�
     assert.equal(deriveSelf(events).persona.imported, false)
   })
 })
+
+test('重开一局之后不重启，直接导入就能接上；设置页重开成功会清掉导入卡上旧的拒绝（issue #65）', async () => {
+  await withRoot(async (root) => {
+    // 先有一个起点：导入被拒
+    const first = await applyHandover(DOC, root)
+    assert.equal(first.ok, true)
+    assert.equal((await applyHandover(DOC, root)).alreadyHad, true)
+
+    // 重开一局（resetAll 不写 seed），不重启：这一局能导
+    assert.equal((await resetAll(root)).ok, true)
+    const again = await applyHandover(DOC, root)
+    assert.equal(again.ok, true, again.why)
+  })
+
+  // 前端：重开之前点过「导入人设…」被拒的话，importInfo 里留着 canImport:false 和那句拒绝，
+  // 卡片上又没有重查的按钮，会把人引去重启——而重启会先落下默认 seed，正好导不进。
+  // 所以 doReset 成功后要清掉 importInfo（回到「导入人设…」按钮，点了重新问 /import）。
+  const c = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const start = c.indexOf('const doReset = async () => {')
+  const end = c.indexOf('const doRebuild = async () => {')
+  assert.ok(start > 0 && end > start, '必须能定位到 doReset')
+  const body = c.slice(start, end)
+  const posted = body.indexOf("jpost('/reset'")
+  const cleared = body.indexOf('setImportInfo(null)')
+  assert.ok(posted > 0, 'doReset 要调 /reset')
+  assert.ok(cleared > posted, '重开成功（/reset 返回之后）要清掉 importInfo')
+  assert.ok(body.indexOf("setImportNote('')") > posted, '导入卡上旧的拒绝原因也要清掉')
+  assert.ok(cleared < body.indexOf('catch (e)'), '只在成功那一支清，失败时导入卡照旧')
+  // 卡片上要说清楚：重开和导入之间别重启
+  assert.ok(c.includes('中间别重启 DSH'), '导入卡要提醒重开之后直接导、别先重启')
+})
