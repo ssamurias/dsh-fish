@@ -7,8 +7,8 @@
  * 还算进劲儿（driveDesk.wish），一件办完的事还会推她醒。
  *
  * 守什么：
- *   1. herToolNames() 只说她确实拿得到的：守卫放行的名单 ∩ 宿主真认得的名字；
- *      收窄关着、没登记过、一个名字都没见过时返回 null。
+ *   1. herToolNames() 往少里算：她屋里那条会话此刻的工具表 ∩ 守卫放行的名单；
+ *      别的工作区有、她这条会话没有的不算；收窄关着、没登记过、她屋里还没建过会话时返回 null。
  *   2. 叫醒那张桌子：subject 正好是她手上已有工具名的那条不摆，别的照摆。
  *   3. 劲儿那一笔：同样不算；桌上只剩这一件时就是「桌上没有可说的东西」。
  *   4. 拿不到名单时一个字都不变。
@@ -141,20 +141,21 @@ async function askedAndApproved(root, { question, subject }) {
 const SEARCH_Q = '想要一个能上网搜东西的工具'
 const IMAGE_Q = '想要一个能画图的工具'
 
-test('herToolNames：没登记过收窄、宿主一个名字都没见过时拿不到', () => {
+test('herToolNames：没登记过收窄、她屋里还没建过会话时拿不到', () => {
   rememberKnownTools([])
   assert.equal(herToolNames(), null)
 })
 
-test('herToolNames：放行了、也真装上了的才算在她手上', async () => {
+test('herToolNames：放行了、她这条会话也真有的才算在她手上', async () => {
   const ctx = fakeCtx()
-  // 设置页放行了 web_search 和 image_gen；宿主只真登记了 web_search。
+  // 设置页放行了 web_search、image_gen、ops_bash；她这条会话只真有 web_search。
   // 名字没登记齐会走收窄的延后重试：调到 1 毫秒、只试 1 次，下面等它报完再往下走，
   // 不留定时器给后面的用例（以前那串重试约 3 秒后才停，会把后面的结论盖掉）。
-  registerToolRestrict(ctx, { herDir: HER_DIR, extra: ['web_search', 'image_gen'], log: () => {}, retryMs: 1, retryMax: 1 })
+  registerToolRestrict(ctx, { herDir: HER_DIR, extra: ['web_search', 'image_gen', 'ops_bash'], log: () => {}, retryMs: 1, retryMax: 1 })
   ctx.emit('agent/created', { agent: fakeAgent(HER_DIR, [...HER_TOOLS, 'web_search']) })
-  // 别的工作区有 pwsh：宿主认得这个名字，但守卫不放它给她。
-  ctx.emit('agent/created', { agent: fakeAgent(join(sandbox, 'elsewhere'), [...HER_TOOLS, 'web_search', 'pwsh']) })
+  // 别的工作区有 pwsh 和 ops_bash：宿主认得这两个名字。pwsh 守卫不放；
+  // ops_bash 守卫放行（AGENTS.md 7.4 那种 own 层工具），可它挂在那条会话上，她这条没有。
+  ctx.emit('agent/created', { agent: fakeAgent(join(sandbox, 'elsewhere'), [...HER_TOOLS, 'web_search', 'pwsh', 'ops_bash']) })
   assert.ok(await until(() => readRestrictState().why === 'deferred'), `收窄重试得先停下：${readRestrictState().why}`)
 
   const names = herToolNames()
@@ -163,6 +164,7 @@ test('herToolNames：放行了、也真装上了的才算在她手上', async ()
   assert.ok(names.includes('bili_look'), '她自己的工具当然也在')
   assert.ok(!names.includes('image_gen'), '只写进白名单、宿主没登记：东西没到')
   assert.ok(!names.includes('pwsh'), '宿主认得、守卫不放：不是她的')
+  assert.ok(!names.includes('ops_bash'), '放行了、别的会话有、她这条会话没有：不在她手上')
 })
 
 test('叫醒那张桌子：要的工具已经到手的那条不摆，没到的照摆', async () => {
