@@ -2,7 +2,7 @@
  * watch.test.mjs —— `bili_watch` 的计数与拒绝分支。
  *
  * 真的抽帧要联网 + 开 ffmpeg，这里不测；测的是她会踩到的那几条边界：
- * 开关关着、给的不是视频号、额度用完。
+ * 开关关着、给的不是视频号、额度用完、屏蔽名单里的那一条。
  * 要走到取详情那一步的用例一律注入假 client，不联网。
  *
  * issue #62 以前，这里的用例都先写 browse: { enabled: true } 才进得了门——那是已停用的
@@ -209,3 +209,77 @@ test('bili_watch：不在这个家里的会话调不动它', async () => {
   })
 })
 
+// ---------------------------------------------------------------- issue #62：屏蔽名单
+// 原来 bili_watch 不过屏蔽名单：标题含屏蔽词、UP 在屏蔽名单里的视频照看。
+// 现在和 bili_look 点名打开一条时一样：查关键词（标题、UP 名、标签）和屏蔽的 UP，
+// 在取播放地址之前；最短时长只管列表，点名的这一条不查。
+
+const noPlay = { playurl: async () => ({ ok: false, message: '假的：不给播放地址' }) }
+
+async function watchOnce(root, client, bvid = 'BV1ED4y1Y7dc') {
+  const ctx = fakeCtx()
+  registerWatch(ctx, { root, client })
+  return ctx._tools[0].execute({ bvid })
+}
+
+async function watchedLines(root) {
+  const { readEvents } = await import('../lib/store.js')
+  const { events } = await readEvents(root)
+  return events.filter((e) => String(e.text ?? '').startsWith('watched:'))
+}
+
+test('看画面：标题含屏蔽词的不看，不取播放地址、不占额度，回她的话和 bili_look 一样', async () => {
+  await withRoot(async (root) => {
+    await updateConfig({ avoid: { keywords: ['恐怖'] } }, root)
+    const client = fakeClient({ ...noPlay, view: async (bvid) => ({ ok: true, data: { bvid, cid: 555, title: '一个恐怖故事', up: '某UP', mid: 7 } }) })
+    const out = await watchOnce(root, client)
+    assert.equal(out.ok, false)
+    assert.equal(out.note, '这条我不想看。')
+    assert.doesNotMatch(out.note, /屏蔽|黑名单|设置/)
+    assert.equal(client.calls.filter((c) => c[0] === 'playurl').length, 0, '不看的那条，播放地址一次都不要')
+    assert.equal((await watchedLines(root)).length, 0)
+    assert.match(readLog(root), /看画面：屏蔽名单挡下 BV1ED4y1Y7dc 恐怖/)
+  })
+})
+
+test('看画面：屏蔽的 UP（mid）不看', async () => {
+  await withRoot(async (root) => {
+    await updateConfig({ avoid: { keywords: [], upMids: ['42'] } }, root)
+    const client = fakeClient({ ...noPlay, view: async (bvid) => ({ ok: true, data: { bvid, cid: 555, title: '正常', up: '某UP', mid: 42 } }) })
+    const out = await watchOnce(root, client)
+    assert.equal(out.note, '这条我不想看。')
+    assert.equal(client.calls.filter((c) => c[0] === 'playurl').length, 0)
+  })
+})
+
+test('看画面：标题干净但标签命中，也不看', async () => {
+  await withRoot(async (root) => {
+    await updateConfig({ avoid: { keywords: ['鬼畜'] } }, root)
+    const client = fakeClient({ ...noPlay, tags: async () => ({ ok: true, data: ['鬼畜', '音乐'] }) })
+    const out = await watchOnce(root, client)
+    assert.equal(out.note, '这条我不想看。')
+    assert.equal(client.calls.filter((c) => c[0] === 'tags').length, 1)
+    assert.equal(client.calls.filter((c) => c[0] === 'playurl').length, 0)
+  })
+})
+
+test('看画面：标签取不到时照样按标题和 UP 判断，不拦也不报错', async () => {
+  await withRoot(async (root) => {
+    await updateConfig({ avoid: { keywords: ['鬼畜'] } }, root)
+    const client = fakeClient({ ...noPlay, tags: async () => { throw new Error('标签接口挂了') } })
+    const out = await watchOnce(root, client)
+    assert.equal(out.note, '假的：不给播放地址', '没命中就往下走，失败理由是后面那一步的')
+    assert.equal(client.calls.filter((c) => c[0] === 'playurl').length, 1)
+  })
+})
+
+test('看画面：最短时长不管点名的这一条；没有屏蔽词时不多取一次标签', async () => {
+  await withRoot(async (root) => {
+    await updateConfig({ avoid: { keywords: [], upMids: [], minDuration: 600 } }, root)
+    const client = fakeClient({ ...noPlay, view: async (bvid) => ({ ok: true, data: { bvid, cid: 555, title: '很短', up: '某UP', mid: 7, duration: 30 } }) })
+    const out = await watchOnce(root, client)
+    assert.notEqual(out.note, '这条我不想看。')
+    assert.equal(client.calls.filter((c) => c[0] === 'playurl').length, 1, '30 秒的这条照样去取播放地址')
+    assert.equal(client.calls.filter((c) => c[0] === 'tags').length, 0)
+  })
+})
