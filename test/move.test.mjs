@@ -230,3 +230,16 @@ test('moveRoot 复制带 COPYFILE_EXCL：目标里已有同名文件就失败，
   assert.match(m, /copyFile\(src, dst, fsConstants\.COPYFILE_EXCL\)/)
   assert.doesNotMatch(m, /copyFile\([^)]*\)(?<!COPYFILE_EXCL\))/, '不能再有不带 EXCL 的复制')
 })
+
+// PR #74 审查：选的是她现在那个 dsh-fish 的上级，拼回来正好是同一个路径——这是原地不动，
+// 要说「她本来就在这个位置」，不能被 inside()（含相等）说成「不能搬到她现在住的地方里面」。
+test('planMove：选中现在那个 dsh-fish 的上级等于原地不动，说本来就在这里', async () => {
+  await withEnv(async ({ box }) => {
+    const here = join(box, 'dsh-fish')
+    await mkdir(join(here, 'home'), { recursive: true })
+    await writeFile(join(here, 'events.jsonl'), '{"id":"ev_1"}\n')
+    const r = await planMove(here, box)
+    assert.equal(r.ok, false)
+    assert.match(r.why, /本来就在这个位置/)
+  })
+})
