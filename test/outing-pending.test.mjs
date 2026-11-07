@@ -10,6 +10,8 @@
  *   4. 「第几天」= tripDays + 1，出门当天就显示。
  *   5. 回家提示先看清单空不空；园区按工作区 id / 园区标题全等认。
  *   6. 两张「还没算数」卡的 okNow 用同一个判据。
+ *   审查补的两件：一趟上百条时标记拆成几行写（schema 对每条事件卡 2000 字）；
+ *   标记写完当场重写身份文档（她每轮读的是落盘的那份）。
  *
  * 假 ctx + 假 req/res，数据都在临时目录里。
  */
@@ -20,7 +22,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 
-import { registerObserve } from '../lib/observe.js'
+import { registerObserve, idMarkLines } from '../lib/observe.js'
 import {
   eventsSince, passesReview, readOutings, readPossessions, snapshotEvents, startOuting, startPossession, endOuting, endPossession,
 } from '../lib/outing.js'
@@ -28,6 +30,7 @@ import { deriveSelf } from '../lib/derive.js'
 import { readEvents } from '../lib/store.js'
 import { loadConfig } from '../lib/settings.js'
 import { POCKET_TITLE, pocketDirPath } from '../lib/pocket.js'
+import { refreshSelfDoc, selfDocPath } from '../lib/selfdoc.js'
 
 const T0 = Date.parse('2026-10-29T00:10:00.000Z')
 const NOW = Date.parse('2026-10-30T00:00:00.000Z')
@@ -355,4 +358,190 @@ test('#68 界面：pending 看 r.tampered、第几天 +1、先判清单空不空
   assert.ok(hint > 0 && pocket > hint, '先判清单空不空，再分园区')
   assert.equal(client.split('pendingOkText(').length - 1, 3, '出门、请神两张卡都用同一句（加上定义一共三处）')
   assert.ok(!/他/.test(client.slice(client.indexOf('function pendingChoiceText'), client.indexOf('async function doEndOuting'))), '新文案不出现「他」')
+})
+
+// ---- 审查补的：一趟上百条（schema 对每条事件卡 2000 字） ----
+
+// 真机上的会话 id 是 UUID 形状，条目 id 是 29 字的 ULID：原来一行塞到 65 条就被 TOO_LONG 整条拒掉。
+const BIG_SID = 'session-0b9c6f0e-1d2a-4c3b-9e8f-123456789abc'
+const bigId = (i) => 'ev_01JBTRIP00' + String(i).padStart(16, '0')
+
+/** 这趟她在外面写了 n 条：一半是话，一半是拒绝。 */
+function writeBigTrip(file, n, sessionId = BIG_SID) {
+  const ids = []
+  for (let i = 0; i < n; i += 1) {
+    const id = bigId(i)
+    const ts = new Date(T0 + 60_000 + i * 1000).toISOString()
+    appendFileSync(file, i % 2
+      ? line(id, ts, 'refusal', `第 ${i} 件我不做`, { sessionId })
+      : line(id, ts, 'utterance', `这趟学到的第 ${i} 句`, { sessionId }))
+    ids.push(id)
+  }
+  return ids
+}
+
+const allMarks = (file, prefix) => readFileSync(file, 'utf8').split('\n').filter(Boolean)
+  .map((l) => { try { return JSON.parse(l) } catch { return null } })
+  .filter((e) => e?.type === 'meta' && String(e.text).startsWith(prefix))
+
+async function countedOf(root, ids) {
+  const d = await derived(root)
+  const got = new Set([...d.beliefs, ...d.refusals])
+  return ids.filter((id) => got.has(id)).length
+}
+
+test('#68 审查：标记按行拆开，每行都塞得进 schema，拆开后一个 id 不丢', () => {
+  const ids = Array.from({ length: 237 }, (_, i) => bigId(i))
+  const head = `outing-pending:${BIG_SID}@${T0} `
+  const lines = idMarkLines(head, ids)
+  assert.ok(lines.length > 1, '两百多条一行写不下')
+  for (const l of lines) {
+    assert.ok(l.length <= 2000, `每行都要过 schema 的 2000 字：${l.length}`)
+    assert.ok(l.startsWith(head), '每行都带同一个趟次')
+  }
+  assert.deepEqual(lines.flatMap((l) => l.slice(head.length).split(' ')), ids)
+  assert.deepEqual(idMarkLines('outing-reject:', ['ev_a', 'ev_b']), ['outing-reject:ev_a ev_b'], '少的时候还是一行，样子不变')
+  assert.deepEqual(idMarkLines('outing-reject:', []), [], '没有要驳回的就不写')
+  assert.deepEqual(idMarkLines('outing-pending:s@1 ', [], { always: true }), ['outing-pending:s@1'], 'pending 没条目也留一行')
+  assert.deepEqual(idMarkLines('outing-reject:', ['ev_a', 'ev b', 'ev,c', 'x'.repeat(3000), '', 'ev_d']), ['outing-reject:ev_a ev_d'],
+    '拆不回原样的、自己就塞不满一行的不写')
+})
+
+test('#68 审查：一趟上百条对不上时 pending 全部先不算；整趟不算的，复核回 200、全都不算', async () => {
+  const { root, file, done } = setup()
+  try {
+    await goOut(root, file, BIG_SID)
+    const ids = writeBigTrip(file, 130)
+    tamper(file)
+    const h = harness(root)
+
+    const ended = await h.outing('POST', { action: 'end', kept: false })
+    assert.equal(ended.status, 200, JSON.stringify(ended.json))
+    assert.equal(ended.json.tampered, true)
+    const pend = allMarks(file, 'outing-pending:')
+    assert.ok(pend.length > 1, '一行塞不下，要拆开写')
+    assert.ok(pend.every((e) => String(e.text).startsWith(`outing-pending:${BIG_SID}@${T0} `)))
+    // 修之前：65 条以上 pending 标记整条写不进去，这趟照样全算。
+    assert.equal(await countedOf(root, ids), 0, 'pending 期间这趟一条都不算')
+
+    restore(file)
+    const reviewed = await h.outing('POST', { action: 'review' })
+    // 修之前：outing-reject: 一行塞 130 个 id，次次 TOO_LONG，回 500，永远卡在 pending。
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+    assert.equal(reviewed.json.outing.status, 'rejected')
+    assert.equal(reviewed.json.rejected, 130)
+    assert.ok(allMarks(file, 'outing-reject:').length > 1)
+    assert.equal(await countedOf(root, ids), 0, '照回家时选的，整趟都不算')
+    const saved = (await readOutings(root)).outings.at(-1)
+    assert.equal(saved.choice, undefined, '结算之后台账上不再留着回家时的选择')
+  } finally { done() }
+})
+
+test('#68 审查：一趟上百条对不上、这趟算数，复核之后全部算', async () => {
+  const { root, file, done } = setup()
+  try {
+    await goOut(root, file, BIG_SID)
+    const ids = writeBigTrip(file, 130)
+    tamper(file)
+    const h = harness(root)
+    const ended = await h.outing('POST', { action: 'end', kept: true })
+    assert.equal(ended.json.tampered, true)
+    assert.equal(await countedOf(root, ids), 0, 'pending 期间这趟一条都不算')
+    restore(file)
+    const reviewed = await h.outing('POST', { action: 'review' })
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+    assert.equal(reviewed.json.outing.status, 'done')
+    assert.equal(await countedOf(root, ids), 130, '复核通过，这趟全都算')
+  } finally { done() }
+})
+
+test('#68 审查：没对不上时点「整趟不算」，上百条也都标得上（出门、请神）', async () => {
+  const { root, file, done } = setup()
+  try {
+    await goOut(root, file, BIG_SID)
+    const outIds = writeBigTrip(file, 130)
+    const h = harness(root)
+    const ended = await h.outing('POST', { action: 'end', kept: false })
+    assert.equal(ended.status, 200, JSON.stringify(ended.json))
+    assert.equal(ended.json.tampered, false)
+    assert.equal(ended.json.outing.status, 'rejected')
+    // 修之前（基线代码就这样）：一行写不进去，只记一行 warn，台账却写着 rejected。
+    assert.equal(await countedOf(root, outIds), 0, '说了不算就真的一条都不算')
+
+    const talk = 'session-7d1e2f3a-4b5c-4d6e-8f70-0123456789ab'
+    const PT = T0 + 3_600_000
+    await startPossession(root, { sessionId: talk, title: '一个对话', cwd: 'D:/别人的工作区', baseline: snapshotEvents(file), identity: '', now: PT })
+    const pIds = []
+    for (let i = 0; i < 130; i += 1) {
+      const id = 'ev_01JBTALK00' + String(i).padStart(16, '0')
+      appendFileSync(file, line(id, new Date(PT + 60_000 + i * 1000).toISOString(), 'refusal', `请神时第 ${i} 件不做`, { sessionId: talk }))
+      pIds.push(id)
+    }
+    const pe = await h.possession('POST', { action: 'end', sessionId: talk, kept: false })
+    assert.equal(pe.status, 200, JSON.stringify(pe.json))
+    assert.equal(pe.json.possession.status, 'rejected')
+    assert.ok(allMarks(file, 'possess-reject:').length > 1)
+    assert.equal(await countedOf(root, pIds), 0)
+  } finally { done() }
+})
+
+test('#68 审查：请神上百条对不上、整趟不算，复核回 200、全都不算', async () => {
+  const { root, file, done } = setup()
+  try {
+    await startPossession(root, { sessionId: BIG_SID, title: '一个对话', cwd: 'D:/别人的工作区', baseline: snapshotEvents(file), identity: '', now: T0 })
+    const ids = writeBigTrip(file, 130)
+    tamper(file)
+    const h = harness(root)
+    const ended = await h.possession('POST', { action: 'end', sessionId: BIG_SID, kept: false })
+    assert.equal(ended.status, 200, JSON.stringify(ended.json))
+    assert.equal(ended.json.tampered, true)
+    assert.ok(allMarks(file, 'possess-pending:').length > 1)
+    assert.equal(await countedOf(root, ids), 0, 'pending 期间这趟一条都不算')
+    restore(file)
+    const reviewed = await h.possession('POST', { action: 'review' })
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+    assert.equal(reviewed.json.possession.status, 'rejected')
+    assert.equal(await countedOf(root, ids), 0)
+    const { possessions } = await readPossessions(root)
+    assert.equal(possessions.at(-1).choice, undefined, '结算之后台账上不再留着结束时的选择')
+  } finally { done() }
+})
+
+// ---- 审查补的：她读的是落盘的身份文档 ----
+
+test('#68 审查：pending 那趟当场从身份文档里下去，复核通过当场回来（出门）', async () => {
+  const { root, file, done } = setup()
+  try {
+    await goOut(root, file)
+    appendFileSync(file, line('ev_z1', '2026-10-29T00:11:00.000Z', 'utterance', '外面学到的ZZQ这一句', { sessionId: 'session-out' }))
+    // 她在外面 growth_commit 时会重写身份文档：回家那一刻文档里已经有这趟的话了。
+    await refreshSelfDoc(root)
+    const doc = () => readFileSync(selfDocPath(root), 'utf8')
+    assert.ok(doc().includes('ZZQ'), '前提：出门时写的话已经进了身份文档')
+    tamper(file)
+    const h = harness(root)
+    const ended = await h.outing('POST', { action: 'end', kept: true })
+    assert.equal(ended.json.tampered, true)
+    assert.ok(!doc().includes('ZZQ'), 'pending 期间她读到的身份里不该还有这趟的话')
+    restore(file)
+    const reviewed = await h.outing('POST', { action: 'review' })
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+    assert.ok(doc().includes('ZZQ'), '复核通过就回到身份文档里，不等下一次别的东西触发')
+  } finally { done() }
+})
+
+test('#68 审查：划掉的那条当场从身份文档里下去（请神、没对不上）', async () => {
+  const { root, file, done } = setup()
+  try {
+    await startPossession(root, { sessionId: 'session-talk', title: '一个对话', cwd: 'D:/别人的工作区', baseline: snapshotEvents(file), identity: '', now: T0 })
+    appendFileSync(file, line('ev_z1', '2026-10-29T00:11:00.000Z', 'utterance', '请神时学到的ZZQ这一句', { sessionId: 'session-talk' }))
+    await refreshSelfDoc(root)
+    const doc = () => readFileSync(selfDocPath(root), 'utf8')
+    assert.ok(doc().includes('ZZQ'), '前提：请神时写的话已经进了身份文档')
+    const h = harness(root)
+    const ended = await h.possession('POST', { action: 'end', sessionId: 'session-talk', kept: true, rejectedIds: ['ev_z1'] })
+    assert.equal(ended.status, 200, JSON.stringify(ended.json))
+    assert.equal(ended.json.tampered, false)
+    assert.ok(!doc().includes('ZZQ'), '划掉的那条不该还留在她读到的身份里')
+  } finally { done() }
 })
