@@ -116,7 +116,10 @@ test('概率随「多久没说话」上升，但有上限；配置读进来会�
 
   const clamped = proactiveConfig({ proactive: { maxPerDay: 99, minIdleHours: -5, baseChance: 7 } })
   assert.equal(clamped.maxPerDay, 12)
-  assert.equal(clamped.minIdleHours, 0)
+  // issue #69：原来读时夹到 0–240，这里钉的是 0。设置页只给 1–24，LIMITS 也补成 1–24，
+  // 读时的夹值跟着收成同一个范围——0 小时等于不等安静，界面上从来选不出来。
+  assert.equal(clamped.minIdleHours, 1)
+  assert.equal(proactiveConfig({ proactive: { minIdleHours: 100 } }).minIdleHours, 24)
   assert.equal(clamped.baseChance, 1)
 })
 

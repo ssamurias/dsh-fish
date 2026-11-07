@@ -38,6 +38,31 @@ test('越界值被夹到合法区间', () => {
   assert.equal(c.daily.events, 6)
 })
 
+// issue #69：LIMITS 里原来没有 proactive.*，设置页逐键写盘时 0、100 原样进了盘。
+test('「安静多久才搭话」写盘时夹在 1–24，和设置页、proactive.js 读时一致', async () => {
+  const { proactiveConfig } = await import('../lib/proactive.js')
+  for (const [raw, want] of [[0, 1], [-3, 1], [100, 24], [1000, 24], [3, 3], [24, 24], ['abc', 6]]) {
+    const c = normalizeConfig({ proactive: { minIdleHours: raw } })
+    assert.equal(c.proactive.minIdleHours, want, `minIdleHours=${raw} 应存成 ${want}`)
+    assert.equal(proactiveConfig(c).minIdleHours, want, '读的一方拿到的是同一个数')
+  }
+  // 同组别的键照旧原样留着（夹值只管这一项）
+  const c = normalizeConfig({ proactive: { minIdleHours: 0, sendTools: ['qq_send'], enabled: true } })
+  assert.deepEqual(c.proactive.sendTools, ['qq_send'])
+  assert.equal(c.proactive.enabled, true)
+
+  // 真走一遍写盘：updateConfig 是设置页 POST /config 的落点
+  const root = await mkdtemp(join(tmpdir(), 'fish-idle-'))
+  try {
+    const next = await updateConfig({ proactive: { minIdleHours: 0 } }, root)
+    assert.equal(next.proactive.minIdleHours, 1)
+    const disk = JSON.parse(await readFile(join(root, 'config.json'), 'utf8'))
+    assert.equal(disk.proactive.minIdleHours, 1, '盘上不该留 0')
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 test('非法时间窗回落到默认，不抛错', () => {
   assert.deepEqual(normalizeConfig({ window: ['25:00', 'abc'] }).window, DEFAULTS.window)
   assert.deepEqual(normalizeConfig({ window: ['09:00', '09:00'] }).window, DEFAULTS.window)
