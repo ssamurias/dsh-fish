@@ -447,12 +447,20 @@ test('「安静多久才搭话」停手 700ms 再存，空串和越界不提交�
     await app.advance(1)
     assert.deepEqual(idlePosts().map((c) => c.body), [{ proactive: { minIdleHours: 12 } }])
 
+    // 打小数：LIMITS 写盘时取整，提交的和框里显示的都要是取整后的那个数，不能框里还是 1.5、盘上是 2
+    input().props.onChange({ target: { value: '1.5' } })
+    await app.advance(700)
+    assert.deepEqual(idlePosts().map((c) => c.body.proactive.minIdleHours), [12, 2], '提交取整后的数')
+    assert.equal(String(input().props.value), '2', '框里也换成取整后的数')
+    input().props.onChange({ target: { value: '12' } })
+    await app.advance(700)
+
     // 清空后离开输入框：按下限收敛，存的就是显示的那个数
     input().props.onChange({ target: { value: '' } })
     await app.settle()
     input().props.onBlur({ target: { value: '' } })
     await app.advance(700)
-    assert.deepEqual(idlePosts().map((c) => c.body.proactive.minIdleHours), [12, lo])
+    assert.deepEqual(idlePosts().map((c) => c.body.proactive.minIdleHours), [12, 2, 12, lo])
   } finally { app.unmount() }
 })
 
