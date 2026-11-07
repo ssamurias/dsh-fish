@@ -130,6 +130,22 @@ test('wakesPerDay 用满 → skip（唤醒次数唯一旋钮）', () => {
   assert.equal(plan(model(), cfg, today({ proactive: 1 }), []).action, 'skip')
 })
 
+// issue #67：设成 0 是关掉，不是「今天用完了」。原来理由写「已满(0/0)」，手动叫醒的回执也是这句。
+test('设成 0 → skip，理由说是设置；真用满了才说已满', () => {
+  const noEvents = plan(model(), normalizeConfig({ daily: { events: 0 } }), today(), [])
+  assert.equal(noEvents.action, 'skip')
+  assert.match(noEvents.why, /「每天事件数」设成了 0/)
+  assert.doesNotMatch(noEvents.why, /已满|0\/0/)
+
+  const noWakes = plan(model(), normalizeConfig({ daily: { events: 3 }, wakesPerDay: 0 }), today(), [])
+  assert.equal(noWakes.action, 'skip')
+  assert.match(noWakes.why, /「每天醒几次」设成了 0/)
+  assert.doesNotMatch(noWakes.why, /已满|0\/0/)
+
+  const used = plan(model(), normalizeConfig({ daily: { events: 1 } }), today({ sent: 1 }), [])
+  assert.match(used.why, /今日事件已满\(1\/1\)/)
+})
+
 test('cold 落中 absence_probe 抢到优先权', () => {
   const cfg = normalizeConfig({ daily: { questions: 3 } })
   const m = model({ stage: 2, absenceDays: 4, beliefCount: 2, beliefs: [{ id: 'a', text: 'x', since: new Date().toISOString() }] })

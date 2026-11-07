@@ -552,13 +552,29 @@ test('手动唤醒：卡池空也照醒，给一句「今天没有待办」而�
 })
 
 // 配额是「今天该不该自己醒」，手动不该突破——卡池空照醒，但当天次数用满仍然拦。
-test('手动唤醒：当天次数已经用满，仍然拒绝（配额不因手动而放开）', async () => {
+test('手动唤醒：每天事件数设成 0，仍然拒绝（配额不因手动而放开）', async () => {
   await withRoot(async (root) => {
     await writeConfig(normalizeConfig({ browse: { enabled: false }, daily: { events: 0 } }), root)
     const { ctx, prompts } = fakeCtx()
     const r = await wakeNow(ctx, { root })
     assert.equal(r.ok, false, JSON.stringify(r))
-    assert.match(String(r.why), /今日事件已满/, `拒绝理由要说配额，不是说没卡：${r.why}`)
+    // issue #67：这里原来断言「今日事件已满」。手动叫醒传的计数全是 0，只有设成 0 才会走到这句，
+    // 回执印成「已满(0/0)」读起来像今天用完了。拒绝不变，理由改成说设置。
+    assert.match(String(r.why), /「每天事件数」设成了 0/, `拒绝理由要说是设置，不是说没卡：${r.why}`)
+    assert.doesNotMatch(String(r.why), /已满/)
+    assert.equal(prompts.length, 0)
+  })
+})
+
+test('手动唤醒：每天醒 0 次时拒绝，理由说的是设置（issue #67）', async () => {
+  await withRoot(async (root) => {
+    await writeConfig(normalizeConfig({ browse: { enabled: false }, wakesPerDay: 0 }), root)
+    const { ctx, prompts } = fakeCtx()
+    const r = await wakeNow(ctx, { root })
+    assert.equal(r.ok, false, JSON.stringify(r))
+    assert.match(String(r.why), /「每天醒几次」设成了 0/)
+    assert.match(String(r.why), /手动也不叫/)
+    assert.doesNotMatch(String(r.why), /已满|0\/0/)
     assert.equal(prompts.length, 0)
   })
 })
