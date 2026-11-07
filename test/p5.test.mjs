@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os'
 import { normalizeConfig, inWindow, DEFAULTS } from '../lib/settings.js'
 import { lookBeforeWake } from '../lib/scheduler.js'
 import { registerObserve } from '../lib/observe.js'
-import { HER_TOOLS, rememberFromView, registerToolRestrict, forgetBlockedTools } from '../lib/restrict.js'
+import { HER_TOOLS, rememberFromView, registerToolRestrict, forgetBlockedTools, herToolNames, readRestrictState } from '../lib/restrict.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CLIENT = join(HERE, '..', 'lib', 'client.js')
@@ -391,7 +391,8 @@ test('/tools 多给三样：herTools 只读清单、blocked 被挡记录、ownLa
       on: (ev, fn) => { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(fn); return () => {} },
       emit: (ev, p) => { for (const fn of listeners.get(ev) ?? []) fn(p) },
     }
-    registerToolRestrict(gctx, { herDir: 'C:\\h', log: () => {} })
+    // 和 index.js 一样装上 her_dream / her_say（0.9.0 起公开）。
+    registerToolRestrict(gctx, { herDir: 'C:\\h', log: () => {}, dream: true, proactive: true })
     gctx.emit('agent/created', {
       agent: {
         session: { header: { cwd: 'C:\\h' } },
@@ -408,7 +409,11 @@ test('/tools 多给三样：herTools 只读清单、blocked 被挡记录、ownLa
       setHeader: () => {},
     })
 
-    assert.deepEqual(payload.herTools, [...HER_TOOLS], '她自己那几件要能原样交代给界面')
+    // issue #69：这里原来钉的是 herTools === HER_TOOLS。可 her_say 是启动时才加进
+    // 收窄名单的，不在 HER_TOOLS 里，设置页于是把它摆进了「这台机器上还有这些」。
+    // 现在 herTools 和收窄放行的底子是同一份。
+    assert.deepEqual(payload.herTools, [...HER_TOOLS, 'her_say'], '她自己那几件要能原样交代给界面')
+    assert.deepEqual(payload.herTools, readRestrictState().allow, '和收窄放行的是同一份（这里没有额外放行）')
     assert.ok(payload.herTools.includes('growth_commit'))
     assert.deepEqual(payload.ownLayer, ['ops_bash'], 'ownLayer 的语义不能变（老界面靠它解释白名单）')
     assert.equal(payload.blocked.length, 1)
@@ -422,3 +427,50 @@ test('/tools 多给三样：herTools 只读清单、blocked 被挡记录、ownLa
   }
 })
 
+
+// issue #69：her_say 是她自己的（index.js 无条件注册、收窄无条件放行），
+// 设置页却把它列进「这台机器上还有这些（装了但没放行）」。
+test('/tools 的 herTools 含 her_say，和收窄用同一份名单；收窄关着时也一样', async () => {
+  forgetBlockedTools()
+  const root = await mkdtemp(join(tmpdir(), 'fish-p5h-'))
+  try {
+    rememberFromView({
+      restrictableNames: new Set([...HER_TOOLS, 'her_say', 'web_search']),
+      visible: new Map([...HER_TOOLS, 'her_say', 'web_search'].map((n) => [n, {}])),
+    })
+    const ctx = fakeCtx(root)
+    ctx.cfg.connection = { requestRejection: () => null }
+    registerObserve(ctx, { root })
+    const tools = ctx.routes.find((r) => String(r.path || '').endsWith('/tools'))
+    const get = async () => {
+      let payload = null
+      await tools.handler({ method: 'GET', url: '/dsh-fish/tools', headers: {} }, {
+        writeHead: () => {},
+        end: (s) => { payload = JSON.parse(s || '{}') },
+        setHeader: () => {},
+      })
+      return payload
+    }
+    // 设置页（lib/client.js）的分桶：不在 herTools / ownLayer / blocked 里的才算「装了但没放行」。
+    const others = (p) => p.known.filter((n) => !p.herTools.includes(n) && !p.ownLayer.includes(n)
+      && !p.blocked.some((b) => b.name === n))
+
+    const noop = { on: () => () => {} }
+    for (const enabled of [true, false]) {
+      registerToolRestrict(noop, { herDir: 'C:\\h', log: () => {}, enabled, dream: true, proactive: true })
+      const p = await get()
+      assert.ok(p.herTools.includes('her_say'), `收窄${enabled ? '开' : '关'}着时 herTools 都要有 her_say`)
+      assert.deepEqual(p.herTools, herToolNames({ dream: true, proactive: true }), '和收窄用的是同一个函数算的')
+      // 认得的名字在进程里只增不减（别的用例记下的也在），所以只看这两个。
+      assert.ok(!others(p).includes('her_say'), 'her_say 不该再出现在「这台机器上还有这些」')
+      assert.ok(others(p).includes('web_search'), '真没放行的照旧在那一组')
+    }
+    // 白名单里额外放行的不算她自己的。
+    registerToolRestrict(noop, { herDir: 'C:\\h', log: () => {}, extra: ['web_search'], dream: true, proactive: true })
+    const p = await get()
+    assert.deepEqual(p.herTools, [...HER_TOOLS, 'her_say'])
+  } finally {
+    forgetBlockedTools()
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
