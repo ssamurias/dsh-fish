@@ -230,3 +230,48 @@ test('memoryCooldown：进程内熔断的状态能读出来，给观测台分两
     resetRisk()
   }
 })
+
+// issue #67：lastReq / chain 原来是每个客户端自己的。翻视频、查回复、看画面、观测台各 new 一个，
+// 彼此不排队：两个客户端能在同一毫秒把请求打出去，新客户端的第一条也不等间隔。
+test('请求节奏是整个进程共用的：两个客户端也排同一条队', async () => {
+  resetRisk()
+  const stamps = []
+  const f = async () => {
+    stamps.push(Date.now())
+    const text = JSON.stringify(OK_LIST)
+    return { status: 200, text: async () => text, json: async () => OK_LIST }
+  }
+  const opts = { fetchImpl: f, minIntervalMs: 150, jitterMs: 0, random: () => 0, cookie: 'buvid3=x' }
+  const a = createClient(opts)
+  const b = createClient(opts)
+  await Promise.all([a.popular(), b.popular(), a.popular(), b.popular()])
+  assert.equal(stamps.length, 4)
+  for (let i = 1; i < stamps.length; i++) {
+    const gap = stamps[i] - stamps[i - 1]
+    // setTimeout 偶尔早到一两毫秒，留一点余量；改之前 a、b 的两条是同一毫秒发出的
+    assert.ok(gap >= 130, `第 ${i} 和第 ${i + 1} 条请求只隔了 ${gap}ms：${stamps.map((s) => s - stamps[0]).join(', ')}`)
+  }
+  resetRisk()
+})
+
+// 共用之后，上一条可能是另一个时钟的客户端发的（测试注入 now、biliqr 传了 now、系统时间回拨）。
+// 算出来的间隔是负的时只等一个间隔，不能照着差值等上一天。
+test('请求节奏共用后：上一条来自别的时钟，最多等一个间隔', async () => {
+  resetRisk()
+  const f = async () => {
+    const text = JSON.stringify(OK_LIST)
+    return { status: 200, text: async () => text, json: async () => OK_LIST }
+  }
+  const ahead = createClient({ fetchImpl: f, minIntervalMs: 1, jitterMs: 0, cookie: 'buvid3=x', now: () => Date.now() + 86_400_000 })
+  await ahead.popular()
+  const normal = createClient({ fetchImpl: f, minIntervalMs: 50, jitterMs: 0, cookie: 'buvid3=x' })
+  const t0 = Date.now()
+  const r = await Promise.race([
+    normal.popular(),
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 3000).unref()),
+  ])
+  assert.notEqual(r, 'timeout', '时钟对不上时不该照着差值等')
+  assert.equal(r.ok, true)
+  assert.ok(Date.now() - t0 < 2000)
+  resetRisk()
+})
