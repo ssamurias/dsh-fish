@@ -200,16 +200,37 @@ test('体检：已经在「快固化」里的不再报成冷掉', () => {
   assert.equal(r.stale.length, 0, JSON.stringify(r.stale))
 })
 
-test('体检：冷掉的天数是距最后一次提起的天数', () => {
+// 只说过一次的句子 lastTouchedAt 就等于 since，分不出新旧算法；提起两遍以上的又进了快固化。
+// 真正靠 lastTouchedAt 的是掉档那类：够格固化过、90 天没碰过，又不算快固化。
+test('体检：冷掉的天数是距最后一次提起的天数（掉档的那类）', () => {
   const events = [
-    said('我想去看一次真正的雪', 60),
+    said('我想去看一次真正的雪', 200),
+    said('我想去看一次真正的雪', 150),
+    said('我想去看一次真正的雪', 100),
     said('今天的云很低', 1),
   ]
   const r = examine(events)
   const cold = r.stale.find((s) => /雪/.test(s.text))
   assert.ok(cold, JSON.stringify(r.stale))
-  assert.ok(cold.days >= 59 && cold.days <= 60, `应当按 60 天前那次算，实际 ${cold.days}`)
+  assert.equal(cold.faded, true, '说过三遍、100 天没碰，是长成过又淡了的')
+  assert.ok(cold.days >= 99 && cold.days <= 100, `应当按 100 天前那次算，不是第一次说的 200 天前，实际 ${cold.days}`)
   assert.ok(!r.stale.some((s) => /云/.test(s.text)), '昨天说的不该算冷')
+})
+
+// issue #67 复核：冷掉原来排除的是全部快固化，界面却只列前 HEALTH_LIST 条，
+// 第 HEALTH_LIST+1 条起又很久没碰的，两个列表里都看不到。
+test('体检：没列进快固化的，冷了照常报在冷掉里', () => {
+  const topics = ['早上第一杯水要喝温的', '书架上的书按颜色排好', '出门前要检查三遍门锁', '下午四点最适合发呆',
+    '猫的爪子摸起来像棉花', '雨后的空气闻起来很干净', '周三是一周里最长的一天']
+  const events = []
+  for (const t of topics) events.push(said(t, 41), said(t, 40))
+  const r = examine(events)
+  assert.equal(r.nearSolid.length, HEALTH_LIST)
+  const near = new Set(r.nearSolid.map((n) => n.text))
+  const cold = new Set(r.stale.map((s) => s.text))
+  assert.equal(cold.size, topics.length - HEALTH_LIST, JSON.stringify(r.stale))
+  for (const t of cold) assert.ok(!near.has(t), `「${t}」两边都报了`)
+  for (const t of topics) assert.ok(near.has(t) || cold.has(t), `「${t}」哪边都看不到`)
 })
 
 // issue #67 复核：derive 的矛盾列表原来不去重就截前 3 处，同一句说三遍会占满三个位置，
