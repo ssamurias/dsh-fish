@@ -12,7 +12,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, readFile, stat, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 
@@ -284,6 +284,8 @@ test('事件流大到超过总量上限：整份备份失败并说明，不悄�
       assert.match(err.message, /events\.jsonl/)
       assert.match(err.message, /64MB/)
       assert.match(err.message, /没有备份/)
+      // 以后每次都会失败（事件流只会变长），要给一条出路
+      assert.match(err.message, /把整个数据文件夹复制走/)
       return true
     })
   } finally {
@@ -323,4 +325,47 @@ test('设置页：备份失败照实说，没装进去的列出来（issue #65�
   const o = await readFile(new URL('../lib/observe.js', import.meta.url), 'utf8')
   const route = o.slice(o.indexOf("['/backup', async"), o.indexOf("['/backup/restore'"))
   assert.match(route, /catch \(err\)[\s\S]*send\(res, 409/, '事件流装不进来时回 409 和原因，不当 500')
+})
+
+test('旧版本打的、事件流被跳过的备份：恢复时拒绝，现在的档不动（issue #65）', async () => {
+  // 0.9.3 及以前，超过 8MB 的事件流进的是 skipped，files 里没有它。这种包已经在用户手里了。
+  const old = {
+    format: BACKUP_FORMAT,
+    schema: EVENT_SCHEMA_VERSION,
+    files: [{ path: 'config.json', enc: 'utf8', data: '{"chat":{"rotateAfter":40}}' }],
+    skipped: ['events.jsonl（9MB，超过单文件上限）', 'logs/（不搬：logs）'],
+  }
+  const chk = checkBundle(old)
+  assert.equal(chk.ok, false, '事件流没装进去的包不能恢复')
+  assert.match(chk.why, /旧版本/)
+  assert.match(chk.why, /事件流没装进去/)
+  assert.match(chk.why, /空的她/)
+  assert.match(chk.why, /现在的档没动/)
+  for (const why of ['（读不到）', '（读失败）', '（总量已到 64MB 上限）', '（不是普通文件）']) {
+    assert.equal(checkBundle({ ...old, skipped: [`events.jsonl${why}`] }).ok, false, why)
+  }
+
+  // 不误伤：包里有事件流的、本来就没有事件流的（skipped 里没提它）、只有别处同名文件被跳过的，都照常放行
+  const withEvents = { ...old, files: [...old.files, { path: 'events.jsonl', enc: 'utf8', data: '' }] }
+  assert.equal(checkBundle(withEvents).ok, true, checkBundle(withEvents).why)
+  assert.equal(checkBundle({ ...old, skipped: ['logs/（不搬：logs）'] }).ok, true)
+  assert.equal(checkBundle({ ...old, skipped: undefined }).ok, true)
+  assert.equal(checkBundle({ ...old, skipped: ['home/events.jsonl（9MB，超过单文件上限）'] }).ok, true)
+
+  // 真走一遍恢复：拒绝，现在的档原样留在原位，没有被封存
+  const box = await mkdtemp(join(tmpdir(), 'fish-restore-old-'))
+  try {
+    const root = join(box, 'dsh-fish')
+    await mkdir(root, { recursive: true })
+    const mine = '{"id":"ev_01J0000000000000000000000A","v":1,"type":"utterance","text":"我还在。","ts":"2026-10-25T00:00:00.000Z","day":1,"stage":1}\n'
+    await writeFile(join(root, 'events.jsonl'), mine)
+    const r = await restoreBackup(old, root)
+    assert.equal(r.ok, false)
+    assert.equal(r.why, chk.why)
+    assert.equal(await readFile(join(root, 'events.jsonl'), 'utf8'), mine, '现在的事件流一个字节都不动')
+    assert.deepEqual(await readdir(box), ['dsh-fish'], '不封存（没有 dsh-fish-backups）')
+    assert.equal((await readEvents(root)).events.length, 1)
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
 })
