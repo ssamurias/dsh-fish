@@ -260,6 +260,44 @@ test('群里来话：另开一间房，不写 seen、不涨轮数、不换会话
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
 
+test('群聊出口脱敏：她叫主人的名字不会发给桥；私聊照旧', async () => {
+  const root = await tmpRoot()
+  try {
+    await seed(root)
+    // 先让她有一个对主人的称呼（deriveSelf 只认她已提交的话）。
+    await appendEvent(
+      { type: 'utterance', text: '以后叫他时梦尘。' },
+      { day: 1, stage: 1, source: 'tool' },
+      root,
+    )
+    const { ctx } = fakeCtx()
+    const { prompt } = ctx.sessionController
+    ctx.sessionController.prompt = async (req, signal) => {
+      if (String(req?.requestId).startsWith('say-')) {
+        await appendEvent(
+          { type: 'utterance', text: '时梦尘跟我说的。' },
+          { day: 1, stage: 1, source: 'tool' },
+          root,
+        )
+      }
+      return prompt(req, signal)
+    }
+
+    const group = await sayToHer(ctx, '群里有人问你在不在', {
+      root, waitMs: 5_000, channel: 'qq-group:1', scene: 'group', speaker: '路人',
+    })
+    assert.equal(group.ok, true)
+    assert.doesNotMatch(group.herReply, /时梦尘/, '群聊发出去的文字里不能有名字')
+    assert.match(group.herReply, /对方跟我说的/)
+    assert.ok(group.said.every((s) => !String(s.text).includes('时梦尘')))
+
+    // 私下照旧：名字该出现就出现，不能被出口脱敏误伤。
+    const desk = await sayToHer(ctx, '书房里说一句', { root, waitMs: 5_000 })
+    assert.equal(desk.ok, true)
+    assert.match(desk.herReply, /时梦尘跟我说的/)
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
 test('群里说了话，书房里留一句「刚才有人叫过你」（串门）', async () => {
   const root = await tmpRoot()
   try {

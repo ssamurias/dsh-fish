@@ -170,11 +170,31 @@ test('stability：抽掉 3 条判断后，她的自我描述变化有限（承�
   assert.ok(s.score > 0, `抽掉判断后必然有变化，实际 ${s.score}`)
   assert.ok(s.score < 0.5, `12 条里抽 3 条不该换个人，实际 ${s.score}`)
   assert.ok(s.worst >= s.score, 'worst 是单次最大变化量')
+  // issue #57：beliefs 是全部判断，visible 是这会儿真写进自我描述的条数。
+  assert.ok(s.visible > 0, '有判断就该有几条写进文档')
+  assert.ok(s.visible <= s.beliefs, `可见条数不能超过总数，实际 ${s.visible}/${s.beliefs}`)
+})
+
+test('stability：判断多于文档能摆的条数时，只抽读得到的那些（issue #57）', () => {
+  // 复现 issue #57：判断攒到几十条，文档里只摆得下五六条。
+  // 旧算法从全部判断里均匀抽 3 条，抽中的大多不在文档里，删了等于没删，分数被压到 0.03。
+  const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' })]
+  for (let d = 1; d <= 40; d++) {
+    evs.push(ev(`ev_b${String(d).padStart(3, '0')}`, 'utterance', d, `第 ${d} 天我注意到一件事，编号 ${d}。`))
+  }
+  const s = stability(evs, { now: T0 + 40 * DAY_MS })
+  assert.equal(s.beliefs, 40)
+  assert.ok(s.visible > 0, `该有几条读得到，实际 ${s.visible}`)
+  assert.ok(s.visible < s.beliefs, `文档摆不下 40 条，可见数应小于总数，实际 ${s.visible}`)
+  // 抽中的是读得到的那几条，删掉真的会动她——不该再是「只是记账」。
+  assert.ok(s.score > 0.02, `抽到可见判断时分数该过 0.02，实际 ${s.score}`)
+  assert.ok(s.worst >= s.score)
+  assert.equal(stabilityBand(s), '长在这些事上，抽掉一条少一块')
 })
 
 test('stability：没有判断时不出分数，只说测不出来', () => {
   const s = stability([])
-  assert.deepEqual(s, { score: 0, worst: 0, sample: 0, k: 0, beliefs: 0 })
+  assert.deepEqual(s, { score: 0, worst: 0, sample: 0, k: 0, beliefs: 0, visible: 0 })
   assert.equal(stabilityBand(s), '还没攒到判断，测不出来')
 })
 

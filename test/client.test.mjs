@@ -327,6 +327,48 @@ test('quality 能测出稳定值时，数字和判读一起给（用户 m06350�
   assert.ok(txt.includes('0.35'), '新鲜仍然显示数字')
 })
 
+/** 收集整棵树里 ⓘ 的 title（提示语挂在属性上，textOf 取不到） */
+function titlesOf(node, out = []) {
+  if (node == null || node === false) return out
+  if (Array.isArray(node)) { for (const n of node) titlesOf(n, out); return out }
+  if (typeof node !== 'object') return out
+  const t = node.props && node.props.title
+  if (typeof t === 'string' && t) out.push(t)
+  if (node.children) for (const c of node.children) titlesOf(c, out)
+  return out
+}
+
+// 2026-11-07（issue #57）：判断攒到几十条以后，只印均值会把「平均动 3%、某一次动了 15%」
+// 写成一片安安静静；提示语里也得写清抽了几条、几条真的读得到，否则同一个小数在
+// 五六条判断和五六十条判断的账号上会被读成同一件事。
+test('稳定值同时印最大变化量与抽样剂量（issue #57）', async () => {
+  const react = fakeReact({
+    0: {
+      day: 60, growthDays: 30, stage: 4, stageName: '整合', stageForced: false, pendingGate: null,
+      name: '梦尘', beliefCount: 58, absenceDays: 0,
+      counts: { utterance: 90, revise: 3, refusal: 2, reunion: 1, total: 120 },
+      quality: {
+        stability: {
+          score: 0.03, worst: 0.15, sample: 24, k: 3, beliefs: 58, visible: 3,
+          band: '长在这些事上，抽掉一条少一块',
+        },
+        consistency: { score: 0.72, pairs: 40 },
+        novelty: { score: 0.35, recent: 9, older: 20 },
+      },
+      config: { window: ['20:00', '23:00'], daily: { events: 1, questions: 1 }, diary: { enabled: true, visible: false }, absenceAfterDays: 2 },
+    },
+  })
+  const { exports } = await loadClient({ react })
+  react.resetCursor()
+  const tree = exports.FishSection()
+  const txt = textOf(tree).join(' ')
+  assert.ok(txt.includes('0.03（最大 0.15）'), `均值与最大值要一起印，实际: ${txt.slice(0, 400)}`)
+  const tips = titlesOf(tree).join('\n')
+  assert.ok(tips.includes('每次抽掉 3 条'), `提示语要写剂量（抽几条），实际: ${tips}`)
+  assert.ok(tips.includes('58 条判断'), '提示语要写判断总数')
+  assert.ok(tips.includes('3 条这会儿真写在自我描述里'), '提示语要写有几条读得到——这是新旧尺子的分界')
+})
+
 // 2026-10-27（用户 m06107「这三个参数分成三行显示，现在排成一行有点拥挤」）：
 // 三个值原来是拼在同一条 rowTip 的值里，界面上是一长串。现在必须是三个独立的行。
 test('判断漂移的三个值分三行渲染，不挤在一行里（用户 m06107）', async () => {

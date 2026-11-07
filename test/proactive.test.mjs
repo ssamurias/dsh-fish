@@ -239,7 +239,40 @@ test('材料只取她自己的话与听见的东西，悬着的事只列未答�
   assert.match(loose[0].text, /还没有得到答复/)
 
   const answered = [...events, ev({ id: 'ev_ans', type: 'answer', ts: new Date(now - 1000).toISOString(), ask: { askId: 'ev_ask', verdict: 'reject' } })]
-  assert.equal(looseEnds(answered, { now }).length, 0, '答过了就不再算悬着')
+  assert.equal(looseEnds(answered, { now }).length, 0, '「这次不行」就不摆：再提一次就成了追问')
+
+  // 2026-11-07（用户 m01602）：答了却没兑现的，线索不能断。
+  // 「以后再说」是「先放着」而不是否决，得继续摆着，否则她开口了、被答了、
+  // 然后这件事永远消失——2026-10-29 那张看整条视频的卡就是这么断的。
+  const later = [...events, ev({ id: 'ev_l', type: 'answer', ts: new Date(now - 1000).toISOString(), ask: { askId: 'ev_ask', verdict: 'later' } })]
+  const l = looseEnds(later, { now })
+  assert.equal(l.length, 1, '说了「以后再说」的还得摆着')
+  assert.match(l[0].text, /以后再说/)
+
+  const approved = [...events, ev({ id: 'ev_a', type: 'answer', ts: new Date(now - 1000).toISOString(), ask: { askId: 'ev_ask', verdict: 'approve' } })]
+  const a = looseEnds(approved, { now })
+  assert.equal(a.length, 1, '答应了还没到的也得摆着')
+  assert.match(a[0].text, /答应了，还没见到/)
+
+  // 放一天没人答的（`lib/ask.js` 记成 verdict:'later' + via:'timeout'）不是「以后再说」：
+  // 什么都没人说。文案还得是「还没有得到答复」，窗口也还是 3 天。
+  const timedOut = [...events, ev({ id: 'ev_t', type: 'answer', ts: new Date(now - 1000).toISOString(), ask: { askId: 'ev_ask', verdict: 'later', via: 'timeout' } })]
+  const t = looseEnds(timedOut, { now })
+  assert.equal(t.length, 1)
+  assert.match(t[0].text, /还没有得到答复/)
+  assert.doesNotMatch(t[0].text, /以后再说/)
+  assert.equal(looseEnds(timedOut, { now: now + 4 * 86_400_000 }).length, 0, '没人答的仍是 3 天窗口')
+
+  // 窗口：没答的 3 天、「以后再说」30 天、答应了 14 天。
+  const old = [ev({ id: 'ev_old', type: 'ask', ts: new Date(now - 10 * 86_400_000).toISOString(), text: '十天前问的' })]
+  assert.equal(looseEnds(old, { now }).length, 0, '十天没答的就不催了')
+  const oldLater = [...old, ev({ id: 'ev_old_ans', type: 'answer', ts: new Date(now - 9 * 86_400_000).toISOString(), ask: { askId: 'ev_old', verdict: 'later' } })]
+  assert.equal(looseEnds(oldLater, { now }).length, 1, '十天前说「以后再说」的还摆着')
+  const oldApproved = [
+    ev({ id: 'ev_vo', type: 'ask', ts: new Date(now - 15 * 86_400_000).toISOString(), text: '十五天前问的' }),
+    ev({ id: 'ev_vo_ok', type: 'answer', ts: new Date(now - 14 * 86_400_000).toISOString(), ask: { askId: 'ev_vo', verdict: 'approve' } }),
+  ]
+  assert.equal(looseEnds(oldApproved, { now }).length, 0, '答应过 14 天还没到的，不再摆')
 })
 
 test('her_say 必须指回真实事件：没 refs、超量、不存在、不是材料都写不进去', () => withRoot(async (root) => {
@@ -314,7 +347,9 @@ test('her_say 写下的 day/stage 是真实成长坐标，不是写死的 1/1（
 test('her_say 在 0.9.0 起对所有人注册', () => {
   const src = readFileSync(new URL('../lib/proactive.js', import.meta.url), 'utf8')
   assert.match(src, /name: 'her_say'/)
-  assert.match(src, /TOOL_ASK_NOTE/)
+  // 2026-11-07（用户 m01602）：原来每次醒来都摆的 TOOL_ASK_NOTE 常量已经撤掉。
+  // 只许在注释里提到它为什么消失，不许再有这个导出。
+  assert.doesNotMatch(src, /export const TOOL_ASK_NOTE/)
 
   const registered = []
   const ctx = { tools: { register: (t) => registered.push(t) } }

@@ -404,6 +404,24 @@ test('只能评今天真的看过的视频', async () => {
   })
 })
 
+test('评论发出前会把主人称呼换成「对方」，@ 前缀保留', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root)
+    await seedBrowse(root, 'BV1', dk)
+    const client = fakeClient()
+
+    const r = await postComment({
+      root, client, bvid: 'BV1', dateKey: dk,
+      text: '时梦尘说你好', prefix: '@时梦染 ', ownerName: '时梦尘',
+    })
+    assert.equal(r.ok, true)
+    assert.equal(r.sent, '@时梦染 对方说你好')
+    const sent = client.calls.find((c) => c[0] === 'replyAdd')[2]
+    assert.equal(sent, '@时梦染 对方说你好')
+  })
+})
+
 test('targetsToday：主动看过的、看过画面的都算；递过来没看的不算', () => {
   const dk = '2026-10-28'
   const events = [
@@ -559,7 +577,7 @@ test('speakOnce 关着时听起来像"不方便"，不像"被禁止"', async () 
     await writeConfig(normalizeConfig({ comment: { enabled: false } }), root)
     const r = await speakOnce({ root, client: fakeClient(), kind: 'comment', bvid: 'BV1', text: '你好', dateKey: dk })
     assert.equal(r.ok, false)
-    assert.equal(r.note, '现在不方便说。')
+    assert.equal(r.note, '这会儿不方便说。')
   })
 })
 
@@ -605,7 +623,7 @@ test('bili_speak 关着时执行，说的话和说明对得上（都是"不方�
     const def = ctx.defs.find((d) => d.name === 'bili_speak')
     const out = await def.execute({ kind: 'comment', bvid: 'BV1', text: '你好' }, { sessionId: 's' })
     assert.equal(out.ok, false)
-    assert.equal(out.note, '现在不方便说。')
+    assert.equal(out.note, '这会儿不方便说。')
     // 执行完顺手把状态同步成"关着"，下一轮说明跟着变
     assert.doesNotMatch(def.description, /留一条评论/)
   })

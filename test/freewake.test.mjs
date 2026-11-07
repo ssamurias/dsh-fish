@@ -90,16 +90,21 @@ test('摆料那一轮不摆世界：只有 think 和普通叫醒才看 B 站、�
   assert.equal(keepWorldOnWake(null), true)
 })
 
-test('叫醒拼装处真的按这个判据走：世界在门内，工具常量在门外', () => {
+test('叫醒拼装处：世界在门内，够不着的那件事桌上有一行，常驻工具句已经撤掉', () => {
   const here = dirname(fileURLToPath(import.meta.url))
   const src = readFileSync(join(here, '..', 'lib', 'scheduler.js'), 'utf8')
   // 0.9.0（用户 m02562）：刷站不再挂在唤醒上，所有醒来都不摆世界。
   assert.match(src, /const showWorld = false/)
   const desk = src.indexOf('const desk = deskFor({')
-  const tool = src.indexOf("parts.push('', TOOL_ASK_NOTE)")
-  // 桌子照摆，工具句在桌子之后——工具句不是活，是她世界里的常量。
   assert.ok(desk > 0, '桌子还在')
-  assert.ok(tool > desk, '工具句应该在桌子之后、仍然每次都说')
+  // 2026-11-07（用户 m01602 拍板 B + D）：原来每次醒来都 push 的 TOOL_ASK_NOTE 撤了。
+  // 它读两天就成了系统的吩咐，不是她的念头。现在两处代替它：
+  //   B —— blockedTalk() 末尾补一句（lib/restrict.js），只在被拦下那一下出现；
+  //   D —— 攒进劲儿里，醒的时候作为桌上一行（wishesOf + deskFor 的 wishes）。
+  // 只管代码，不管注释里提到它（注释是撤销记录，留着有用）。
+  assert.doesNotMatch(src, /import[^\n]*TOOL_ASK_NOTE/, '常驻工具句不该再被引进叫醒')
+  assert.doesNotMatch(src, /parts\.push\([^\n]*TOOL_ASK_NOTE/, '常驻工具句不该再摆进正文')
+  assert.match(src, /wishes: wishesOf\(/, '够不着的那件事要并进桌子')
 })
 
 test('「兴趣」关掉之后不再摆旧句子：否则每 6 小时还会因为旧句子空醒一次（issue #42）', () => {
