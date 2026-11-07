@@ -31,14 +31,21 @@ process.env.DSH_FISH_HOMES = join(sandbox, 'homes.json')
 process.env.USERPROFILE = join(sandbox, 'user')
 process.env.HOME = join(sandbox, 'user')
 
-const { registerToolRestrict, herToolNames, rememberKnownTools, HER_TOOLS } = await import('../lib/restrict.js')
+const { registerToolRestrict, herToolNames, rememberKnownTools, readRestrictState, HER_TOOLS } = await import('../lib/restrict.js')
 const { wakeNow, startScheduler } = await import('../lib/scheduler.js')
 const { appendEvent, writeConfig } = await import('../lib/store.js')
 const { normalizeConfig } = await import('../lib/settings.js')
 const { settleAsk } = await import('../lib/ask.js')
 const { getWakeSection, clearWakeSection } = await import('../lib/identity.js')
 
+// 假 agent 挂在 effect 上的清理（收窄重试的定时器也在里面）。复位之前先跑掉，
+// 不然晚到的重试会把复位盖回去。
+const cleanups = []
+
 after(async () => {
+  for (const fn of cleanups.splice(0)) {
+    try { fn() } catch { /* ignore */ }
+  }
   // 进程内单例复位：用 --test-isolation=none 跑时别把这里的白名单带给别的文件。
   rememberKnownTools([])
   registerToolRestrict(fakeCtx(), { herDir: HER_DIR, log: () => {} })
@@ -73,12 +80,22 @@ function fakeCtx() {
   }
 }
 
+/** 等到 fn() 为真；等不到返回 false。 */
+async function until(fn, ms = 1000) {
+  const end = Date.now() + ms
+  while (Date.now() < end) {
+    if (fn()) return true
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  return fn()
+}
+
 /** 一个 agent：cwd 决定是不是她；view 里是宿主此刻真登记着的工具。 */
 function fakeAgent(cwd, names) {
   const agent = {
     session: { header: { cwd } },
     ctx: {
-      effect: () => {},
+      effect: (fn) => { cleanups.push(fn) },
       tools: {
         view: (scope) => scope === agent
           ? { restrictableNames: new Set(names), visible: new Map(names.map((n) => [n, {}])) }
@@ -129,13 +146,16 @@ test('herToolNames：没登记过收窄、宿主一个名字都没见过时拿�
   assert.equal(herToolNames(), null)
 })
 
-test('herToolNames：放行了、也真装上了的才算在她手上', () => {
+test('herToolNames：放行了、也真装上了的才算在她手上', async () => {
   const ctx = fakeCtx()
   // 设置页放行了 web_search 和 image_gen；宿主只真登记了 web_search。
-  registerToolRestrict(ctx, { herDir: HER_DIR, extra: ['web_search', 'image_gen'], log: () => {} })
+  // 名字没登记齐会走收窄的延后重试：调到 1 毫秒、只试 1 次，下面等它报完再往下走，
+  // 不留定时器给后面的用例（以前那串重试约 3 秒后才停，会把后面的结论盖掉）。
+  registerToolRestrict(ctx, { herDir: HER_DIR, extra: ['web_search', 'image_gen'], log: () => {}, retryMs: 1, retryMax: 1 })
   ctx.emit('agent/created', { agent: fakeAgent(HER_DIR, [...HER_TOOLS, 'web_search']) })
   // 别的工作区有 pwsh：宿主认得这个名字，但守卫不放它给她。
   ctx.emit('agent/created', { agent: fakeAgent(join(sandbox, 'elsewhere'), [...HER_TOOLS, 'web_search', 'pwsh']) })
+  assert.ok(await until(() => readRestrictState().why === 'deferred'), `收窄重试得先停下：${readRestrictState().why}`)
 
   const names = herToolNames()
   assert.ok(Array.isArray(names))
