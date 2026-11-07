@@ -100,17 +100,20 @@ test('/outing 复核：接口层把 pending 从「死路」走通（0.6.32）', 
     assert.equal(ended.json.outing.status, 'pending', '不许直接 done')
 
     // 3. GET 现在要把原因与「还不能复核」告诉界面
+    // issue #68 起，回家时会往事件流追加一条 outing-pending 标记（「这趟先不算数」要落到事件流里），
+    // 文件随即又长过基线，原因就从「短了」变成「出门前那段被改过」。真机上她回家后家里的记账
+    // 也会往里写，「短了」本来就留不住；两种说法都是对不上，这里两种都认。
     const mid = await call('GET')
     assert.ok(mid.json.pendingReview, 'pending 之后 GET 必须带回 pendingReview')
     assert.equal(mid.json.pendingReview.sessionId, 'session-r1')
     assert.equal(mid.json.pendingReview.okNow, false)
-    assert.match(String(mid.json.pendingReview.reason), /短了/)
+    assert.match(String(mid.json.pendingReview.reason), /短了|改过/)
     assert.equal(mid.json.away?.kind, null, 'pending 之后不再是 active，界面要按 kind 判「在家」')
 
     // 4. 还没还原就点「复核一次」：拒绝，而且台账不能被动
     const refused = await call('POST', { action: 'review' })
     assert.equal(refused.status, 409)
-    assert.match(String(refused.json.why), /短了/)
+    assert.match(String(refused.json.why), /短了|改过/)
     const stillPending = (await readOutings(root)).outings.at(-1)
     assert.equal(stillPending.status, 'pending', '复核没过不能偷偷改台账')
 
@@ -164,7 +167,9 @@ test('/outing 回家：点「这趟不算数」会把这一趟写下的条目全
   const root = mkdtempSync(join(tmpdir(), 'fish-outing-route-'))
   try {
     const eventsFile = join(root, 'events.jsonl')
-    const line = (id, ts, type, text) => JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', text, refs: [], verdict: null, confidence: 0.5, flags: [] }) + '\n'
+    // 这趟写的条目带外面那条会话的 id：真机上 growth_commit 都记「谁写的」，
+    // 回家清单从 issue #68 起只收这条会话写的（原来的夹具没带，是因为当时只按时间筛）。
+    const line = (id, ts, type, text, sessionId) => JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', ...(sessionId ? { sessionId } : {}), text, refs: [], verdict: null, confidence: 0.5, flags: [] }) + '\n'
     // 出门前一条；这趟写三条，其中一条是 meta 记账（不该被一起抹掉）
     const before = line('ev_before', '2026-10-29T00:00:00.000Z', 'utterance', '出门前')
     writeFileSync(eventsFile, before)
@@ -180,9 +185,9 @@ test('/outing 回家：点「这趟不算数」会把这一趟写下的条目全
       now: startedAt,
     })
     writeFileSync(eventsFile, before + [
-      line('ev_t1', '2026-10-29T00:11:00.000Z', 'utterance', '这趟第一句'),
-      line('ev_t2', '2026-10-29T00:12:00.000Z', 'refusal', '这句我不认'),
-      line('ev_t3', '2026-10-29T00:13:00.000Z', 'meta', 'diary:2026-10-29'),
+      line('ev_t1', '2026-10-29T00:11:00.000Z', 'utterance', '这趟第一句', 'session-a1'),
+      line('ev_t2', '2026-10-29T00:12:00.000Z', 'refusal', '这句我不认', 'session-a1'),
+      line('ev_t3', '2026-10-29T00:13:00.000Z', 'meta', 'diary:2026-10-29', 'session-a1'),
     ].join(''))
     const { call } = harness(root)
 

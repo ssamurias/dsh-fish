@@ -28,8 +28,9 @@ import { deriveSelf } from '../lib/derive.js'
 import { readEvents } from '../lib/store.js'
 import { eventsSince, readPossessions, snapshotEvents, startPossession } from '../lib/outing.js'
 
-const line = (id, ts, type = 'utterance', text = '在家') =>
-  JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', text, refs: [], verdict: null, confidence: 0.5, flags: [] }) + '\n'
+// sessionId：这条是哪条会话写的。真机上 growth_commit 都带；回家清单从 issue #68 起只收被上身那条会话写的。
+const line = (id, ts, type = 'utterance', text = '在家', sessionId = '') =>
+  JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', ...(sessionId ? { sessionId } : {}), text, refs: [], verdict: null, confidence: 0.5, flags: [] }) + '\n'
 
 function fakeAgent(id, cwd) {
   const appended = []
@@ -147,8 +148,9 @@ test('整趟不算且没逐条挑：非 meta 的条目全部标上，状态 reje
   const { root, events, h } = setup()
   try {
     await possess(root)
-    appendFileSync(events, line('ev_a', '2026-10-29T00:20:00.000Z', 'utterance', '第一句'), 'utf8')
-    appendFileSync(events, line('ev_b', '2026-10-29T00:21:00.000Z', 'diary', '第二句'), 'utf8')
+    // 两条都是被上身那条会话写的（原来的夹具没带会话 id，那时清单只按时间筛）。
+    appendFileSync(events, line('ev_a', '2026-10-29T00:20:00.000Z', 'utterance', '第一句', 'session-talk'), 'utf8')
+    appendFileSync(events, line('ev_b', '2026-10-29T00:21:00.000Z', 'diary', '第二句', 'session-talk'), 'utf8')
 
     const r = await h.call('POST', { action: 'end', sessionId: 'session-talk', kept: false })
     assert.equal(r.status, 200, JSON.stringify(r.json))
