@@ -293,6 +293,9 @@ test('#68 deriveSelf：pending 按趟次配对，解除一趟不会放出另一�
   // 前缀也要对得上：出门的解除放不出请神那趟。
   const wrong = [...base, ev('ev_m4', '2026-10-29T00:05:00.000Z', 'meta', 'outing-settled:s2@2')]
   assert.deepEqual(deriveSelf(wrong, { now: NOW }).refusals.map((r) => r.id), [])
+  // 解除和顺序无关：回家和复核之间重启过、时钟又往回调过时，settled 那行可能排在 pending 前面。
+  const early = [ev('ev_m0', '2026-10-29T00:00:30.000Z', 'meta', 'outing-settled:s1@1'), ...base]
+  assert.deepEqual(deriveSelf(early, { now: NOW }).refusals.map((r) => r.id), ['ev_a'], 'settled 排在前面也要解开')
 })
 
 test('#68 eventsSince：给了会话 id 只收那条会话写的，空串一条不收，不给是老口径', () => {

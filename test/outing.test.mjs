@@ -405,8 +405,12 @@ test('等复核的那趟：能找出来、复核通过就收下，结束时间�
     const wrong = await settlePending(root, { sessionId: 's-b' })
     assert.equal(wrong.ok, false, '不是这一趟就不能结算')
     assert.match(wrong.why, /不是这一趟/)
+    // 两趟共用一条会话时只认 sessionId 会结错趟（#68 复核）：带了趟次就按趟次核对。
+    const otherTrip = await settlePending(root, { sessionId: 's-a', startedAt: pend.startedAt + 1 })
+    assert.equal(otherTrip.ok, false, '会话对得上、趟次对不上也不能结算')
+    assert.equal(pendingOf(await readOutings(root))?.status, 'pending', '结错趟的请求不能动台账')
 
-    const ok = await settlePending(root, { sessionId: 's-a' })
+    const ok = await settlePending(root, { sessionId: 's-a', startedAt: pend.startedAt })
     assert.equal(ok.ok, true)
     const after = await readOutings(root)
     const last = after.outings[after.outings.length - 1]
