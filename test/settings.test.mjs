@@ -162,3 +162,19 @@ test('配置文件带 UTF-8 BOM 也要读得出来，不能当成坏文件改名
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
+
+// issue #67：热评原来允许填 0–40，可 absorb 和 replies 都封顶 20，填 21–40 读到的跟 20 一样，界面不提示。
+// 现在三处一起是 20：配置夹值、设置页数字框的 max、保存前的范围校验。
+test('每条读几条热评：上限统一成 20（配置、数字框、保存前校验）', async () => {
+  assert.equal(normalizeConfig({ browse: { deepRead: 40 } }).browse.deepRead, 20)
+  assert.equal(normalizeConfig({ browse: { deepRead: 20 } }).browse.deepRead, 20)
+  assert.equal(normalizeConfig({ browse: { deepRead: 0 } }).browse.deepRead, 0)
+
+  const src = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const num = src.match(/Num\(\{ label: '每条读几条热评'[^)]*?max: (\d+)/)
+  assert.ok(num, '设置页要有「每条读几条热评」数字框')
+  assert.equal(num[1], '20')
+  const bound = src.match(/\['每条读几条热评', browseDeepRead, (\d+), (\d+)\]/)
+  assert.ok(bound, 'NUM_BOUNDS 里要有这一项')
+  assert.deepEqual([bound[1], bound[2]], ['0', '20'])
+})
