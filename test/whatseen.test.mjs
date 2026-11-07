@@ -184,6 +184,37 @@ test('历史：同一条既被记账又被抽帧时，只留一份且算看过',
   assert.equal(items[0].how, 'watch')
 })
 
+// issue #69：刷站停了以后只剩 bili_look 落的 look:。历史原来不读它，
+// 同一张卡底部「只翻到过 N 条」（glancedItems）却算它——两边对不上。
+test('历史：bili_look 落的 look: 也进列表，标 glance，和 watched / browse 去重', () => {
+  const D0 = '2026-10-29'
+  const events = [
+    meta(`look:${DK} ${B1} {"title":"点开的","up":"某UP","duration":61,"view":7}`),
+    meta(`look:${DK} ${B2}`), // 老事件：只有 BV 号
+    meta(`watched:${DK} ${B2} {"title":"后来看了画面"}`),
+    meta(`browse:${DK} [{"bvid":"${B3}","title":"记账里的"}]`),
+    meta(`look:${DK} ${B3} {"title":"look 行里的"}`),
+    meta(`look:${DK} ${B1} {"title":"同一天又点了一次"}`),
+    meta(`look:${D0} ${B1} {"title":"前一天点开的"}`),
+    meta(`looked:${B3}`), // 没日期的旧凭证，不是 look:
+  ]
+  const groups = historyFromEvents(events, { days: 7 })
+  assert.deepEqual(groups.map((g) => g.date), [DK, D0])
+  const today = groups[0].items
+  assert.deepEqual(today.map((x) => `${x.bvid}:${x.how}`), [`${B2}:watch`, `${B3}:glance`, `${B1}:glance`],
+    '看过画面的在前、每条只出现一次')
+  const b1 = today.find((x) => x.bvid === B1)
+  assert.equal(b1.title, '点开的', '展示信息取 look 行自带的 JSON（同一天第一次那份）')
+  assert.equal(b1.up, '某UP')
+  assert.equal(b1.duration, 61)
+  assert.equal(b1.url, `https://www.bilibili.com/video/${B1}`)
+  assert.equal(today.find((x) => x.bvid === B3).title, '记账里的', '已在 browse: 里的不重复，展示信息照旧')
+  assert.equal(groups[1].items[0].title, '前一天点开的', '换一天就是另一条')
+  // 和底部那行数的是同一批
+  assert.deepEqual(today.filter((x) => x.how === 'glance').map((x) => x.bvid).sort(),
+    glancedItems(events, DK).map((x) => x.bvid).sort())
+})
+
 test('不在的时候：看过画面与翻到过分开数', () => {
   const now = Date.parse('2026-10-30T12:00:00.000Z')
   const events = [
