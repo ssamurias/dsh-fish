@@ -164,6 +164,31 @@ test('自检按 registry 里真的在不在判断，而不是配置名单', asyn
   assert.match(badItem.fix, /日志/)
 })
 
+// issue #61：宿主没有 read_image 时收窄不再整条延后，而是把它剔掉照常下。
+// 「挂上了且 allow 里有」从此不能再当成宿主认过 read_image——它可能正是被剔掉的那个。
+test('收窄挂上了但 read_image 是这次剔掉的：自检不能说宿主认了它', async () => {
+  const cfg = { growthDays: 30, window: { start: '20:00', end: '23:00' }, tools: {} }
+  const noImage = { get: (n) => (n === 'read_image' ? undefined : { name: n }) }
+  const R = { allow: [...HER_TOOLS], applied: 1, failed: '', absent: ['read_image'] }
+
+  // 宿主明说没挂附件服务：照样报红，不被「收窄挂上了」盖过去
+  const noAttach = await runChecks({ root: ROOT, config: cfg, host: {}, tools: noImage, restrict: R, attachments: false, net: false })
+  const noAttachItem = noAttach.items.find((i) => i.id === 'read-image')
+  assert.equal(noAttachItem.ok, false, noAttachItem.detail)
+  assert.match(noAttachItem.detail, /read_image/)
+  // 「手上的工具」那一项也不能把剔掉的算进「看得见几个」
+  const toolsItem = noAttach.items.find((i) => i.id === 'tools')
+  assert.match(toolsItem.detail, new RegExp(`只看得见 ${HER_TOOLS.length - 1} 个工具`), toolsItem.detail)
+  assert.match(toolsItem.detail, /read_image 这次宿主没有/)
+
+  // 没有别的旁证：说判不准，不说「宿主认了」
+  const unclear = await runChecks({ root: ROOT, config: cfg, host: {}, tools: noImage, restrict: R, net: false })
+  const unclearItem = unclear.items.find((i) => i.id === 'read-image')
+  assert.equal(unclearItem.ok, true, unclearItem.detail)
+  assert.doesNotMatch(unclearItem.detail, /宿主认了/)
+  assert.match(unclearItem.detail, /查不准|判不准/)
+})
+
 // 2026-10-30（0.8.1 发版前自查）：公开版装完自检必然报红的一条误报。
 //
 // `her_dream` 是「梦」那个本机实验功能的工具，只有 `.dev` 存在时 `lib/index.js`

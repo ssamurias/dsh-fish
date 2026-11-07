@@ -13,7 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { HER_TOOLS, currentToolSurface, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
+import { FISH_TOOLS, HER_TOOLS, currentToolSurface, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
 
 /** 一个够用的假插件 ctx：能 on('agent/created')，也能被我们主动触发。 */
 function fakeCtx() {
@@ -665,4 +665,151 @@ test('forgetBlockedTools 清空：重启后有没有被挡是新问题，不该�
   assert.equal(blockedTools().length, 1)
   forgetBlockedTools()
   assert.deepEqual(blockedTools(), [])
+})
+
+// ---------------------------------------------------------------------------
+// issue #61：宿主没有 read_image，或白名单里有这次没注册的名字时，收窄一次都不下。
+//
+// 旧实现把 allow 里「两边都不认得」的名字一律当成「宿主还没登记完」，重试用完报 deferred：
+// 没装附件服务的机器、白名单里填了一个这次没起来的插件工具，她每一局都看得见全部工具。
+// 现在只有插件自己注册的那几个缺席才等；不一定会到的剔掉、记一行日志，照常收窄。
+// ---------------------------------------------------------------------------
+
+/** 生产上的那份：dream、proactive 都开着（lib/index.js），十个鱼工具 + read_image + her_say。 */
+const PROD = { dream: true, proactive: true }
+const OURS = [...FISH_TOOLS, 'her_say']
+
+/**
+ * 照宿主那样校验名字的假 agent：restrict() 遇到 restrictableNames 里没有的名字就抛，
+ * 报错格式与宿主一致。`visible: null` 是老宿主（view 只给 restrictableNames）。
+ * `calls` 只记真挂上的那几次。
+ */
+function hostAgent(cwd, { restrictable, visible = restrictable }) {
+  const calls = []
+  const guards = []
+  const state = { restrictable: new Set(restrictable), visible: visible ? new Set(visible) : null }
+  const agent = {
+    session: { header: { cwd } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: (scope) => {
+          if (scope !== agent) return { restrictableNames: new Set() }
+          const v = { restrictableNames: new Set(state.restrictable) }
+          if (state.visible) v.visible = new Map([...state.visible].map((n) => [n, {}]))
+          return v
+        },
+        restrict: (filter) => {
+          const bad = filter.allow.find((n) => !state.restrictable.has(n))
+          if (bad) throw new Error(`tools.restrict() names unknown global tool "${bad}"; known global tools: ${[...state.restrictable].join(', ')}`)
+          calls.push(filter)
+          return () => {}
+        },
+        guard: (fn) => { guards.push(fn); return () => {} },
+      },
+    },
+  }
+  return { agent, calls, guards, state }
+}
+
+test('issue #61：宿主什么都有时一次收窄，留 12 个（新宿主）', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  const say = []
+  registerToolRestrict(ctx, { herDir: 'C:\\h', ...PROD, log: (m) => say.push(m), onResult: (r) => seen.push(r), retryMs: 5, retryMax: 3 })
+  const all = [...OURS, 'read_image']
+  const h = hostAgent('C:\\h', { restrictable: all })
+  ctx.emit('agent/created', { agent: h.agent })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(h.calls.length, 1, '一次就收上')
+  assert.deepEqual([...h.calls[0].allow].sort(), [...all].sort())
+  assert.equal(h.calls[0].allow.length, 12)
+  assert.equal(seen.at(-1).why, 'applied')
+  assert.deepEqual(seen.at(-1).absent, [])
+  assert.ok(!say.some((m) => m.includes('这次宿主没有')), '什么都有就不该说缺了什么')
+})
+
+test('issue #61：宿主没有 read_image（新宿主）：剔掉它照常收窄，不延后', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  const say = []
+  registerToolRestrict(ctx, { herDir: 'C:\\h', ...PROD, log: (m) => say.push(m), onResult: (r) => seen.push(r), retryMs: 5, retryMax: 3 })
+  // read_image 只在宿主挂着附件服务时才注册（lib/observe.js 引的宿主原文）
+  const h = hostAgent('C:\\h', { restrictable: OURS })
+  ctx.emit('agent/created', { agent: h.agent })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(h.calls.length, 1, '以前这里是 0：重试用完报 deferred，她看得见全部工具')
+  assert.ok(!h.calls[0].allow.includes('read_image'), '宿主没有的名字不能交给 restrict，否则它会抛')
+  for (const n of OURS) assert.ok(h.calls[0].allow.includes(n), `她自己的 ${n} 一个都不能少`)
+  const last = seen.at(-1)
+  assert.equal(last.why, 'applied', '不走延后')
+  assert.deepEqual(last.absent, ['read_image'])
+  assert.ok(last.allow.includes('read_image'), '配置里的 allow 照记（守卫与提示词用它）')
+  assert.ok(!last.effective.includes('read_image'), '真下给宿主的那份里没有它')
+  assert.deepEqual(readRestrictState().absent, ['read_image'], '自检读的模块级结论也要记下')
+  assert.ok(say.some((m) => m.includes('read_image') && m.includes('这次宿主没有')), '要记一行日志说剔了谁')
+})
+
+test('issue #61：白名单里有一个这次没注册的名字（新宿主）：剔掉它照常收窄，守卫照旧放行它', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  const say = []
+  registerToolRestrict(ctx, { herDir: 'C:\\h', ...PROD, extra: ['qq_send_message'], log: (m) => say.push(m), onResult: (r) => seen.push(r), retryMs: 5, retryMax: 3 })
+  const h = hostAgent('C:\\h', { restrictable: [...OURS, 'read_image'] })
+  ctx.emit('agent/created', { agent: h.agent })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(h.calls.length, 1)
+  assert.ok(!h.calls[0].allow.includes('qq_send_message'))
+  assert.ok(h.calls[0].allow.includes('read_image'), '宿主有的照常放进去')
+  assert.equal(seen.at(-1).why, 'applied')
+  assert.deepEqual(seen.at(-1).absent, ['qq_send_message'])
+  assert.ok(say.some((m) => m.includes('qq_send_message') && m.includes('这次宿主没有')))
+  // 白名单是用户放行的：守卫不拦它（那个插件晚些挂在 own 层时她照样调得到）
+  assert.equal(h.guards[0]({ name: 'qq_send_message' }), undefined)
+  assert.match(h.guards[0]({ name: 'bash' }), /^这件事我做不到。/)
+})
+
+test('issue #61：老宿主（view 只给 restrictableNames）同样剔掉不一定会到的名字', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  registerToolRestrict(ctx, { herDir: 'C:\\h', ...PROD, extra: ['qq_send_message'], log: () => {}, onResult: (r) => seen.push(r), retryMs: 5, retryMax: 3 })
+  const h = hostAgent('C:\\h', { restrictable: OURS, visible: null })
+  ctx.emit('agent/created', { agent: h.agent })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(h.calls.length, 1, '以前把全量交给 restrict，次次抛错，最后 deferred')
+  assert.ok(!h.calls[0].allow.includes('read_image'))
+  assert.ok(!h.calls[0].allow.includes('qq_send_message'))
+  for (const n of OURS) assert.ok(h.calls[0].allow.includes(n))
+  assert.equal(seen.at(-1).why, 'applied')
+  assert.deepEqual([...seen.at(-1).absent].sort(), ['qq_send_message', 'read_image'])
+})
+
+test('issue #61：插件自己的工具缺席时仍然等（新宿主），等齐了再收、read_image 照样剔掉', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  registerToolRestrict(ctx, { herDir: 'C:\\h', ...PROD, log: () => {}, onResult: (r) => seen.push(r), retryMs: 5, retryMax: 20 })
+  // 0.6.0 那种：宿主先建了她的 agent，鱼自己的工具还没登记（这台也没有 read_image）
+  const h = hostAgent('C:\\h', { restrictable: OURS.filter((n) => n !== 'growth_commit') })
+  ctx.emit('agent/created', { agent: h.agent })
+  assert.equal(h.calls.length, 0, '自己的工具没到齐不能收：restrict 只能减不能加，收错了她永久少一只手')
+  h.state.restrictable.add('growth_commit')
+  h.state.visible.add('growth_commit')
+  await new Promise((r) => setTimeout(r, 60))
+  assert.equal(h.calls.length, 1, '登记齐之后收一次')
+  assert.ok(h.calls[0].allow.includes('growth_commit'))
+  assert.ok(!h.calls[0].allow.includes('read_image'))
+  assert.equal(seen.at(-1).why, 'applied-late')
+  assert.deepEqual(seen.at(-1).absent, ['read_image'])
+})
+
+test('issue #61：插件自己的工具一直不到（老宿主）仍然如实报 deferred', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  registerToolRestrict(ctx, { herDir: 'C:\\h', ...PROD, log: () => {}, onResult: (r) => seen.push(r), retryMs: 5, retryMax: 2 })
+  const h = hostAgent('C:\\h', { restrictable: ['read_image'], visible: null })
+  ctx.emit('agent/created', { agent: h.agent })
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(h.calls.length, 0, '自己的工具不在就不能为了「照常收窄」把它们也剔掉')
+  assert.equal(seen.at(-1).why, 'deferred')
+  assert.equal(h.guards.length, 1, '兜底守卫照旧在')
 })
