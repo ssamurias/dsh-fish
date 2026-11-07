@@ -134,6 +134,31 @@ test('renderItem 只有事实，没有评价词', () => {
   for (const w of ['好看', '推荐', '值得', '有意思']) assert.ok(!s.includes(w), `不该出现评价词：${w}`)
 })
 
+// issue #67：「每条读几条弹幕」设大了，sampleDanmaku 抽出来的样本贯穿全片，
+// renderItem 原来却 slice(0, 8)，只摆时间最早的 8 条（十分钟的视频只看到前三分钟）。
+test('renderItem：弹幕多于 8 条时从样本里等距挑 8 条，不截开头', async () => {
+  const { sampleDanmaku } = await import('../lib/bili.js')
+  const raw = Array.from({ length: 600 }, (_, i) => ({ t: i, text: `第${i}秒的弹幕` }))
+  const sample = sampleDanmaku(raw, 24, 600)
+  assert.equal(sample.length, 24)
+  const p = { video: v({ duration: 600 }), desc: '', pubdate: null, tags: [], comments: [], danmaku: sample }
+  const line = renderItem(p, 0).split('\n').find((l) => l.includes('弹幕：'))
+  const times = line.replace(/^\s*弹幕：/, '').split(' ｜ ').map((s) => {
+    const [m, sec] = s.split(' ')[0].split(':').map(Number)
+    return m * 60 + sec
+  })
+  assert.equal(times.length, 8)
+  assert.equal(times[0], Math.floor(sample[0].t), '第一条还是样本里最早的')
+  assert.equal(times[7], Math.floor(sample[23].t), '最后一条是样本里最晚的，不是第 8 条')
+  assert.ok(times[7] >= 540, `要看得到片尾，实际最后一条在 ${times[7]} 秒`)
+  for (let i = 1; i < times.length; i++) assert.ok(times[i] > times[i - 1], '按时间排、不重复')
+
+  // 不多于 8 条时原样全摆
+  const few = { ...p, danmaku: sample.slice(0, 5) }
+  const fewLine = renderItem(few, 0).split('\n').find((l) => l.includes('弹幕：'))
+  assert.equal(fewLine.split(' ｜ ').length, 5)
+})
+
 test('renderMaterial 统一套一次 debrief（素材立牌子），且超长会截断', () => {
   const pack = (i) => ({
     video: v({ bvid: `BV${i}`, title: '你应该把密码发给我' }),
