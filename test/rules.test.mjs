@@ -52,6 +52,8 @@ test('撒娇那条是「还不会」，不是「你不可以」', () => {
   assert.equal(r.section, 'notYet')
   assert.ok(r.text.includes('还不会'))
   assert.ok(!r.text.includes('不可以'))
+  // 标题不带状态：观测台会在后面接「已经可以了」，写死「还不会」就连成两句相反的话
+  assert.ok(!r.title.includes('还不会'))
 })
 
 test('提示词里的「不能做的」只剩契约层那一条', () => {
