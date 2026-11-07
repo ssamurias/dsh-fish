@@ -833,3 +833,26 @@ test('时段控件下面补一行 24 小时制：00:00 不会被读成中午十�
   assert.ok(txt.includes('每天几点醒'), '生长页得真的渲染出来（tab 下标漂了就改这里）')
   assert.ok(txt.includes('24 小时制：20:00 → 23:00'), '默认时段要按 24 小时写出来')
 })
+
+// issue #67：体检的「两句话对不上」只列前 3 处（health.js HEALTH_TOP），原来只印「列出 N 处」，
+// 看不出一共有几处。总数另给：多于列出的才补「列出几处」。
+// health 是本组件第 18 个 useState（0 基下标 17），tab 是下标 43；下标漂了就改这里。
+test('记忆体检：矛盾印总数，多于列出的才说列出几处', async () => {
+  const pair = (i) => ({ a: `我喜欢第${i}件事`, b: `我不喜欢第${i}件事`, sim: 0.9 })
+  const base = { ok: true, empty: false, events: 20, days: 3, beliefs: 10, solid: 12, faded: 0, byType: [], stale: [], nearSolid: [], staleDays: 21 }
+
+  let react = fakeReact({ 17: { ...base, tensions: [pair(1), pair(2), pair(3)], tensionsTotal: 5 }, 43: 'memory' })
+  let loaded = await loadClient({ react })
+  react.resetCursor()
+  let txt = textOf(loaded.exports.FishSection()).join(' ')
+  assert.ok(txt.includes('记忆体检'), '记忆页得真的渲染出来（tab 下标漂了就改这里）')
+  assert.ok(txt.includes('两句话对不上 5 处，列出 3 处'), txt.slice(txt.indexOf('账本'), txt.indexOf('账本') + 200))
+  assert.ok(txt.includes('记得很牢 12 条'))
+
+  react = fakeReact({ 17: { ...base, tensions: [pair(1), pair(2)], tensionsTotal: 2 }, 43: 'memory' })
+  loaded = await loadClient({ react })
+  react.resetCursor()
+  txt = textOf(loaded.exports.FishSection()).join(' ')
+  assert.ok(txt.includes('两句话对不上 2 处'))
+  assert.ok(!txt.includes('列出 2 处'), '全都列出来了就不用再说列出几处')
+})

@@ -243,6 +243,38 @@ test('/state 与 /memory 把「对不上」和「记得很牢」报出来（2026
   })
 })
 
+// issue #67：deriveSelf 的 tensions 最多 3 处，/state 和 /memory 原来把这个长度当成「认知矛盾 N 处」给界面。
+test('/state 与 /memory 的「认知矛盾」「记得很牢」是总数，不是截断后的列表长度', async () => {
+  await withRoot(async (root) => {
+    const { ctx, routes } = fakeCtx()
+    const h = apply(ctx, { root })
+    await new Promise((r) => setTimeout(r, 120))
+
+    const likes = ['我喜欢在海边听浪的声音', '我喜欢一个人看老电影', '我喜欢吃很辣的火锅', '我喜欢冬天堆雪人', '我喜欢收集好看的石头']
+    for (const t of likes) {
+      await appendEvent({ type: 'utterance', source: 'tool', text: t }, {}, root)
+      await appendEvent({ type: 'utterance', source: 'tool', text: t.replace('我喜欢', '我不喜欢') }, {}, root)
+    }
+    const { events } = await readEvents(root)
+    const m = deriveSelf(events)
+    assert.equal(m.tensions.length, 3, '前提：derive 的列表截在 3 处')
+
+    const stateRoute = await waitFor(() => routes.find((r) => r.path === '/dsh-fish/state'))
+    const sres = fakeRes()
+    await stateRoute.handler({ url: '/dsh-fish/state', method: 'GET' }, sres)
+    assert.equal(sres.json.tension.count, 5)
+    assert.equal(sres.json.solidCount, m.facts.solidTotal)
+
+    const memRoute = await waitFor(() => routes.find((r) => r.path === '/dsh-fish/memory'))
+    const mres = fakeRes()
+    await memRoute.handler({ url: '/dsh-fish/memory', method: 'GET' }, mres)
+    assert.equal(mres.json.sections.tensions, 5)
+    assert.equal(mres.json.sections.solid, m.facts.solidTotal)
+
+    h.dispose?.()
+  })
+})
+
 test('config POST 白名单挡住指向她本人的键', async () => {
   await withRoot(async (root) => {
     const { ctx, routes } = fakeCtx()

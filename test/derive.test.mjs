@@ -326,3 +326,46 @@ test('stability 对同一批事件只算一次（issue #3 缓存）', () => {
   assert.deepEqual(a, b)
   assert.ok(a.sample > 0, '有判断时应该真的抽过样')
 })
+
+// issue #67：「记得很牢」最多 8 条（model.solid）、「认知矛盾」最多 3 处（model.tensions），
+// 界面原来印的就是这两个列表的长度，读起来像总数。列表照旧，总数另给在 facts 里。
+const SOLID_TOPICS = [
+  '早上第一杯水要喝温的', '书架上的书按颜色排好', '出门前要检查三遍门锁', '下午四点最适合发呆',
+  '猫的爪子摸起来像棉花', '雨后的空气闻起来很干净', '周三是一周里最长的一天', '旧照片比新照片更好看',
+  '冬天的被窝是最好的地方', '路边的野花开得很认真', '写字的时候要用黑色的笔', '晚饭后散步能想清楚事情',
+]
+const LIKES = ['我喜欢在海边听浪的声音', '我喜欢一个人看老电影', '我喜欢吃很辣的火锅', '我喜欢冬天堆雪人', '我喜欢收集好看的石头']
+
+test('记得很牢、认知矛盾另给截断前的总数，列表照旧只留前几条（issue #67）', () => {
+  const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' })]
+  let n = 0
+  for (const t of SOLID_TOPICS) for (let k = 0; k < 3; k++) evs.push(ev(`ev_s${n++}`, 'utterance', 2 + k, t))
+  LIKES.forEach((t, i) => {
+    evs.push(ev(`ev_p${i}`, 'utterance', 6, t))
+    evs.push(ev(`ev_n${i}`, 'utterance', 7, t.replace('我喜欢', '我不喜欢')))
+  })
+  const m = deriveSelf(evs, { now: T0 + 8 * DAY_MS })
+
+  // 列表还是原来的长度：身份文档念 solid 前几条、念 tensions 第一条，这两样不能变
+  assert.equal(m.solid.length, 8)
+  assert.equal(m.facts.solid, 8)
+  assert.equal(m.tensions.length, 3)
+  assert.equal(m.facts.tensions, 3)
+  // 总数：12 句各说 3 遍，每遍都是一条判断，都够格固化
+  assert.equal(m.facts.solidTotal, 36)
+  assert.equal(m.facts.solidTotal, m.ranked.filter((b) => b.solid).length)
+  assert.equal(m.facts.tensionsTotal, 5)
+})
+
+test('认知矛盾的总数按两句原话去重：同一句说三遍不算三处（issue #67）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_a1', 'utterance', 2, '我喜欢在海边听浪的声音'),
+    ev('ev_a2', 'utterance', 3, '我喜欢在海边听浪的声音'),
+    ev('ev_a3', 'utterance', 4, '我喜欢在海边听浪的声音'),
+    ev('ev_b', 'utterance', 5, '我不喜欢在海边听浪的声音'),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 6 * DAY_MS })
+  assert.equal(m.tensions.length, 3, '列表里还是三对（每一遍都和反面那句配一对）')
+  assert.equal(m.facts.tensionsTotal, 1, '但说的是同一处矛盾')
+})

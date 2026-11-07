@@ -141,3 +141,26 @@ test('体检：只读，跑完事件流不变', () => {
   examine(events)
   assert.equal(JSON.stringify(events), before)
 })
+
+// issue #67：「两句话对不上」只列前 HEALTH_TOP 处、derive 的 solid 列表最多 8 条，
+// 体检原来只给这两个截断后的长度，界面印得像总数。
+test('体检：矛盾和「记得很牢」都给截断前的总数，列表照旧只列前几处', () => {
+  const likes = ['我喜欢在海边听浪的声音', '我喜欢一个人看老电影', '我喜欢吃很辣的火锅', '我喜欢冬天堆雪人', '我喜欢收集好看的石头']
+  const events = []
+  likes.forEach((t, i) => {
+    events.push(said(t, 6 + i))
+    events.push(said(t.replace('我喜欢', '我不喜欢'), 5 + i))
+  })
+  const topics = [
+    '早上第一杯水要喝温的', '书架上的书按颜色排好', '出门前要检查三遍门锁', '下午四点最适合发呆',
+    '猫的爪子摸起来像棉花', '雨后的空气闻起来很干净', '周三是一周里最长的一天', '旧照片比新照片更好看',
+    '冬天的被窝是最好的地方', '路边的野花开得很认真',
+  ]
+  for (const t of topics) for (let k = 0; k < 3; k++) events.push(said(t, 3 - k))
+
+  const r = examine(events)
+  assert.equal(r.tensions.length, HEALTH_TOP)
+  assert.equal(r.tensionsTotal, 5)
+  // 10 句各说 3 遍，30 条判断都够格固化；原来这里是 8
+  assert.equal(r.solid, 30)
+})
