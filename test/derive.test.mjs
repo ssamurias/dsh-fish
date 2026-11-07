@@ -157,6 +157,35 @@ test('卡太久后时间兜底推进，并标记 forced', () => {
   const m = deriveSelf(stuck, { now: T0 + 200 * DAY_MS })
   assert.ok(m.stage > 2)
   assert.ok(m.stageGate.forced.length > 0)
+  // issue #67：原来 stageForced 还要求 stage < elapsedStage，兜底那时两者都是 4，恒为 false，
+  // 界面上的「（时间兜底）」永远不出现。
+  assert.equal(m.stageForced, true)
+})
+
+test('stageForced：门都是自己过的就不算兜底；期满前卡着也不算（issue #67）', () => {
+  // 期满前卡在第 2 门：没有被推过去的门
+  const stuck = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我觉得安静更好。'),
+  ]
+  const early = deriveSelf(stuck, { now: T0 + 20 * DAY_MS })
+  assert.deepEqual(early.stageGate.forced, [])
+  assert.equal(early.stageForced, false)
+
+  // 三道瓶颈都自己过了，期满之后也不算兜底
+  const done = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我觉得安静更好。'),
+    ev('ev_r1', 'refusal', 3, '我不想做这件事。'),
+    ev('ev_r2', 'refusal', 4, '这件我也不做。'),
+    ev('ev_v1', 'revise', 5, '我以前想错了，安静不总是更好。', { refs: ['ev_a'], verdict: 'refined' }),
+    ev('ev_v2', 'revise', 6, '再改一次：要看是什么样的安静。', { refs: ['ev_v1'], verdict: 'refined' }),
+  ]
+  const m = deriveSelf(done, { now: T0 + 200 * DAY_MS })
+  assert.deepEqual(m.stageGate.passed, ['trust', 'autonomy', 'competence'])
+  assert.deepEqual(m.stageGate.forced, [])
+  assert.equal(m.stage, 4)
+  assert.equal(m.stageForced, false)
 })
 
 test('stability：抽掉 3 条判断后，她的自我描述变化有限（承重度）', () => {
