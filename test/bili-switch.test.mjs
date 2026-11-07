@@ -251,7 +251,37 @@ test('上网关着：定时查回复不去问 B 站，也不记「问过了」',
       } finally { s.dispose() }
       assert.deepEqual(urls, [])
     })
-    assert.equal((await readConfig(root)).comment.lastScanAt, '', '没问就不记，打开之后按「没问过」马上问一次')
+    assert.equal((await readConfig(root)).comment.lastScanAt, '', '没问就不记')
+  })
+})
+
+test('上网关掉又打开：按关掉前最后一次问的时间算，间隔没满不问，满了才问', async () => {
+  await withRoot(async (root) => {
+    const now = Date.now()
+    const recent = new Date(now - 60_000).toISOString() // 一分钟前问过，间隔是 5 分钟
+    await writeConfig(normalizeConfig({
+      window: windowAwayFromNow(),
+      bili: { enabled: false, minIntervalMs: 200, jitterMs: 0 },
+      comment: { enabled: true, scanEveryMin: 5, lastScanAt: recent },
+    }), root)
+    await seedComment(root)
+    const tick = async () => {
+      const s = startScheduler({ on: () => () => {} }, { root, sessionId: 's-main', log: () => {} })
+      try { await s.tick() } finally { s.dispose() }
+    }
+    await withFetchSpy(async (urls) => {
+      await tick()
+      assert.deepEqual(urls, [], '关着不问')
+      assert.equal((await readConfig(root)).comment.lastScanAt, recent, '关着期间不清掉、也不改上次问的时间')
+
+      await updateConfig({ bili: { enabled: true } }, root)
+      await tick()
+      assert.deepEqual(urls, [], '刚打开、离上次问还没满 5 分钟：不马上问')
+
+      await updateConfig({ comment: { lastScanAt: new Date(now - 6 * 60_000).toISOString() } }, root)
+      await tick()
+      assert.ok(urls.length > 0, '离上次问满了间隔：去问')
+    })
   })
 })
 
