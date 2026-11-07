@@ -275,6 +275,32 @@ test('材料只取她自己的话与听见的东西，悬着的事只列未答�
   assert.equal(looseEnds(oldApproved, { now }).length, 0, '答应过 14 天还没到的，不再摆')
 })
 
+test('悬着的事：need-tool 要的那件工具已经到手，就不再悬着（issue #58）', () => {
+  // need-tool 的裁决只记录、不落实权限，主人真要给只能在卡外面给，事件流里没有「已经给了」。
+  // 以前这里照样念「你问过「…」（他答应了，还没见到）」，和桌子（lib/wish.js）同一个错。
+  const now = Date.now()
+  const at = (h) => new Date(now - h * 3_600_000).toISOString()
+  const toolAsk = ev({ id: 'ev_t', type: 'ask', ts: at(2), text: '想要一个能上网搜东西的工具', ask: { kind: 'need-tool', subject: 'web_search' } })
+  // 别的卡 subject 恰好也写了同一个名字：不是 need-tool，has 不管它。
+  const otherAsk = ev({ id: 'ev_o', type: 'ask', ts: at(1), text: '能不能先别关 web_search', ask: { kind: 'other', subject: 'web_search' } })
+  const ok = ev({ id: 'ev_ok', type: 'answer', ts: at(1), ask: { askId: 'ev_t', verdict: 'approve' } })
+  const has = (name) => name === 'web_search'
+
+  const before = looseEnds([toolAsk, otherAsk, ok], { now })
+  assert.deepEqual(before.map((x) => x.id).sort(), ['ev_o', 'ev_t'], '不传 has：一个字都不变')
+  assert.match(before.find((x) => x.id === 'ev_t').text, /答应了，还没见到/)
+
+  const after = looseEnds([toolAsk, otherAsk, ok], { now, has })
+  assert.deepEqual(after.map((x) => x.id), ['ev_o'], '到手的那件不再悬着，别的卡照旧')
+  // 卡放一天没人答、主人在别处给了：也不再念「还没有得到答复」。
+  const timedOut = ev({ id: 'ev_to', type: 'answer', ts: at(1), ask: { askId: 'ev_t', verdict: 'later', via: 'timeout' } })
+  assert.equal(looseEnds([toolAsk, timedOut], { now, has }).length, 0)
+
+  // 主动回合那一趟：和 driveDesk 用同一个 has。
+  const scheduler = readFileSync(new URL('../lib/scheduler.js', import.meta.url), 'utf8')
+  assert.match(scheduler, /looseEnds\(events, \{ now, has \}\)/)
+})
+
 test('her_say 必须指回真实事件：没 refs、超量、不存在、不是材料都写不进去', () => withRoot(async (root) => {
   line(root, ev({ id: 'ev_say', type: 'utterance', text: '我先前的记录', ts: new Date().toISOString() }))
   line(root, ev({ id: 'ev_meta', type: 'meta', text: 'diary:2026-10-30', ts: new Date().toISOString() }))
