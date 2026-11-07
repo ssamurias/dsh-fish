@@ -220,3 +220,107 @@ test('界面与路由都接上了（别只写了个模块）', async () => {
   // 恢复必须走「先封存」那条路，不许直接覆盖
   assert.match(o, /restoreBackup\(b, root\)/)
 })
+
+// ---------------------------------------------------------------------------
+// issue #65：事件流超过单文件上限时，备份原来会把它整个跳过（放进 skipped），
+// 界面只报「N 个文件」；拿这份备份恢复会成功，恢复出来的事件流却是空的。
+// ---------------------------------------------------------------------------
+
+/** 造一个大于 8MB、每行都是合法事件的 events.jsonl。返回行数。 */
+async function writeBigEvents(root) {
+  const pad = '鱼'.repeat(120)
+  const lines = []
+  let bytes = 0
+  for (let i = 0; bytes <= 9 * 1024 * 1024; i++) {
+    const line = JSON.stringify({ id: `ev_big_${i}`, v: 1, type: 'utterance', text: `第 ${i} 句。${pad}`, ts: '2026-10-25T00:00:00.000Z', day: 1, stage: 1 }) + '\n'
+    lines.push(line)
+    bytes += Buffer.byteLength(line)
+  }
+  await writeFile(join(root, 'events.jsonl'), lines.join(''))
+  return lines.length
+}
+
+async function cleanBackups(dir) {
+  const parent = dirname(dir)
+  const { readdir } = await import('node:fs/promises')
+  for (const n of await readdir(parent)) {
+    if (n.startsWith('dsh-fish-backups')) await rm(join(parent, n), { recursive: true, force: true })
+  }
+}
+
+test('事件流超过 8MB 照样进备份，恢复出来一条不少（issue #65）', async () => {
+  const root = await makeRoot()
+  const dest = await mkdtemp(join(tmpdir(), 'fish-restore-big-'))
+  try {
+    const n = await writeBigEvents(root)
+    assert.ok((await stat(join(root, 'events.jsonl'))).size > 8 * 1024 * 1024, '造出来的事件流要真的超过 8MB')
+
+    const b = await collectBackup(root)
+    const ev = b.files.find((f) => f.path === 'events.jsonl')
+    assert.ok(ev, `事件流必须在备份里，skipped：${b.skipped.join('|')}`)
+    assert.ok(!b.skipped.some((s) => s.startsWith('events.jsonl')), '事件流不能出现在 skipped 里')
+    assert.equal(b.files[0].path, 'events.jsonl', '事件流排最前，总量上限先算它')
+
+    const r = await restoreBackup(b, dest)
+    assert.equal(r.ok, true, r.why)
+    const back = await readEvents(dest)
+    assert.equal(back.events.length, n, '恢复出来的事件条数要和原来一样')
+    assert.equal(back.skipped, 0)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await rm(dest, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await cleanBackups(dest)
+  }
+})
+
+test('事件流大到超过总量上限：整份备份失败并说明，不悄悄跳过（issue #65）', async () => {
+  const root = await makeRoot()
+  try {
+    // 只设长度、不写内容：64MB 以上的判断只看 stat，不会真的读它
+    const { truncate } = await import('node:fs/promises')
+    await truncate(join(root, 'events.jsonl'), 65 * 1024 * 1024)
+    await assert.rejects(collectBackup(root), (err) => {
+      assert.equal(err.code, 'EVENTS_NOT_BACKED_UP')
+      assert.match(err.message, /events\.jsonl/)
+      assert.match(err.message, /64MB/)
+      assert.match(err.message, /没有备份/)
+      return true
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('别的文件超过单文件上限仍然跳过，但和「故意不搬」分得开（界面靠这个列出来）', async () => {
+  const root = await makeRoot()
+  try {
+    await writeFile(join(root, 'big.png'), Buffer.alloc(9 * 1024 * 1024))
+    const b = await collectBackup(root)
+    assert.ok(!b.files.some((f) => f.path === 'big.png'))
+    const big = b.skipped.find((s) => s.startsWith('big.png'))
+    assert.ok(big, b.skipped.join('|'))
+    assert.match(big, /超过单文件上限/)
+    // 设置页把不带「（不搬：」的条目列给人看（client.js 的 backupNow），logs/ 和 backups/ 带着它
+    assert.ok(!big.includes('（不搬：'))
+    for (const dir of ['logs/', 'backups/']) {
+      const s = b.skipped.find((x) => x.startsWith(dir))
+      assert.ok(s && s.includes('（不搬：'), `${dir} 是故意不搬的：${s}`)
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('设置页：备份失败照实说，没装进去的列出来（issue #65）', async () => {
+  const c = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const start = c.indexOf('async function backupNow()')
+  const end = c.indexOf('function restoreFromFile()')
+  assert.ok(start > 0 && end > start, '必须能定位到 backupNow')
+  const body = c.slice(start, end)
+  assert.match(body, /b\.skipped/, '要读 skipped')
+  assert.ok(body.includes("'（不搬：'"), '故意不搬的（logs/、backups/）不列')
+  assert.match(body, /没装进去/, '其余的要说出来')
+  const o = await readFile(new URL('../lib/observe.js', import.meta.url), 'utf8')
+  const route = o.slice(o.indexOf("['/backup', async"), o.indexOf("['/backup/restore'"))
+  assert.match(route, /catch \(err\)[\s\S]*send\(res, 409/, '事件流装不进来时回 409 和原因，不当 500')
+})
