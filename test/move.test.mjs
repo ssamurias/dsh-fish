@@ -65,7 +65,9 @@ test('planMove：不能搬进自己里面，也不能搬到会把自己套进去
     assert.match(r1.why, /里面/)
 
     // 目标本身已经是一份档（里面有 events.jsonl），而 src 就在它下面
-    // → 会连她自己一起套进去，这条必须在复制之前拦住。
+    // → 这条必须在复制之前拦住。
+    // issue #65 之前，有 events.jsonl 的目标会被直接当成新根，所以拦它的是「上级」那条；
+    // 现在放着一份档的文件夹一律不搬（会盖掉那份），拦它的换成了这条，结果还是不搬。
     const parent = join(box, 'parent')
     await mkdir(join(parent, 'home'), { recursive: true })
     await writeFile(join(parent, 'events.jsonl'), '{}\n')
@@ -74,7 +76,12 @@ test('planMove：不能搬进自己里面，也不能搬到会把自己套进去
     await writeFile(join(nested, 'events.jsonl'), '{}\n')
     const r2 = await planMove(nested, parent)
     assert.equal(r2.ok, false)
-    assert.match(r2.why, /上级/)
+    assert.match(r2.why, /已经放着一份档/)
+
+    // 选的就是她现在住的文件夹：说「里面」，不说「会盖掉那份」
+    const self = await planMove(src, src)
+    assert.equal(self.ok, false)
+    assert.match(self.why, /里面/)
 
     // 平级搬是允许的（box/old → box/dsh-fish）——这是最常见的一次搬迁
     const r3 = await planMove(src, box)
@@ -98,6 +105,42 @@ test('planMove：目标里已有非空 dsh-fish 就拒绝，空的话就用它',
     const p3 = await planMove(src, dst)
     assert.equal(p3.ok, false)
     assert.match(p3.why, /不是空的/)
+  })
+})
+
+test('目标文件夹里已经放着一份档：不搬，那份档一个字节都不动（issue #65）', async () => {
+  await withEnv(async ({ box, src, loc }) => {
+    // 另一份档：事件 3 行、state.json、一篇旧日记、自己的 config / owner
+    const other = join(box, 'other')
+    const oldEvents = '{"id":"OLD_1"}\n{"id":"OLD_2"}\n{"id":"OLD_3"}\n'
+    await mkdir(join(other, 'diary'), { recursive: true })
+    await writeFile(join(other, 'events.jsonl'), oldEvents)
+    await writeFile(join(other, 'config.json'), '{"growthDays":7}')
+    await writeFile(join(other, 'owner.json'), '{"mid":"old"}')
+    await writeFile(join(other, 'state.json'), '{"old":true}')
+    await writeFile(join(other, 'diary', '2026-01-01.md'), '旧日记\n')
+
+    const plan = await planMove(src, other)
+    assert.equal(plan.ok, false, '放着一份档的文件夹不能当目标')
+    assert.match(plan.why, /已经放着一份档/)
+    assert.match(plan.why, /盖掉/, '要说清楚为什么不行')
+
+    const r = await moveRoot(null, { root: src, target: other })
+    assert.equal(r.ok, false)
+    assert.equal(r.why, plan.why)
+
+    // 那份档原样：事件流没被盖，配置、凭据、state、日记都还是它自己的
+    assert.equal(await readFile(join(other, 'events.jsonl'), 'utf8'), oldEvents)
+    assert.equal(await readFile(join(other, 'config.json'), 'utf8'), '{"growthDays":7}')
+    assert.equal(await readFile(join(other, 'owner.json'), 'utf8'), '{"mid":"old"}')
+    assert.equal(await readFile(join(other, 'state.json'), 'utf8'), '{"old":true}')
+    assert.deepEqual((await readdir(other)).sort(), ['config.json', 'diary', 'events.jsonl', 'owner.json', 'state.json'])
+    assert.deepEqual(await readdir(join(other, 'diary')), ['2026-01-01.md'])
+
+    // 当前的档也没动、指针没写：等于没迁过
+    assert.equal(await readFile(join(src, 'events.jsonl'), 'utf8'), '{"id":"ev_1"}\n')
+    await assert.rejects(async () => stat(loc))
+    assert.equal(readLocationSync(), '')
   })
 })
 
@@ -169,4 +212,10 @@ test('moveStatus：没迁过时 moved=false，迁过之后 moved=true', async ()
 test('defaultRoot 是本机的 ~/.dsh-fish', () => {
   assert.match(defaultRoot(), /\.dsh-fish$/)
   assert.match(locationFile(), /\.dsh-fish-location\.json$/)
+})
+
+test('设置页的迁移说明跟着改：放着一份档的文件夹「不行」，不再说「会被覆盖」（issue #65）', async () => {
+  const c = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.ok(c.includes('本身就放着一份档的文件夹，都不行'), '要明说放着一份档的文件夹不行')
+  assert.ok(!c.includes('同名文件会被覆盖'), '迁移已经不会覆盖了，旧的提醒要拿掉')
 })
