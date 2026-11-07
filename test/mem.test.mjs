@@ -17,7 +17,9 @@ import { join } from 'node:path'
 import { personaLine, assemble, foldOlderBeliefs, HARD_BANS, sleepPrompt } from '../lib/persona.js'
 import { renderSelfDoc } from '../lib/selfdoc.js'
 import { addExchange, recentExchanges, renderCarry, TALK_KEEP } from '../lib/talkmem.js'
-import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS, ROTATE_RETRY_MS } from '../lib/home.js'
+import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, hearMark, CARRY_TURNS, ROTATE_RETRY_MS } from '../lib/home.js'
+import { hearTurn } from '../lib/hear.js'
+import { readEvents } from '../lib/store.js'
 import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET } from '../lib/recall.js'
 import { normalizeConfig, DEFAULTS } from '../lib/settings.js'
 
@@ -165,11 +167,11 @@ test('轮换：旧会话改名留档、新会话接管、原话搬过去', () =>
   assert.equal(saved.lastWords, undefined)
 }))
 
-test('换会话只换该换的：preset / hearAt / title 这些还不能丢（issue #14 第二报）', () => withRoot(async (root) => {
+test('换会话只换该换的：preset / title 这些还不能丢，hearAt 跟 turns 一起归零（issue #14 第二报、#60）', () => withRoot(async (root) => {
   const { writeAtomic, paths } = await import('../lib/store.js')
   const homeFile = join(paths(root).root, 'home.json')
-  // 以前这里整份覆盖写，preset/hearAt/title 全被抹掉 —— 换完会话旁听节奏归零、
-  // 她挑的那套预设也丢了，但没有任何日志能看出来。
+  // 以前这里整份覆盖写，preset/title 全被抹掉 —— 她挑的那套预设丢了，
+  // 但没有任何日志能看出来。
   await writeAtomic(homeFile, JSON.stringify({
     wsId: 'ws-1',
     sessionId: 'sess-old',
@@ -187,10 +189,46 @@ test('换会话只换该换的：preset / hearAt / title 这些还不能丢（is
   assert.equal(raw.sessionId, 'sess-new')
   assert.equal(raw.turns, 0)
   assert.equal(raw.preset, '那个人挑的那套')
-  assert.equal(raw.hearAt, 7)
+  // issue #60：这里以前断言 hearAt 原样留着（=== 7）。可 hearAt 记的是「上次旁听时
+  // turns 数到几」，和 turns 同一个口径；turns 归零了 hearAt 还留着，
+  // `turns - hearAt` 在新会话里就要多走 hearAt 轮才够数——默认 40 轮一换、
+  // hearAt 停在 39 时永远够不上，旁听从此停了。所以两个要一起归零。
+  assert.equal(raw.hearAt, 0)
   assert.equal(raw.title, '她自己起的名字')
   assert.equal(raw.rotatedFrom, 'sess-old')
   assert.ok(raw.rotatedAt)
+}))
+
+test('旁听换了会话还接着记：三段连跑，每段记的一样多（issue #60）', () => withRoot(async (root) => {
+  const { writeAtomic, paths } = await import('../lib/store.js')
+  await writeAtomic(join(paths(root).root, 'home.json'), JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-0', turns: 0 }))
+  const ctx = fakeCtx()
+  let n = 0
+  ctx.sessionController.create = async () => ({ sessionId: `sess-${++n}` })
+
+  const config = { memory: { hearEvery: 3 }, chat: { rotateAfter: 40 } }
+  const heardSoFar = async () => (await readEvents(root)).events.filter((e) => e.type === 'heard').length
+  const perSegment = []
+  for (let seg = 1; seg <= 3; seg++) {
+    const before = await heardSoFar()
+    // 照 lib/turns.js 结账那几步的顺序：bumpTurns → hearTurn → 到 rotateAfter 就换
+    for (;;) {
+      const turns = await bumpTurns(root, 1)
+      await hearTurn(root, { text: `第${seg}段第${turns}轮，今天我在想一件事`, turns, day: 3, stage: 1, config })
+      if (turns < config.chat.rotateAfter) continue
+      const st = await homeStatus(root)
+      const rot = await rotateTalkSession(ctx, { root, wsId: st.wsId, from: st.sessionId })
+      assert.equal(rot.ok, true)
+      assert.equal(rot.skipped, undefined)
+      break
+    }
+    perSegment.push((await heardSoFar()) - before)
+    assert.equal((await homeStatus(root)).turns, 0)
+    assert.equal(await hearMark(root), 0, '换完会话 hearAt 要跟 turns 一起从 0 数')
+  }
+  // 每段 40 轮、每 3 轮一句：第 3、6 … 39 轮，13 句。
+  // 修之前第一段 13 句、结束时 hearAt = 39；后两段 turns 只走到 40，一句都记不上。
+  assert.deepEqual(perSegment, [13, 13, 13])
 }))
 
 test('搬运最多管 8 轮，之后自己消失（否则她会被一段旧话钉住）', () => withRoot(async (root) => {
