@@ -27,7 +27,7 @@ import { loadConfig } from '../lib/settings.js'
 import { pocketDirPath } from '../lib/pocket.js'
 import {
   snapshotEvents, startOuting, startPossession, readOutings, readPossessions,
-  settlePending, OUTING_SCHEMA,
+  settlePending, eventsSince, OUTING_SCHEMA,
 } from '../lib/outing.js'
 
 const T0 = Date.parse('2026-11-09T01:00:00.000Z')
@@ -771,5 +771,19 @@ test('复核认准卡上那一趟：两趟都在等、两个复核带着同一�
       assert.equal(trips[0].status, 'pending', `${path}：A 的卡人还没看过，不能被晚到的那个结掉`)
       assert.equal(trips[1].status, 'done')
     } finally { done() }
+  }
+})
+
+test('没有会话标记的老条目当家里的：宁可漏算，也不误伤家里那句（issue #68 第 7 条）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'fish-trip-nsid-'))
+  try {
+    const file = join(root, 'events.jsonl')
+    appendFileSync(file, line('ev_home_old', iso(T0 + 30_000), 'refusal', '家里说的一句：我不想洗碗'), 'utf8')
+    appendFileSync(file, line('ev_out', iso(T0 + 31_000), 'refusal', '外面说的一句：我不干这个', { sessionId: 's-out' }), 'utf8')
+    const r = eventsSince(file, T0, { sessionId: 's-out', meta: false })
+    assert.equal(r.ok, true)
+    assert.deepEqual(r.items.map((x) => x.id), ['ev_out'], '只认这一趟那条会话写下的')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })

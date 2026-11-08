@@ -19,7 +19,7 @@ import { join } from 'node:path'
 
 import {
   avoidHit, scoreOf, rankVideos, fmtCount, absorb, renderItem, renderMaterial,
-  seenBvids, browseCountToday, itemsFromEvents, recordBrowse, candidates, gather,
+  seenBvids, browsedBvids, browseCountToday, itemsFromEvents, recordBrowse, candidates, gather,
 } from '../lib/browse.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
 import { lookOnce } from '../lib/look.js'
@@ -519,4 +519,19 @@ test('日报：截断不把 emoji 切成半个', () => {
   const dk = dateKey(new Date('2026-11-04T09:00:00.000Z'))
   const md = buildReport({ dateKey: dk, events: [{ type: 'utterance', flags: ['uncommitted'], ts: '2026-11-04T09:00:00.000Z', text }] })
   assert.ok(md.isWellFormed())
+})
+
+test('安静刷记 browsed: 不记 looked:：她自己再去看，不会被这一趟挡住（#62 第 3 条）', async () => {
+  await withRoot(async (root) => {
+    const cfg = normalizeConfig({ browse: { topN: 2, deepRead: 1, danmaku: 0 } })
+    const c = fakeClient()
+    const r = await gather(c, { day: 2, stage: 2 }, cfg, { root, dk: '2026-10-22', mark: 'browsed', voice: false })
+    assert.equal(r.ok, true)
+    const { events } = await readEvents(root)
+    assert.ok(events.some((e) => e.text.startsWith('browsed:')), '自动刷要留下自己的账')
+    assert.ok(!events.some((e) => e.text.startsWith('looked:')), '没摆到她面前，不能记成「看过」')
+    assert.equal(r.voice, null, '没看见的字不替她记')
+    assert.equal(seenBvids(events).size, 0, '自动刷翻到的不该进她自己看的那条路')
+    assert.equal(browsedBvids(events).size, r.picks.length, '自动刷自己的去重要看得见这些')
+  })
 })

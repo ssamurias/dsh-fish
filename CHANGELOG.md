@@ -1,5 +1,20 @@
 ## 0.9.6 — 未发布
 
+- **收窄关着的时候，心事卡也认得出手里的工具（issue #86 第 1 条）。** 「要的这件工具到手没有」以前只问配置里的白名单，收窄关着（`tools.restrict: false`）时那份白名单是 null，于是每一张都要等满 14 天自己消失——哪怕那件工具她这一局正用着。
+  - `lib/restrict.js` 新增 `visibleAllowTools(sessionId, { agent })`：直接看她这一局的 `view().visible`，不走白名单；收窄关着时也照旧记下她的 agent（以前这个分支直接返回，连 `agent/created` 都不听）。
+  - `lib/scheduler.js` 的 `toolInHandNow()` 改成三级：核实过的名单（收窄开着）→ 这一局真看得见的工具（收窄关着、拿得到她的会话）→ 叫醒前拿不到会话时才退回配置白名单。
+  - `test/restrict-runtime.test.mjs` 补「收窄关着时，她这一局真看得见的工具仍然答得出」；`test/restrict.test.mjs` 里「关掉开关就一个都不动」随之改成「关掉开关就不收窄，但认下她这一局的 agent」。
+
+- **安静刷不再替她记「看过」，也不替她记没看见的那句热评（issue #86 第 3 条）。** 以前自动翻到的每一条都写 `looked:<bvid>`，她自己再想去看时列表回「翻到的 N 条都看过了」；挑中的热评还顺手记成她听过的一句话，可那一趟的素材根本没递到她面前。
+  - `lib/browse.js` 拆开两种记账：她自己去看仍写 `looked:`（`lib/look.js` 只认它），安静刷改写 `browsed:`（同样 7 天过期，只用来防止重复翻到同一条）。
+  - `gather()` 多一个 `voice: false` 开关，安静刷不再替她记 `voice`；醒来便条那趟仍记 `looked:` —— 那一趟素材是真的摆到她面前了。
+  - `test/browse.test.mjs` 补「安静刷记 browsed:、不记 looked:、也不记 voice」。
+
+- **出门/请神只认这一趟那条会话写下的条目（issue #86 第 6 条）。** 以前「没有会话 id 的条目」按时间窗兜底算进这一趟：家里记下的 `heard`（她说你讲过的那句话）本来就不带 id，人一划「这趟不算」，家里的也算没了。
+  - `lib/outing.js` 的 `eventsSince()` 改成：这一趟带着会话 id 时，凡是没有会话标记的条目一律当家里的、不进这趟——**宁可漏算，也不误伤**。
+  - 老数据（0.9.6 之前写的事件都不带 `sessionId`）因此不会再被「整趟不算」牵连；代价是升级后的第一趟，界面清单可能比实际少几条。
+  - `test/review.test.mjs`、`test/trip-settle.test.mjs` 各补一条（老条目不算这趟）；`test/possession-settle.test.mjs`、`test/outing-route.test.mjs` 的假事件补上会话 id（生产上本来就带）。
+
 - **「要的工具已经到手」这次连描述句也认了（issue #83，@mxc881031 实测）。** 0.9.5 的 `has` 只比「`subject` 正好等于工具名」，可真实数据里她常写成「her_note 的读取：列出还没划掉的那些」——句子里带着工具名，精确比对永远对不上，卡照样摆满 14 天，文案还是「他答应了，还没见到」。
   - `lib/wish.js` 新增 `toolNamedIn()`：先按整句比，再在 `subject` 里找一个**完整的**工具名——只认 `TOOL_NAME_MIN = 4` 个字以上的名字，前后不能紧挨字母/数字/下划线（`her_note` 不会被 `her_notes` 命中），命中多个取最长的。`toolArrived()` 与 `wishesOf()` 都改走它，`lib/proactive.js` 的 `looseEnds()` 一并受益。
   - **剩下一半收不掉，也不打算猜**：subject 里一个工具名都没点的（他那张「待办/提醒：能按日期自己冒出来的一条清单」）照旧摆着，到点自己消失。纯靠措辞猜「这句话要的是哪件工具」，猜错就是把她的心事静默吞掉——宁可多摆几天。

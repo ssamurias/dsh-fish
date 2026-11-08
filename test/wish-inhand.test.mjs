@@ -115,6 +115,12 @@ async function withHer({ allow = [], host, cold = false, sid = 's1', own = [] },
   process.env.DSH_FISH_HOMES = join(root, 'homes.json')
   const realST = globalThis.setTimeout
   globalThis.setTimeout = (f, ms, ...a) => realST(f, [2000, 30_000, 90_000].includes(ms) ? 5 : ms, ...a)
+  // 2026-11-09：把时钟钉住。`tick()` 里按「今天醒过几次」「是不是刚请过假」这类判据
+  // 都跟本机时间走，凌晨跑与晚上跑结果不一样（同一份代码 TZ=UTC 全绿、本地 05:3x 挂 3 条）。
+  // 这里只覆盖 `Date.now()`（tick 用的就是它），固定到一条本地傍晚的时刻。
+  const realNow = Date.now
+  const FIXED_NOW = new Date('2026-11-07T21:00:00+08:00').getTime()
+  Date.now = () => FIXED_NOW
   try {
     const config = normalizeConfig({
       window: ['00:00', '23:59'],
@@ -146,6 +152,7 @@ async function withHer({ allow = [], host, cold = false, sid = 's1', own = [] },
     if (!cold) warm()
     return await fn(root, { sent: her.sent, logs, warm, created: pctx.created, herDir, agent: her.agent })
   } finally {
+    Date.now = realNow
     globalThis.setTimeout = realST
     clearWakeSection()
     if (oldHomes === undefined) delete process.env.DSH_FISH_HOMES

@@ -19,7 +19,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { HER_TOOLS, FISH_TOOLS, registerToolRestrict, readRestrictState, currentAllowTools, forgetBlockedTools, rememberKnownTools } from '../lib/restrict.js'
+import { HER_TOOLS, FISH_TOOLS, registerToolRestrict, readRestrictState, currentAllowTools, visibleAllowTools, forgetBlockedTools, rememberKnownTools } from '../lib/restrict.js'
 import { forgetRegisteredTools, noteRegisteredTool } from '../lib/toolreg.js'
 import { writeSelfDoc, selfDocPath } from '../lib/selfdoc.js'
 import { writeConfig } from '../lib/store.js'
@@ -558,5 +558,23 @@ test('老宿主上自己的工具晚到：照旧等它们登记齐，晚到的�
     assert.equal(host.sent.length, 1)
     assert.ok(host.sent[0].includes('growth_commit'), '自己的工具到了才收，不能少')
     assert.ok(!host.sent[0].includes('read_image'), '一直没来的 read_image 剔掉')
+  })
+})
+
+test('收窄关着时，她这一局真看得见的工具仍然答得出（#58 的遗留，2026-11-09）', async () => {
+  await withRoot(async (root, herDir) => {
+    await writeConfig(normalizeConfig({ tools: { restrict: false, allow: ['read_image'] } }), root)
+    const bus = busCtx()
+    registerToolRestrict(bus, { herDir, enabled: false, log: () => {} })
+    assert.equal(visibleAllowTools(), null, '还没见到她的 agent：不知道，不筛')
+    // 宿主这一局给的是「她自己那几样（没有 read_image）+ 一个外部工具」，
+    // 白名单里写的 read_image 只是配置，不算到手。
+    const host = hostAgent(herDir, () => [...HER_TOOLS.filter((n) => n !== 'read_image'), 'web_search'])
+    bus.emit('agent/created', { agent: host.agent })
+    assert.equal(currentAllowTools(), null, '前提：收窄关着，白名单不是答案')
+    const vis = visibleAllowTools()
+    assert.ok(Array.isArray(vis), '见到 agent 之后要给得出工具表')
+    assert.ok(vis.includes('web_search') && vis.includes('her_note'), JSON.stringify(vis))
+    assert.ok(!vis.includes('read_image'), '白名单里有、宿主没给的名字不算她手上有')
   })
 })

@@ -164,7 +164,7 @@ test('tsMs：数值、ISO 字符串、坏值三种都给毫秒（不抛）', asy
 })
 
 
-test('eventsSince：带着别的会话 id 的条目不算这一趟（issue #68）', () => {
+test('eventsSince：没带会话 id 的老条目当家里的，宁可漏算也不误伤（issue #68 第 7 条，2026-11-09 拍板）', () => {
   const { root, done } = tmp()
   try {
     const list = [
@@ -172,13 +172,14 @@ test('eventsSince：带着别的会话 id 的条目不算这一趟（issue #68�
       ev('ev_home', 2_100, 'utterance', '在家里说的一句话', { sessionId: 's-home' }),
       // 出门那条会话里写的。
       ev('ev_trip', 2_200, 'utterance', '在外面说的一句话', { sessionId: 's-trip' }),
-      // 老事件没有 sessionId（系统侧写入）：按时间窗兜底，不硬删。
+      // 老事件没有 sessionId：分不清是谁写的，就当家里的，不进这一趟（宁可漏算）。
       ev('ev_old', 2_300, 'utterance', '没记会话的一条'),
     ]
     const r = eventsSince(writeEvents(root, list), 2_000, { sessionId: 's-trip' })
-    assert.equal(r.total, 2)
-    assert.deepEqual(r.items.map((x) => x.id), ['ev_trip', 'ev_old'])
+    assert.equal(r.total, 1)
+    assert.deepEqual(r.items.map((x) => x.id), ['ev_trip'])
     assert.ok(!r.items.some((x) => x.id === 'ev_home'), '家里写的不能算进这趟')
+    assert.ok(!r.items.some((x) => x.id === 'ev_old'), '没记会话的老条目当家里的：宁可漏算')
   } finally {
     done()
   }

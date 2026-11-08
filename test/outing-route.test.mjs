@@ -164,7 +164,8 @@ test('/outing 回家：点「这趟不算数」会把这一趟写下的条目全
   const root = mkdtempSync(join(tmpdir(), 'fish-outing-route-'))
   try {
     const eventsFile = join(root, 'events.jsonl')
-    const line = (id, ts, type, text) => JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', text, refs: [], verdict: null, confidence: 0.5, flags: [] }) + '\n'
+    // 这趟写下的条目带会话 id（没带的按家里的处理，#68 第 7 条）。
+    const line = (id, ts, type, text, sid) => JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', text, refs: [], verdict: null, confidence: 0.5, flags: [], ...(sid ? { sessionId: sid } : {}) }) + '\n'
     // 出门前一条；这趟写三条，其中一条是 meta 记账（不该被一起抹掉）
     const before = line('ev_before', '2026-10-29T00:00:00.000Z', 'utterance', '出门前')
     writeFileSync(eventsFile, before)
@@ -180,9 +181,9 @@ test('/outing 回家：点「这趟不算数」会把这一趟写下的条目全
       now: startedAt,
     })
     writeFileSync(eventsFile, before + [
-      line('ev_t1', '2026-10-29T00:11:00.000Z', 'utterance', '这趟第一句'),
-      line('ev_t2', '2026-10-29T00:12:00.000Z', 'refusal', '这句我不认'),
-      line('ev_t3', '2026-10-29T00:13:00.000Z', 'meta', 'diary:2026-10-29'),
+      line('ev_t1', '2026-10-29T00:11:00.000Z', 'utterance', '这趟第一句', 'session-a1'),
+      line('ev_t2', '2026-10-29T00:12:00.000Z', 'refusal', '这句我不认', 'session-a1'),
+      line('ev_t3', '2026-10-29T00:13:00.000Z', 'meta', 'diary:2026-10-29', 'session-a1'),
     ].join(''))
     const { call } = harness(root)
 
@@ -218,7 +219,8 @@ test('/outing 回家：逐条取消勾选只跳被挑中的，不该变成整趟
   const root = mkdtempSync(join(tmpdir(), 'fish-outing-route-'))
   try {
     const eventsFile = join(root, 'events.jsonl')
-    const line = (id, ts, type, text) => JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', text, refs: [], verdict: null, confidence: 0.5, flags: [] }) + '\n'
+    // 这趟写下的条目带会话 id（没带的按家里的处理，#68 第 7 条）。
+    const line = (id, ts, type, text, sid) => JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', text, refs: [], verdict: null, confidence: 0.5, flags: [], ...(sid ? { sessionId: sid } : {}) }) + '\n'
     writeFileSync(eventsFile, line('ev_before', '2026-10-29T00:00:00.000Z', 'utterance', '出门前'))
     await startOuting(root, {
       sessionId: 'session-a2',
@@ -229,7 +231,7 @@ test('/outing 回家：逐条取消勾选只跳被挑中的，不该变成整趟
       identity: '',
       now: Date.parse('2026-10-29T00:10:00.000Z'),
     })
-    writeFileSync(eventsFile, readFileSync(eventsFile, 'utf8') + line('ev_u1', '2026-10-29T00:11:00.000Z', 'utterance', '留下的那句') + line('ev_u2', '2026-10-29T00:12:00.000Z', 'utterance', '不要的那句'))
+    writeFileSync(eventsFile, readFileSync(eventsFile, 'utf8') + line('ev_u1', '2026-10-29T00:11:00.000Z', 'utterance', '留下的那句', 'session-a2') + line('ev_u2', '2026-10-29T00:12:00.000Z', 'utterance', '不要的那句', 'session-a2'))
     const { call } = harness(root)
 
     const ended = await call('POST', { action: 'end', kept: true, rejectedIds: ['ev_u2'] })

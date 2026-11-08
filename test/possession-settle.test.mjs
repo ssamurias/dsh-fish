@@ -28,8 +28,11 @@ import { deriveSelf } from '../lib/derive.js'
 import { readEvents } from '../lib/store.js'
 import { eventsSince, readPossessions, snapshotEvents, startPossession } from '../lib/outing.js'
 
-const line = (id, ts, type = 'utterance', text = '在家') =>
-  JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', text, refs: [], verdict: null, confidence: 0.5, flags: [] }) + '\n'
+// 2026-11-09：这一趟写下的条目都带会话 id（生产上就是她那条会话写的）。
+// 没带会话标记的条目按「家里的」处理（宁可漏算不误伤，#68 第 7 条），所以请神期间的
+// 条目必须显式带上，否则审查清单里根本看不见它们。
+const line = (id, ts, type = 'utterance', text = '在家', sid = 'session-talk') =>
+  JSON.stringify({ id, v: 1, ts, day: 1, stage: 1, type, source: 'her', text, refs: [], verdict: null, confidence: 0.5, flags: [], ...(sid ? { sessionId: sid } : {}) }) + '\n'
 
 function fakeAgent(id, cwd) {
   const appended = []

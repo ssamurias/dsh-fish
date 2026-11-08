@@ -167,12 +167,20 @@ test('restrict 抛错（名字不存在/作用域不对）不会硬清空工具�
   assert.equal(bad.guards.length, 1, '兜底守卫必须已经挂上')
 })
 
-test('关掉开关就一个都不动', () => {
+test('关掉开关就不收窄：一件工具都不动，只认下她这一局的 agent（2026-11-09 起）', () => {
   const ctx = fakeCtx()
   const off = registerToolRestrict(ctx, { herDir: 'C:\\h', enabled: false, log: () => {} })
-  assert.equal(ctx.count('agent/created'), 0, '关掉时不该挂监听')
   assert.equal(typeof off, 'function')
   assert.equal(readRestrictState().why, 'disabled')
+
+  // 收窄关着也要认得她：心事卡问「到手没有」不走白名单，直接看她这一局真看得见的工具
+  // （`visibleAllowTools()`，#58 的遗留）。除此之外什么都不做——不调 restrict、不挂兜底守卫。
+  const a = fakeAgent('C:\\h')
+  ctx.emit('agent/created', { agent: a.agent })
+  assert.equal(a.calls.length, 0, '关掉时不收窄')
+  assert.equal(a.guards.length, 0, '关掉时不挂兜底守卫')
+  off()
+  assert.equal(ctx.count('agent/created'), 0, '退订以后不再留监听')
 })
 
 /**
