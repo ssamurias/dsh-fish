@@ -7,7 +7,8 @@
  *      文档说她有，她一伸手就是「这件事我做不到」；
  *   ② /tools 只给 herTools（按注册记录现算、不看梦的开关），不给守卫真用的名单，界面没法照实摆；
  *   ③ 自检拿配置的 allow 当「宿主认过」的证据，可 #61 之后宿主这次没有的名字会被剔出收窄名单；
- *   ④ view 不给 visible 的宿主上，外部名字照旧整份交给 restrict，一次都收不窄（#61 的老样子）。
+ *   ④ view 不给 visible 的宿主上，外部名字照旧整份交给 restrict，一次都收不窄（#61 的老样子）；
+ *   ⑤ her_dream 跟着「允许她记梦」走（#64），自检、身份文档都不能把白名单当成它的修法或来路。
  *
  * 这里都按真的调用链测：registerToolRestrict + agent/created，再走 writeSelfDoc / /config / /tools / runChecks。
  */
@@ -206,6 +207,28 @@ test('白名单里填了 her_say：工具注册前后，「还放行了这几样
   })
 })
 
+test('白名单里填了她自己的名字（her_dream、her_say）：身份文档不念成「还放行了这几样」，梦那一段照旧跟开关走', async () => {
+  await withRoot(async (root, herDir) => {
+    // 关着梦启动，白名单里却填着 her_dream：守卫放行它，工具自己答「梦这一项关着」。
+    // 身份文档要是写「还放行了这几样：her_dream」，就跟没写梦那一段、跟工具的回答自相矛盾。
+    await writeConfig(normalizeConfig({ dream: { enabled: false }, tools: { restrict: true, allow: ['her_dream', 'her_say', 'bash'] } }), root)
+    registerToolRestrict(busCtx(), { herDir, extra: ['her_dream', 'her_say', 'bash'], dream: false, log: () => {} })
+    await writeSelfDoc(root)
+    const doc = await docOf(root)
+    const line = doc.split('\n').find((l) => l.includes(EXTRA_HEAD)) ?? ''
+    assert.ok(line.includes('bash'), `别人的工具照旧念：${line}`)
+    assert.ok(!/her_dream|her_say/.test(line), `她自己的名字不念成「另外还放行了」：${line}`)
+    assert.ok(!doc.includes(DREAM_LINE), '梦关着，梦那一段不写')
+
+    // 收窄关着时按配置写，同样不念她自己的名字。
+    await writeConfig(normalizeConfig({ dream: { enabled: false }, tools: { restrict: false, allow: ['her_dream', 'bash'] } }), root)
+    registerToolRestrict(busCtx(), { herDir, enabled: false, log: () => {} })
+    await writeSelfDoc(root)
+    const off = (await docOf(root)).split('\n').find((l) => l.includes(EXTRA_HEAD)) ?? ''
+    assert.ok(off.includes('bash') && !off.includes('her_dream'), off)
+  })
+})
+
 test('收窄关着时身份文档照旧按配置写（工具面没被收窄，也没有守卫）', async () => {
   await withRoot(async (root, herDir) => {
     await writeConfig(normalizeConfig({ tools: { restrict: false, allow: ['bash'] } }), root)
@@ -281,6 +304,30 @@ test('/tools 交出 allowNow 与 effective：关着梦时没有 her_dream，宿�
       assert.deepEqual(payload.effective, host.sent[0])
       assert.ok(!payload.effective.includes('read_image'), '宿主没有的名字没下过')
       assert.deepEqual(payload.skipped, ['read_image'])
+      assert.equal(payload.skippedSure, true, '给了 visible 的宿主上，没下的名字说得准是这次没有')
+    } finally {
+      obs?.dispose?.()
+    }
+  })
+})
+
+test('/tools：宿主没给 visible 时 skippedSure 是 false，界面跟自检一样不说定论', async () => {
+  await withRoot(async (root, herDir) => {
+    const bus = busCtx()
+    const seen = []
+    registerToolRestrict(bus, { herDir, dream: true, retryMs: 5, log: () => {}, onResult: (r) => seen.push(r) })
+    const names = HER_TOOLS.filter((n) => n !== 'read_image')
+    const host = hostAgent(herDir, () => names, { visible: false })
+    bus.emit('agent/created', { agent: host.agent })
+    await until(() => seen.some((r) => r.why === 'deferred' || r.why.startsWith('applied')), 1500)
+    assert.equal(host.sent.length, 1, '前提：收窄了')
+
+    const ctx = observeCtx(root)
+    const obs = registerObserve(ctx, { root })
+    try {
+      const { payload } = await hit(ctx.routes, '/tools')
+      assert.deepEqual(payload.skipped, ['read_image'])
+      assert.equal(payload.skippedSure, false, '分不清没注册还是在她自己那一层')
     } finally {
       obs?.dispose?.()
     }
@@ -384,7 +431,7 @@ test('read_image 在她自己那一层（看得见、restrict 点不了名）：
   })
 })
 
-test('她自己的工具被挡过（关着梦启动时的 her_dream）：自检的修法指到设置页能点的那一组', async () => {
+test('关着梦启动、her_dream 被挡过：自检只指「允许她记梦」加重启，不叫人填白名单（#64：梦跟着开关走）', async () => {
   await withRoot(async (root, herDir) => {
     const bus = busCtx()
     registerToolRestrict(bus, { herDir, dream: false, log: () => {} })
@@ -392,19 +439,54 @@ test('她自己的工具被挡过（关着梦启动时的 her_dream）：自检�
     bus.emit('agent/created', { agent: host.agent })
     assert.match(host.guards[0]({ name: 'her_dream' }), /^这件事我做不到。/, '前提：守卫拦了 her_dream')
 
+    const check = (dream) => runChecks({
+      root,
+      config: normalizeConfig({ dream: { enabled: dream } }),
+      host: {},
+      tools: { get: (n) => ({ name: n }) },
+      restrict: readRestrictState(),
+      net: false,
+    }).then((res) => res.items.find((i) => i.id === 'tools-blocked'))
+
+    // 梦现在还关着：想让她记梦就打开开关再重启。
+    const off = await check(false)
+    assert.ok(off, '被挡过就要有这一项')
+    assert.match(off.fix, /her_dream 是她自己的工具/, off.fix)
+    assert.match(off.fix, /打开「允许她记梦」再重启 DSH/, off.fix)
+    // 白名单里填 her_dream 会让守卫一直放行它，关掉梦也挡不住：修法里不能出现这条路。
+    assert.ok(!/加进白名单|点进白名单/.test(off.fix), `her_dream 不走白名单：${off.fix}`)
+
+    // 已经在设置页打开了梦：重启就回到她手上。
+    const on = await check(true)
+    assert.match(on.fix, /「允许她记梦」现在开着，重启 DSH 就回到她手上/, on.fix)
+    assert.ok(!/加进白名单|点进白名单/.test(on.fix), on.fix)
+  })
+})
+
+test('新启动时 her_say 不在名单里、被挡过：自检的修法指到设置页那组，能点进白名单', async () => {
+  await withRoot(async (root, herDir) => {
+    // index.js 的顺序：先注册收窄，工具后注册——这时的名单里没有 her_say（另一个 PR 修）。
+    const bus = busCtx()
+    registerToolRestrict(bus, { herDir, dream: true, log: () => {} })
+    for (const n of [...FISH_TOOLS, 'her_say', 'bring_back']) noteRegisteredTool(n)
+    const host = hostAgent(herDir, () => [...HER_TOOLS, 'her_say', 'bring_back', 'web_search'])
+    bus.emit('agent/created', { agent: host.agent })
+    assert.match(host.guards[0]({ name: 'her_say' }), /^这件事我做不到。/, '前提：守卫拦了 her_say')
+    host.guards[0]({ name: 'web_search' })
+
     const res = await runChecks({
       root,
-      config: normalizeConfig({ dream: { enabled: false } }),
+      config: normalizeConfig({}),
       host: {},
       tools: { get: (n) => ({ name: n }) },
       restrict: readRestrictState(),
       net: false,
     })
     const blk = res.items.find((i) => i.id === 'tools-blocked')
-    assert.ok(blk, '被挡过就要有这一项')
-    assert.match(blk.fix, /her_dream 是她自己的工具/, blk.fix)
-    assert.match(blk.fix, /她自己的，这一局不在她手上/, `设置页把它摆在那一组，修法要指过去：${blk.fix}`)
-    assert.match(blk.fix, /允许她记梦/, blk.fix)
+    assert.match(blk.fix, /her_say 是她自己的工具/, blk.fix)
+    assert.match(blk.fix, /她自己的，这一局不在她手上」那组里能点进白名单/, blk.fix)
+    assert.match(blk.fix, /点一下 web_search 加进白名单/, `别人的工具单独点名：${blk.fix}`)
+    assert.ok(!blk.fix.includes('her_dream'), '没挡过 her_dream 就不提它')
   })
 })
 
@@ -412,7 +494,7 @@ test('她自己的工具被挡过（关着梦启动时的 her_dream）：自检�
 // ④ view 不给 visible 的宿主：别人的名字按 restrictableNames 剔掉，照常收窄
 // ---------------------------------------------------------------------------
 
-test('老宿主（view 不给 visible）没有 read_image、白名单多一个没注册的名字：照常收窄，不再延后（#61 / 0.9.5）', async () => {
+test('老宿主（view 不给 visible）没有 read_image、白名单多一个没注册的名字：宽限几拍后照常收窄，不再一直延后到 deferred（#61 / 0.9.5）', async () => {
   await withRoot(async (root, herDir) => {
     const bus = busCtx()
     const seen = []
@@ -436,6 +518,26 @@ test('老宿主（view 不给 visible）没有 read_image、白名单多一个�
     for (const n of names) assert.ok(host.sent[0].includes(n), `${n} 是她的，一个都不能少`)
     assert.equal(host.guards[0]({ name: 'qq_send_message' }), undefined, '守卫照旧按配置放行：真在 own 层的她照样用得上')
     assert.ok(logs.some((m) => m.includes('qq_send_message') && m.includes('没交给它')), '剔掉的名字留一行日志，且不说成「这台机器上没有」')
+  })
+})
+
+test('老宿主上外部名字比 agent/created 晚到一点：宽限里等到了就收进名单，不在第一拍剔掉', async () => {
+  await withRoot(async (root, herDir) => {
+    const bus = busCtx()
+    const seen = []
+    registerToolRestrict(bus, { herDir, extra: ['qq_send_message'], dream: true, retryMs: 40, retryMax: 15, log: () => {}, onResult: (r) => seen.push(r) })
+    const own = [...HER_TOOLS]
+    let names = own.slice()
+    const host = hostAgent(herDir, () => names, { visible: false })
+    // 桥的工具晚一点才注册（自家工具一开始就齐）。
+    setTimeout(() => { names = [...own, 'qq_send_message'] }, 10)
+    bus.emit('agent/created', { agent: host.agent })
+    await until(() => seen.some((r) => r.why === 'deferred' || r.why.startsWith('applied')), 2000)
+
+    assert.equal(host.sent.length, 1, seen.map((r) => r.why).join(','))
+    assert.ok(host.sent[0].includes('qq_send_message'), `晚到一点的外部名字要等到、收进名单，不然这一局她调不到：${host.sent[0]}`)
+    assert.ok(host.sent[0].includes('growth_commit'))
+    assert.equal(seen.at(-1).why, 'applied-late')
   })
 })
 

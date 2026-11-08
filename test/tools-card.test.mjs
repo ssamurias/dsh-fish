@@ -157,21 +157,21 @@ function mount(routes) {
   }
 }
 
-function stateWith(tools) {
+function stateWith(tools, { dream = true } = {}) {
   return {
     day: 3,
     growthDays: 30,
     stage: 1,
     stageName: '信任',
     counts: { total: 5, meta: 2, utterance: 1, chat: 0, revise: 0, refusal: 0, reunion: 0 },
-    config: { tools, memory: {}, diary: {}, daily: {}, dream: { enabled: true } },
+    config: { tools, memory: {}, diary: {}, daily: {}, dream: { enabled: dream } },
   }
 }
 
 const HER = ['growth_commit', 'her_recall', 'her_diary', 'her_leave', 'her_note', 'ask_owner', 'her_dream', 'her_say', 'read_image']
 
-function routesFor({ restrict = true, allow = [], tools = null, toolsFail = false, beliefsFail = false } = {}) {
-  const st = stateWith({ restrict, allow })
+function routesFor({ restrict = true, allow = [], tools = null, toolsFail = false, beliefsFail = false, dream = true } = {}) {
+  const st = stateWith({ restrict, allow }, { dream })
   return {
     'GET /state': { body: st },
     'GET /config': { body: { config: st.config } },
@@ -275,13 +275,57 @@ test('「工具面收窄」开关：提示写清关掉时别的插件的工具�
   noRenderErrors(H)
 })
 
+/** 新版服务端的 /tools：allowNow 总在（收窄这一局没在管时是 null）。 */
+const toolsBody = (extra = {}) => ({ ok: true, known: [...HER, 'web_search'], ownLayer: [], blocked: [], herTools: HER, herSceneTools: [], allowNow: null, effective: null, skipped: [], skippedSure: null, ...extra })
+/** 卡片底部那句（分组下面、白名单输入框上面）。 */
+const bottomLine = (H) => {
+  const card = toolsCard(H)
+  return H.find((n) => n.type === 'div' && n.props?.className === 'dim' && /加不加都不影响她|两样都要重启/.test(H.textOf(n)), card).map((n) => H.textOf(n)).at(-1) ?? ''
+}
+
 test('收窄关着时第一句也说清：不挂守卫，别的插件的工具她也全看得见', async () => {
-  const H = mount(routesFor({ restrict: false }))
+  // 这一局收窄也没在管（allowNow 是 null）：按这一局说。
+  const H = mount(routesFor({ restrict: false, tools: toolsBody() }))
   await H.settle()
   await H.click('插件')
   const first = firstLine(H)
-  assert.match(first, /收窄现在是关着的/)
+  assert.match(first, /收窄这一局是关着的/)
   assert.match(first, /别的插件/, first)
+  // 名单没读到：只能按开关说，把「拨过开关要重启」说出来，不说成「现在」。
+  const F = mount(routesFor({ restrict: false, toolsFail: true }))
+  await F.settle()
+  await F.click('插件')
+  const f2 = firstLine(F)
+  assert.match(f2, /别的插件/, f2)
+  assert.ok(!f2.includes('现在'), `不知道这一局收窄在不在管，不能说「现在」：${f2}`)
+  assert.match(f2, /重启 DSH 之后才按新的来/, f2)
+})
+
+test('拨了「工具面收窄」、还没重启：第一句和底部那句按这一局说，写明重启之后才变', async () => {
+  // 开着收窄启动，在页面上关掉（开关自动存盘）：这一局守卫还在拦。
+  const allowNow = HER.slice()
+  const off = mount(routesFor({ restrict: false, tools: toolsBody({ allowNow, effective: allowNow, skippedSure: true }) }))
+  await off.settle()
+  await off.click('插件')
+  const f1 = firstLine(off)
+  assert.ok(!/收窄现在是关着的|收窄这一局是关着的|她全看得见/.test(f1), `这一局还在收窄，不能说已经不收窄了：${f1}`)
+  assert.match(f1, /已经关掉/, f1)
+  assert.match(f1, /这一局还在收窄/, f1)
+  assert.match(f1, /重启 DSH 之后才/, f1)
+  const b1 = bottomLine(off)
+  assert.match(b1, /这一局守卫还按启动时的名单拦/, b1)
+  assert.ok(!b1.includes('收窄现在是关着的'), b1)
+  noRenderErrors(off)
+
+  // 关着收窄启动，在页面上打开：这一局没在收窄。
+  const on = mount(routesFor({ restrict: true, tools: toolsBody() }))
+  await on.settle()
+  await on.click('插件')
+  const f2 = firstLine(on)
+  assert.match(f2, /已经打开/, f2)
+  assert.match(f2, /这一局没在收窄/, f2)
+  assert.match(f2, /重启 DSH 之后/, f2)
+  noRenderErrors(on)
 })
 
 // ---------------------------------------------------------------------------
@@ -319,13 +363,72 @@ test('关着梦启动、宿主没有 read_image：这两件不摆进「不用放
   // read_image 守卫放行、只是宿主没给：白名单帮不上，只读。
   const img = H.find((n) => n.props?.key === 'away:read_image', card)[0]
   assert.equal(img.props.disabled, true, '宿主没给的，点进白名单也没用')
-  // her_dream 是守卫没放行的：白名单里填上它，重启后守卫就放行（main 上点「被挡下来过」那组的同一条路）。
-  const dream = H.find((n) => n.props?.key === 'away:her_dream', card)[0]
-  assert.ok(!dream.props.disabled && typeof dream.props.onClick === 'function', '守卫没放行的那几件要能点进白名单')
-  await H.click('her_dream', toolsCard(H))
-  const input = H.find((n) => n.type === 'input' && String(n.props.placeholder || '').startsWith('例如：web_search'))[0]
-  assert.match(String(input.props.value), /\bher_dream\b/, '点一下就填进白名单输入框')
   noRenderErrors(H)
+})
+
+test('关着梦启动的 her_dream：只读，不走白名单（#64：收窄里的梦跟着开关走），提示按梦开关现在开没开说', async () => {
+  const allowNow = HER.filter((n) => n !== 'her_dream')
+  const tools = toolsBody({ known: [...HER, 'web_search'], blocked: [{ name: 'her_dream', count: 2 }], allowNow, effective: allowNow, skippedSure: true })
+  // 关着梦启动、之后在设置页打开了：重启就回到她手上，不用填白名单。
+  const H = mount(routesFor({ restrict: true, tools, dream: true }))
+  await H.settle()
+  await H.click('插件')
+  const card = toolsCard(H)
+  const dream = H.find((n) => n.props?.key === 'away:her_dream', card)[0]
+  assert.ok(dream, '守卫拦着 her_dream，摆在「这一局不在她手上」')
+  assert.equal(dream.props.disabled, true, '点进白名单会让守卫一直放行 her_dream，关掉梦也挡不住')
+  assert.equal(dream.props.onClick, undefined)
+  const t1 = String(dream.props.title)
+  assert.match(t1, /允许她记梦/, t1)
+  assert.match(t1, /重启 DSH 就回到她手上/, t1)
+  assert.match(t1, /不用填白名单/, t1)
+  assert.ok(!t1.includes('点一下填进白名单'), t1)
+  assert.match(t1, /伸手被挡过 2 次/, t1)
+  const hint = H.textOf(card)
+  assert.match(hint, /her_dream 跟着「允许她记梦」走，不走白名单/, '组上那句也说清')
+  const input = H.find((n) => n.type === 'input' && String(n.props.placeholder || '').startsWith('例如：web_search'), card)[0]
+  assert.ok(!/\bher_dream\b/.test(String(input.props.value)), '白名单输入框里不会出现 her_dream')
+  noRenderErrors(H)
+
+  // 梦现在也关着：它本来就不在，想要就打开开关再重启。
+  const O = mount(routesFor({ restrict: true, tools, dream: false }))
+  await O.settle()
+  await O.click('插件')
+  const d2 = O.find((n) => n.props?.key === 'away:her_dream', toolsCard(O))[0]
+  assert.equal(d2.props.disabled, true)
+  const t2 = String(d2.props.title)
+  assert.match(t2, /「允许她记梦」关着/, t2)
+  assert.match(t2, /打开那颗开关再重启 DSH/, t2)
+  assert.ok(!t2.includes('点一下填进白名单'), t2)
+  noRenderErrors(O)
+})
+
+test('宿主没给 visible（skippedSure 为 false）：没下给 restrict 的 read_image 不说成定论，跟自检同一个口径', async () => {
+  const allowNow = HER.slice()
+  const effective = HER.filter((n) => n !== 'read_image')
+  const H = mount(routesFor({ restrict: true, tools: toolsBody({ known: [...effective, 'web_search'], allowNow, effective, skipped: ['read_image'], skippedSure: false }) }))
+  await H.settle()
+  await H.click('插件')
+  const card = toolsCard(H)
+  assert.equal(H.find((n) => n.props?.key === 'away:read_image', card).length, 0, '分不清时不能摆进「这一局不在她手上」')
+  assert.equal(H.find((n) => n.props?.key === 'her:read_image', card).length, 0, '也不能摆进「不用放行」')
+  const chip = H.find((n) => n.props?.key === 'unsure:read_image', card)[0]
+  assert.ok(chip, '单列「说不准」那组')
+  assert.equal(chip.props.disabled, true, '白名单帮不上')
+  const title = String(chip.props.title)
+  assert.ok(!title.includes('宿主这一局没交给她'), `不能说定论：${title}`)
+  assert.match(title, /可能这次没注册，也可能在她自己那一层/, title)
+  assert.match(H.textOf(card), /说不准这一局在不在她手上/)
+
+  // 给了 visible（skippedSure 为 true）时照旧说得准：宿主这次没给。
+  const S = mount(routesFor({ restrict: true, tools: toolsBody({ known: [...effective, 'web_search'], allowNow, effective, skipped: ['read_image'], skippedSure: true }) }))
+  await S.settle()
+  await S.click('插件')
+  const sure = S.find((n) => n.props?.key === 'away:read_image', toolsCard(S))[0]
+  assert.ok(sure, '说得准时照旧摆在「这一局不在她手上」')
+  assert.match(String(sure.props.title), /宿主这一局没交给她/)
+  noRenderErrors(H)
+  noRenderErrors(S)
 })
 
 test('her_say 不在这一局的名单里（新启动时的 her_say 那条）：摆在「这一局不在她手上」，能点进白名单', async () => {
@@ -365,7 +468,7 @@ test('前面的请求失败时，工具卡不停在「读取中」：/tools 自�
   assert.match(card, /她自己本来就有的/, '名单读到了就照常摆出来')
 })
 
-test('服务端不给 allowNow（收窄这一局没在管）时，她自己的照旧全摆在「不用放行」', async () => {
+test('服务端不给 allowNow（老版本）时，她自己的照旧全摆在「不用放行」', async () => {
   const H = mount(routesFor({ restrict: true }))
   await H.settle()
   await H.click('插件')
