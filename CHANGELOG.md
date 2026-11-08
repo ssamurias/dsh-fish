@@ -6,6 +6,25 @@
   - `ask_owner` 的 `subject` 说明补一句「要工具时把工具名写在最前面，后面可以再补一句做什么」：不改造已有数据，只让以后写的卡好认。
   - `test/wish.test.mjs` 新增 1 条（描述句命中、`her_notes` 不命中 `her_note`、4 字以下不参与、函数写法只认整句）。
 
+- **看点名的画面时，屏蔽的 UP 与标签一条都拦不住（PR #88，@BBleae）。** 0.9.5 读的是 `info.data.owner.name` / `owner.mid` / `data.tags`，可 `client.view()` 早把 owner 摊平成顶层 `up` / `mid`、详情里也没有 tags——只有标题关键词真拦得住；被屏蔽的视频还会在日志里记一行「抽帧失败」的 warn。
+  - `lib/video.js` 新增 `watchBlockHit()`，按 `title` / `up` / `mid` 判；设了关键词且没命中时再取一次 `client.tags(bvid)` 重判。`lib/watch.js` 命中屏蔽记 `info` 行「看画面：命中屏蔽，没取画面 BV… 屏蔽的 UP 42」，不再当故障报。
+  - `test/watch-avoid.test.mjs`、`test/bili-offline.test.mjs` 随之加进来。
+
+- **「要的工具已经到手」只算这台机器上真有的（PR #89，@BBleae）。** 白名单是配置、不是事实：`read_image` 默认在名单里，宿主没装，0.9.5 一开就把那张卡当成已经到手——桌上、劲儿、主动回合三处都看不见，卡却还挂在住所页。
+  - `lib/restrict.js` 不再存「到手」快照：只记这一次的白名单（`inHandAllow`）与她的 agent（按会话 id、弱引用、上限淘汰），`currentAllowTools(sessionId, { agent })` 现算「白名单 ∩ 她这一局 `view().visible`」；`lib/deliver.js` 的 `ensureSessionLive()` 把 agent 交回来。
+  - `lib/scheduler.js` 把「取会话/探活」挪到摆桌子之前；叫醒前拿不到时，劲儿那一处退回 `configuredAllowTools()`，桌上摆什么仍只按核实过的算。
+  - 代价写清：重启后她那条会话还没建起来的一小段时间里，「名单里有、机器上没有」的卡不会单独把她推醒，会话一接上就按真的算。
+
+- **身份文档与几处计数口径（PR #91，@BBleae；#64 #66 #67）。** 八处纯纠错，另两处改了说法：
+  - **日记篇数按「写过的」算**（issue #67）：`lib/store.js` 新增 `diaryDatesWritten()`（现存文件 ∪ 事件流里的 `diary:<日期>`），身份文档与 `her_diary` 都改用它；清过文件之后不再像「少写了」，`her_diary` 翻到被清掉的那天回「写过，那一篇已经清掉了」（`gone: true`），`/memory` 多给一个 `diariesWritten`。
+  - **成长期满后不再把「下一个瓶颈」指到已经放行的门**（issue #66）：`lib/derive.js` 改成取第一道既没真过、也没被放行的门；另给一个「下一道没真过的门」用于选卡加权，状态页那句写成「期满放行（立场还等她真过「自主」）」。
+  - 其余：`renderSelfDoc` 解构漏了 `sleepKeep`、`/comment` 不认 `bili.enabled`、`lib/use.js` 在注册时把 description getter 冻死、`lib/hear.js` 与 `outing` 的会话归属、`GATE_ORDER` 下标取错等，逐处在 PR 里带测试。
+
+- **设置页说明按 0.9.5 的代码重写（PR #95，@BBleae）。** 数字框的名字和它真正管的那个数对上（「上下文上限」其实只管身份段字数，「请求间隔 / 请求抖动」其实是两次请求最少隔多久与随机多等，共 11 处）；说明补上原来没说的边界：醒来时段起止填成一样按 20:00–23:00 算、「一轮最多写多少字」只加在事件卡与 `/say` 递进来的话上、换会话带过去的是最近几轮原话而不是「核心认知」、热评给不给读与记不记那一句是两件事。
+  - 「把评论区的话也给她读」改名「记下评论区的一句话」：它管的只是记不记那句，热评照样拼进她读到的正文；想让她不读热评，把「每条读几条热评」设成 0。
+  - 保存失败框按这一次失败的原因选句子（数字越界 / 断网分开说），越界的数改回范围里框自动收起，越界时单独存开关不再清掉那个框；裁决她的申请后补一句回执。
+  - 按维护者定稿改了两句：互动计数悬停的「改口」补「或修正…（确认还成立也算一次）」；新鲜的「最近一周没说过话」→「最近一周没写下自己的话」，说明补「对话里回你的不算」。
+
 - **收窄之后「她手上到底有什么」，三处说法改成同一份真名单（PR #87，@BBleae；#61 #64 #69）。** 收窄名单是 DSH 启动那一刻算定的，改了设置要重启才换；0.9.5 里身份文档按盘上的配置写——从存完到重启这段时间，文档说那件工具在她手上，她一伸手却是「这件事我做不到」。
   - `lib/selfdoc.js` 的「我手上有什么」改念这一局真放行的名单（`currentAllowExtra()`，梦、定时两段同走 `toolSectionsNow()`），收窄关着时照旧念配置；存完设置当场重写文档也不会再预告还没生效的东西。
   - `/tools` 多给守卫真用的名单与「她自己的，这一局不在她手上」那组，设置页按它摆（`lib/client.js`），不再把配置当成她手上的。
@@ -68,7 +87,7 @@
   - `test/events-adaptive.test.mjs` 10 条；设计单 `../docs/Q-成长周期自适应-设计单.md`。
 
 - **need-tool 卡不再问「你给了没有」（#58，@BBleae）。** 她已经拿到那样工具了，桌上还摆着「这件东西我还没见到」，点「放行」也不会进事件流——因为收窄名单是注册期才算得出来的，摆桌子的时候没人问。
-  - `lib/restrict.js` 加模块级 `allowTools` 与 `currentAllowTools()`，注册时 `allowTools = allow.slice()`；`lib/wish.js` 加 `toolInHand(has,name)`，`wishesOf({ has })` 跳过已经到手的；`lib/scheduler.js` 的 `toolInHandNow()` 把这份名单传给 `driveDesk.wish`、`looseEnds`、`wishesOf` 与 `/state`。收窄关着时返回 `null`（她能看见全部工具，不传）。
+  - `lib/restrict.js` 加模块级 `allowTools` 与 `currentAllowTools()`，注册时 `allowTools = allow.slice()`；`lib/wish.js` 加 `toolInHand(has,name)`，`wishesOf({ has })` 跳过已经到手的；`lib/scheduler.js` 的 `toolInHandNow()` 把这份名单传给 `driveDesk.wish`、`looseEnds` 与 `wishesOf`。收窄关着时返回 `null`（她能看见全部工具，不传）。
   - **没有加 issue 里建议的「已经给了」按钮**：`verdict` 的 schema 只认 `approve` / `reject` / `later`，多一个值会让旧客户端与事件流都得多一条分支，而这件事本来就是「查一下手上有没有」，不该让她去点。
   - `test/wish.test.mjs` 补 5 条。
 
@@ -105,7 +124,7 @@
 - **一批 issue（#60–#69）里的真 bug 与两处口径**：这十条都是同一位用户在 2026-11-08 凌晨提交的，逐条对过代码，能改的都改了。
   - **#60 换会话后旁听再也不响**：新 home.json 的 `turns` 从 0 起，`hearAt` 却继承了上一轮的 39，`turns - hearAt` 永远是负数。轮换时 `hearAt` 跟着归零；`test/mem.test.mjs` 那条断言从 7 改成 0。
   - **#61 工具收窄永远收不窄**：`tools.restrict()` 只要名单里有一个当前工具表里没有的名字（宿主的 `read_image`、外部桥工具）就整批延后重试，而 `herToolsNow()` 恒含 `read_image`。现在只对**我方会注册**的名字延后，外部名字这次不在就从名单剔除并记一行日志；自己的名字到齐后另有 3 拍宽限，见下面 #61 的时序追问。
-  - **#62 上网开关四条路各认各的**：新增 `biliOn(config)`（`bili.enabled !== false`），`bili_look` / `bili_watch` / `bili_speak` / 发评论 / 查回复 / 身份文档「上网」全部过它；`bili_watch` 抽帧前补 `watchBlocked()`，黑名单与最短时长终于也管点名看画面。issue 里「`browse.window`/`perDay` 没人用」已过时——自动刷站还在读，没动。
+  - **#62 上网开关四条路各认各的**：新增 `biliOn(config)`（`bili.enabled !== false`），`bili_look` / `bili_watch` / `bili_speak` / 发评论 / 查回复 / 身份文档「上网」全部过它；`bili_watch` 抽帧前补 `watchBlocked()`，黑名单终于也管点名看画面（点名那条不查最短时长，最短时长只管列表；0.9.5 发出去的版本实际只拦得住标题里的屏蔽词，屏蔽的 UP、UP 名和标签是下一版补上的）。issue 里「`browse.window`/`perDay` 没人用」已过时——自动刷站还在读，没动。
   - **#63 回评论三处**：主楼改成从最近 7 天她自己的评论里找被回复那条所在的楼，`bili_speak` 新增可选 `rootRpid` 点名；额度判定先认主人（`replyPerDay=0` 也挡不住回主人）；`loginMid` 在 `account.mid` 缺失时改读 cookie 的 `DedeUserID`，都没有就返回 0——不再退回主人 mid 把主人回她的话当她自己补的丢掉。
   - **#64 身份文档跟设置脱节**：`/config` 保存后无条件重写身份文档；`dream` 跟 `dream.enabled` 走（`index.js` 的收窄同步）；定时工具说明书按 `tools.allow` 现拼，只放一个时不再说「四个都有」。
   - **#65 数据页会丢数据**：迁移到已有 `events.jsonl` 的文件夹直接拒绝，复制改 `COPYFILE_EXCL`；备份单文件 8MB 上限对 `events.jsonl` 豁免，恢复时缺事件流报失败；重开一局只有启动补的默认 seed 时允许导入，导入的 seed 标 `source:'import'`。

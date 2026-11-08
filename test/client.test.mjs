@@ -296,9 +296,9 @@ test('quality 是宿主那套 {score} 结构体时也要能渲染（2026-10-23 �
   // 现在样本不足一律写人话，数字只在真能测时才印。
   assert.ok(txt.includes('还没攒到判断，测不出来'), `没有判断时要说测不出来，实际: ${txt.slice(0, 300)}`)
   assert.ok(txt.includes('还没有跨阶段的话可比'), '说话不足两条时要说还没得比')
-  // 新鲜：这个夹具里最近一周一条没说（recent=0），先说「没说过话」；
+  // 新鲜：这个夹具里最近一周一条没写（recent=0，只数她自己写下的，聊天不算），先说「没写下自己的话」；
   // 有近期没历史时才说「还没有七天前的老话可比」。两者都不是 0.00。
-  assert.ok(txt.includes('最近一周没说过话'), '最近没说话时要说没说过话')
+  assert.ok(txt.includes('最近一周没写下自己的话'), '最近没写下自己的话时要照实说（对话里回的不算）')
   assert.ok(!txt.includes('稳定 0.00'), '样本不足时不许再印 0.00 冒充读数')
   assert.ok(!txt.includes('undefined'), '不许把 undefined 渲染到界面上')
   assert.ok(!txt.includes('NaN'), '不许把 NaN 渲染到界面上')
@@ -551,7 +551,7 @@ test('状态卡把「认知矛盾」和「记得很牢」露出来（2026-10-24 
 test('互动计数的问号写清四个数字的口径（用户定稿）', async () => {
   const src = await readFile(CLIENT, 'utf8')
   assert.ok(src.includes('说=她写过几句自己的判断（含留话）'))
-  assert.ok(src.includes('改口=按照规则推翻历史认知并指明改的是哪条'))
+  assert.ok(src.includes('改口=按照规则推翻或修正历史认知并指明改的是哪条（确认还成立也算一次）'))
   assert.ok(src.includes('拒绝=她明确登记拒绝过什么'))
   assert.ok(src.includes('重聚=久别之后她自己写下的感受'))
   assert.ok(!src.includes('她自己写下的事件条数，不含系统记的。'), '旧口径已作废')

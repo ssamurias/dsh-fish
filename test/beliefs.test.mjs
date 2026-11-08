@@ -100,7 +100,7 @@ test('观测台与身份文档同源：/memory 用 shownCount 而不是写死的
   const src = fs.readFileSync(new URL('../lib/observe.js', import.meta.url), 'utf8')
   assert.ok(src.includes('shownCount(config?.memory?.beliefsShown ?? BELIEF_SHOWN)'))
   assert.ok(
-    src.includes('personaBudget(model, { budget, withBans: model?.persona?.imported !== true, shown: shownCap })'),
+    src.includes('personaBudget(model, { budget, withBans: model?.persona?.imported !== true, shown: shownCap, sleepKeep: config?.memory?.sleepKeep })'),
     '禁不禁用要跟身份文档同源，并且只认事件流里的导入标记（备份/恢复搬来的 config 不算）',
   )
   // 0.9.7 起多一层「总共留几条」：先按 sleepKeep 夹住总数，再在留下的里面取眼前几条。

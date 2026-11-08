@@ -14,6 +14,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { HER_TOOLS, currentToolSurface, currentAllowTools, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
+import * as restrictMod from '../lib/restrict.js'
+import { wishesOf } from '../lib/wish.js'
 
 /** 一个够用的假插件 ctx：能 on('agent/created')，也能被我们主动触发。 */
 function fakeCtx() {
@@ -173,15 +175,256 @@ test('关掉开关就一个都不动', () => {
   assert.equal(readRestrictState().why, 'disabled')
 })
 
-test('currentAllowTools：关着是「不知道」，开着是白名单（issue #58）', () => {
+/**
+ * 带工具表的假 agent（issue #58）。`restrictable` 是宿主收得窄的那层，`own` 是 own 层
+ * （看得见、点不了名）。两个都是活的 Set：测试里往里加名字，就是宿主那边晚注册了一个工具。
+ * `view` 每次现读；下过 restrict 以后，收得窄的那层只剩名单里的（宿主就是这么掩码的），
+ * own 层不受影响。
+ */
+function hostAgent(cwd, { sid = '', restrictable = [], own = [], restrict } = {}) {
+  const r = new Set(restrictable)
+  const o = new Set(own)
+  const sent = []
+  let mask = null
+  const agent = {
+    session: { header: { cwd, ...(sid ? { id: sid } : {}) } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: (scope) => scope === agent
+          ? { restrictableNames: new Set(r), visible: new Map([...[...r].filter((n) => !mask || mask.has(n)), ...o].map((n) => [n, {}])) }
+          : { restrictableNames: new Set() },
+        restrict: restrict ?? (({ allow }) => { sent.push(allow); mask = new Set(allow); return () => { mask = null } }),
+        guard: () => () => {},
+      },
+    },
+  }
+  return { agent, restrictable: r, own: o, sent }
+}
+
+async function until(cond, what) {
+  for (let i = 0; i < 400 && !cond(); i++) await new Promise((r) => setTimeout(r, 5))
+  assert.ok(cond(), what)
+}
+
+test('currentAllowTools：关着是「不知道」；开着也要等见到她的 agent 才答得上（issue #58）', () => {
   const ctx = fakeCtx()
   registerToolRestrict(ctx, { herDir: 'C:\\h', enabled: false, log: () => {} })
   assert.equal(currentAllowTools(), null, '关着时她能看见全部工具，不能拿空清单去过滤')
+  assert.equal(restrictMod.configuredAllowTools(), null)
   registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], log: () => {} })
+  assert.equal(currentAllowTools(), null, '她的 agent 还没见到：白名单里写了不等于手上有')
+  assert.ok(restrictMod.configuredAllowTools().includes('web_search'), '配置里的那份照样给得出（只当临时答案用）')
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { restrictable: [...HER_TOOLS, 'web_search'] }).agent })
   const allow = currentAllowTools()
-  assert.ok(Array.isArray(allow), '开着时要给得出这份清单')
+  assert.ok(Array.isArray(allow), '见到她的 agent 了就要给得出这份清单')
   assert.ok(allow.includes('bili_look'))
   assert.ok(allow.includes('web_search'))
+
+  // 宿主给不出工具表：还是「不知道」，不能当成「一件都没有」
+  ctx.emit('agent/created', { agent: fakeAgent('C:\\h').agent })
+  assert.equal(currentAllowTools(), null)
+
+  // 重新注册（插件重载）：之前记下的 agent 不是这一次的守卫管的，不替它们担保
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { restrictable: [...HER_TOOLS, 'web_search'] }).agent })
+  assert.ok(currentAllowTools())
+  registerToolRestrict(fakeCtx(), { herDir: 'C:\\h', extra: ['web_search'], log: () => {} })
+  assert.equal(currentAllowTools(), null)
+})
+
+test('「已经到手」只算这台机器上真有的：白名单里写了、宿主上没有的不算（issue #58）', () => {
+  // 0.9.5：注册时就把配置里的 allow 当成「到手」。宿主上没有的 read_image、白名单里写了
+  // 却没装上的 image_gen 都算了进去——她要它们的那张卡一开就从桌上撤掉了。
+  const ctx = fakeCtx()
+  const host = HER_TOOLS.filter((n) => n !== 'read_image')
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['image_gen', 'ops_bash', 'web_search'], log: () => {} })
+  assert.equal(currentAllowTools(), null, '她的 agent 还没建好：不知道')
+
+  const first = hostAgent('C:\\h', { restrictable: [...host, 'web_search'], own: ['ops_bash'] })
+  ctx.emit('agent/created', { agent: first.agent })
+  assert.ok(!first.sent[0].includes('read_image'), '前提：read_image 没下给宿主')
+  const has = currentAllowTools()
+  assert.ok(has.includes('bili_look'))
+  assert.ok(has.includes('web_search'), '白名单里有、宿主上也有：到手了')
+  assert.ok(has.includes('ops_bash'), 'own 层看得见、守卫放行：也算到手')
+  assert.ok(!has.includes('read_image'), '宿主上没有 read_image：不算到手')
+  assert.ok(!has.includes('image_gen'), '白名单里写了、没装上：不算到手')
+
+  // 别人的会话不动她的账
+  ctx.emit('agent/created', { agent: hostAgent('C:\\other', { restrictable: [...HER_TOOLS, 'image_gen'] }).agent })
+  assert.deepEqual(currentAllowTools(), has)
+
+  // 换了一条会话，这回宿主有 read_image 和 image_gen 了：按新的这个现算，不沿用上一份
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { restrictable: [...HER_TOOLS, 'image_gen', 'web_search'] }).agent })
+  assert.ok(currentAllowTools().includes('read_image'))
+  assert.ok(currentAllowTools().includes('image_gen'))
+  assert.ok(!currentAllowTools().includes('ops_bash'), '这条会话上没有 ops_bash 了')
+})
+
+test('own 层工具在她的 agent 建好以后才挂上：查的那一刻看得见就算到手（issue #58）', () => {
+  // dsh-ops 是 attach 时才 publish ops_*：agent/created 那一刻的工具表里还没有它。
+  // 白名单放行、她看得见、守卫也放——这时还摆「他答应了，还没见到」就又是 #58。
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['ops_bash'], log: () => {} })
+  const her = hostAgent('C:\\h', { restrictable: HER_TOOLS })
+  ctx.emit('agent/created', { agent: her.agent })
+  assert.ok(!currentAllowTools().includes('ops_bash'), '还没挂上：不算')
+  her.own.add('ops_bash')
+  assert.ok(currentAllowTools().includes('ops_bash'), '挂上了：算到手')
+
+  const now = Date.now()
+  const events = [
+    { id: 'a1', type: 'ask', ts: new Date(now - 3_600_000).toISOString(), text: '想要一个能跑命令的工具', ask: { kind: 'need-tool', subject: 'ops_bash', options: ['可以', '以后再说'] } },
+    { id: 'a2', type: 'answer', ts: new Date(now - 1_800_000).toISOString(), text: '可以', answer: { askId: 'a1', verdict: 'approve' } },
+  ]
+  assert.equal(wishesOf(events, { now }).length, 1, '前提：不传 has 时这张卡在桌上')
+  assert.equal(wishesOf(events, { now, has: new Set(currentAllowTools()) }).length, 0, '答应过、已经到手：不再摆')
+})
+
+test('收窄下去以后才注册的宿主工具：被掩掉了，她够不着，不算到手（issue #58）', () => {
+  // issue #61 的那种时序：read_image 晚到，收窄已经按没有它的名单下去了——
+  // 这一局她调它是 unknown tool。宿主表里有它，可她手上没有。
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
+  const her = hostAgent('C:\\h', { restrictable: HER_TOOLS.filter((n) => n !== 'read_image') })
+  ctx.emit('agent/created', { agent: her.agent })
+  her.restrictable.add('read_image')
+  assert.ok(!currentAllowTools().includes('read_image'))
+  assert.ok(currentAllowTools().includes('bili_look'))
+})
+
+test('自家工具晚到、重试后才收窄（applied-late）：前后都按她此刻的工具表算，没装上的不算（issue #58）', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['image_gen', 'web_search'], log: () => {}, onResult: (r) => seen.push(r), retryMs: 1, retryMax: 400 })
+  // her_recall 还没登记（自家的名字没到齐 ⇒ 先不收窄、过一会儿再试）；read_image、image_gen 这台机器上没有
+  const host = HER_TOOLS.filter((n) => n !== 'read_image' && n !== 'her_recall')
+  const her = hostAgent('C:\\h', { restrictable: [...host, 'web_search'] })
+  ctx.emit('agent/created', { agent: her.agent })
+  assert.equal(her.sent.length, 0, '前提：这一下没收窄，进了重试')
+  let has = currentAllowTools()
+  assert.ok(has.includes('web_search'), '重试期间宿主有的她都看得见，守卫放白名单：到手')
+  assert.ok(!has.includes('her_recall'), '还没登记的不算')
+
+  her.restrictable.add('her_recall')
+  await until(() => seen.at(-1)?.why === 'applied-late', '登记齐了要收窄下去')
+  assert.ok(!her.sent[0].includes('read_image'))
+  has = currentAllowTools()
+  assert.ok(has.includes('her_recall'))
+  assert.ok(has.includes('web_search'))
+  assert.ok(!has.includes('read_image'), '这台机器上没有：不算')
+  assert.ok(!has.includes('image_gen'), '白名单里写了、没装上：不算')
+})
+
+test('换了一个她（还在重试）：按新的这个算，不沿用上一个收窄好了的（issue #58）', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], log: () => {}, retryMs: 1, retryMax: 1 })
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { restrictable: [...HER_TOOLS, 'web_search'] }).agent })
+  assert.ok(currentAllowTools().includes('web_search'))
+  // 新会话：自家名字还没到齐（进重试），web_search 这回也没有
+  const b = hostAgent('C:\\h', { restrictable: HER_TOOLS.filter((n) => n !== 'her_recall') })
+  ctx.emit('agent/created', { agent: b.agent })
+  assert.equal(b.sent.length, 0, '前提：B 还在重试')
+  assert.ok(!currentAllowTools().includes('web_search'), 'B 手上没有 web_search')
+  assert.ok(!currentAllowTools().includes('her_recall'))
+})
+
+test('她同时住着好几条会话：按指定那条的工具表算，群房后建也不顶掉家里那条（issue #58）', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search', 'ops_bash'], log: () => {} })
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { sid: 's-home', restrictable: [...HER_TOOLS, 'web_search'], own: ['ops_bash'] }).agent })
+  // 群房：cwd 一样也是她，但不带家里的 preset，工具表不一样
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { sid: 's-room', restrictable: HER_TOOLS }).agent })
+  assert.ok(currentAllowTools('s-home').includes('web_search'))
+  assert.ok(currentAllowTools('s-home').includes('ops_bash'))
+  assert.ok(!currentAllowTools('s-room').includes('web_search'))
+  assert.ok(!currentAllowTools().includes('ops_bash'), '不指定就按最近建的那个')
+  // 家里那条冷着、群房活着时，退回「最近建的那个」拿到的是群房的工具表
+  assert.equal(currentAllowTools('s-cold'), null, '指定的那条还没见到：不知道，不拿别的房顶')
+})
+
+test('会话 id 带不带 session- 前缀，认的是同一条（issue #58）', () => {
+  // 宿主两处给的 id 写法不一定一样（identity.js 的 wakeKey 同一个理由）。对不上的话每次都查不到家里那条。
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['image_gen'], log: () => {} })
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { sid: 'session-s1', restrictable: HER_TOOLS }).agent })
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { sid: 'session-g1', restrictable: HER_TOOLS, own: ['image_gen'] }).agent })
+  for (const sid of ['s1', 'session-s1']) {
+    const has = currentAllowTools(sid)
+    assert.ok(Array.isArray(has), `${sid} 要认得出`)
+    assert.ok(has.includes('bili_look'))
+    assert.ok(!has.includes('image_gen'), `${sid}：家里没有 image_gen，不能按群房算`)
+  }
+  assert.ok(currentAllowTools('g1').includes('image_gen'))
+  // 反过来：头里不带前缀，问的时候带
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { sid: 's2', restrictable: HER_TOOLS, own: ['image_gen'] }).agent })
+  assert.ok(currentAllowTools('session-s2').includes('image_gen'))
+})
+
+test('群房一多：常问的那条不先被挤掉；真挤掉了是不知道；探活交回来的 agent 照样认（issue #58）', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search', 'image_gen'], log: () => {} })
+  const home = hostAgent('C:\\h', { sid: 's-home', restrictable: [...HER_TOOLS, 'web_search'] })
+  ctx.emit('agent/created', { agent: home.agent })
+  const rooms = [] // 留着引用：群房都还活着，淘汰只能按先后
+  const room = (i) => {
+    const r = hostAgent('C:\\h', { sid: `s-room${i}`, restrictable: HER_TOOLS, own: ['image_gen'] })
+    rooms.push(r)
+    ctx.emit('agent/created', { agent: r.agent })
+  }
+  for (let i = 0; i < 15; i++) room(i)
+  assert.ok(currentAllowTools('s-home').includes('web_search'))
+  for (let i = 15; i < 20; i++) room(i)
+  assert.ok(currentAllowTools('s-home')?.includes('web_search'), '家里那条刚问过，排在后面，不先被挤掉')
+  for (let i = 20; i < 40; i++) room(i)
+  assert.equal(rooms.length, 40)
+  assert.equal(currentAllowTools('s-home'), null, '真被挤掉了：不知道，不拿群房顶')
+  // 叫醒、主动回合探活时宿主把那条会话的 agent 交回来：是这一次见过的她，直接按它算
+  const has = currentAllowTools('s-home', { agent: home.agent })
+  assert.ok(has.includes('web_search'))
+  assert.ok(!has.includes('image_gen'))
+  // 不是这一次见过的（别人的会话）：不替它担保
+  const stranger = hostAgent('C:\\other', { sid: 's-x', restrictable: [...HER_TOOLS, 'image_gen'] })
+  ctx.emit('agent/created', { agent: stranger.agent })
+  assert.equal(currentAllowTools('s-x', { agent: stranger.agent }), null)
+  assert.equal(currentAllowTools('', { agent: stranger.agent }), null, '给了 agent 又不认得：不退回最近建的那个')
+})
+
+test('重新注册以后：之前的她探活交回来也不替她担保，等下一个她建出来（issue #58）', () => {
+  // 那个 agent 身上挂的是上一次注册下的守卫与收窄；这一份白名单新加的 own 层名字，旧守卫照样拦。
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], log: () => {} })
+  const old = hostAgent('C:\\h', { sid: 's1', restrictable: [...HER_TOOLS, 'web_search'], own: ['ops_bash'] })
+  ctx.emit('agent/created', { agent: old.agent })
+  assert.ok(currentAllowTools('s1', { agent: old.agent }).includes('web_search'))
+  assert.ok(!currentAllowTools('s1', { agent: old.agent }).includes('ops_bash'), '前提：上一份白名单没放 ops_bash')
+  const ctx2 = fakeCtx()
+  registerToolRestrict(ctx2, { herDir: 'C:\\h', extra: ['web_search', 'ops_bash'], log: () => {} })
+  assert.equal(currentAllowTools('s1', { agent: old.agent }), null, '旧守卫还拦着 ops_bash：说不准，宁可多摆')
+  assert.equal(currentAllowTools('s1'), null)
+  const fresh = hostAgent('C:\\h', { sid: 's1', restrictable: [...HER_TOOLS, 'web_search'], own: ['ops_bash'] })
+  ctx2.emit('agent/created', { agent: fresh.agent })
+  assert.ok(currentAllowTools('s1').includes('ops_bash'), '新的她归这一次的守卫管：答得上')
+})
+
+test('收窄一直没挂上（deferred）：到手的是宿主有、守卫放行的那部分（issue #58）', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  const host = HER_TOOLS.filter((n) => n !== 'read_image')
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['image_gen', 'web_search'], log: () => {}, onResult: (r) => seen.push(r), retryMs: 1, retryMax: 2 })
+  const restrict = () => { throw new Error('tools.restrict() names unknown global tool "growth_commit"') }
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { restrictable: [...host, 'web_search'], restrict }).agent })
+  // 还在重试：收窄没下去，宿主有的她都看得见，守卫放白名单——此刻就答得上，不用等
+  const during = currentAllowTools()
+  assert.ok(during.includes('web_search'))
+  assert.ok(!during.includes('read_image'))
+  for (let i = 0; i < 100 && seen.at(-1)?.why !== 'deferred'; i++) await new Promise((r) => setTimeout(r, 5))
+  assert.equal(seen.at(-1)?.why, 'deferred')
+  const has = currentAllowTools()
+  assert.ok(has.includes('web_search'), '没收窄，宿主有、白名单也放行：到手了')
+  assert.ok(has.includes('bili_look'))
+  assert.ok(!has.includes('read_image'), '宿主上没有：不算')
+  assert.ok(!has.includes('image_gen'), '宿主上没有：不算')
 })
 
 test('describeRestrict 的三种说法不能混', () => {
