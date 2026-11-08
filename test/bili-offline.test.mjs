@@ -236,21 +236,11 @@ test('GET /comment：断网时告诉页面「没去查」，不让 0 条冒充�
   })
 })
 
-test('GET /comment 与 /browse：对照——上网开着时 online 为真', async () => {
+test('GET /comment：对照——上网开着时 online 为真', async () => {
   await withRoot(async (root) => {
-    await writeConfig(normalizeConfig({ bili: { enabled: true }, comment: { enabled: true } }), root)
-    const routes = observeRoutes(root)
-    assert.equal((await getJson(routes, '/comment')).online, true)
-    assert.equal((await getJson(routes, '/browse')).online, true)
-  })
-})
-
-test('GET /browse：自动逛与能不能出门分开报', async () => {
-  await withRoot(async (root) => {
-    await writeConfig(normalizeConfig({ bili: { enabled: false }, browse: { enabled: true } }), root)
-    const body = await getJson(observeRoutes(root), '/browse')
-    assert.equal(body.enabled, true, 'enabled 仍是「自动逛」那颗')
-    assert.equal(body.online, false)
+    await writeConfig(normalizeConfig({ bili: { enabled: true }, comment: { enabled: false } }), root)
+    // 评论关着，不会去扫回复；只看 online 这一项
+    assert.equal((await getJson(observeRoutes(root), '/comment')).online, true)
   })
 })
 
@@ -333,10 +323,24 @@ function ancestorsOf(node, needle, chain = []) {
 const CM = { usedToday: 0, perDay: 1, replyUsedToday: 0, replyPerDay: 2, waitingCount: 0, waitingOwnerCount: 0 }
 
 test('发评论那张卡：断网时说没去查，不印「没有新回复」', async () => {
-  const { text } = await renderBiliPage({ commentOn: true, cm: { ...CM, enabled: true, online: false } })
+  const { text } = await renderBiliPage({ biliOn: false, commentOn: true, cm: { ...CM, enabled: true, online: false } })
   assert.ok(text.includes('今天：发了 0/1 条'), '状态行要在')
   assert.ok(!text.includes('没有新回复'), '断网时根本没去查，不能说没有新回复')
-  assert.ok(text.includes('没去查新回复'))
+  assert.ok(text.includes('「允许她上网」关着，没去查新回复。'))
+})
+
+test('发评论那张卡：刚在页面上关掉上网、30 秒轮询还没回来，卡片跟开关一起说关着', async () => {
+  // 手上这份 /comment 还是开着时取的（online: true、0 条），开关已经翻成关
+  const { text } = await renderBiliPage({ biliOn: false, commentOn: true, cm: { ...CM, enabled: true, online: true } })
+  assert.ok(!text.includes('没有新回复'), `开关关着，卡片还在说没有新回复：${text}`)
+  assert.ok(text.includes('「允许她上网」关着，没去查新回复。'))
+})
+
+test('发评论那张卡：刚打开上网、手上还是关着时取的回包，不说「没有新回复」，也不说「关着」', async () => {
+  const { text } = await renderBiliPage({ biliOn: true, commentOn: true, cm: { ...CM, enabled: true, online: false } })
+  assert.ok(!text.includes('没有新回复'), '那一次根本没去查')
+  assert.ok(!text.includes('「允许她上网」关着'), `开关开着，卡片却说关着：${text}`)
+  assert.ok(text.includes('上次刷新时「允许她上网」还关着，没去查新回复。'))
 })
 
 test('发评论那张卡：对照——上网开着、真没人回时照旧说「没有新回复」', async () => {
@@ -370,12 +374,18 @@ test('「上网」那一页的说明跟代码对得上', async () => {
   assert.ok(text.includes('翻视频和点名看画面都管'))
 })
 
-test('看过的视频那张卡：断网时不说「她自己临时去看不受影响」', async () => {
-  const browse = { enabled: false, online: false, perDay: 1, usedToday: 0, topN: 4, items: [], watched: [], handed: [] }
-  const off = await renderBiliPage({ browse })
+test('看过的视频那张卡：断网时不说「她自己临时去看不受影响」，和上面那颗开关一起变', async () => {
+  const browse = { enabled: false, perDay: 1, usedToday: 0, topN: 4, items: [], watched: [], handed: [] }
+  const off = await renderBiliPage({ biliOn: false, browse })
   assert.ok(!off.text.includes('不受影响'), '「允许她上网」关着时她自己也出不去')
-  assert.ok(off.text.includes('她自己也打不开视频'))
+  assert.ok(off.text.includes('今天没开自动逛；「允许她上网」也关着，她自己也打不开视频。'))
 
-  const on = await renderBiliPage({ browse: { ...browse, online: true } })
+  // 自动逛开着、上网关着：概览那行也要补一句
+  const offAuto = await renderBiliPage({ biliOn: false, browse: { ...browse, enabled: true } })
+  assert.ok(offAuto.text.includes('「允许她上网」关着，她自己打不开视频。'), offAuto.text)
+
+  const on = await renderBiliPage({ biliOn: true, browse })
   assert.ok(on.text.includes('今天没开自动逛（她自己临时去看不受影响）。'), '对照：能出门时照旧')
+  const onAuto = await renderBiliPage({ biliOn: true, browse: { ...browse, enabled: true } })
+  assert.ok(!onAuto.text.includes('打不开视频'), '对照：能出门时概览那行不补')
 })
