@@ -134,13 +134,19 @@ test('her_say 不再看主动搭话的开关——只要注册了就在手边', 
   }
 })
 
-test('没有注册记录时的 allow 与改之前一模一样（老断言与老行为都不破）', () => {
+// 没有注册记录不是边角情况，是生产上的常态：index.js 先收窄、后注册工具，
+// 收窄算 allow 的那一刻记录一定是空的（真实启动顺序见 test/restrict-boot.test.mjs）。
+// 0.9.5 这里断言的是「不含 her_say 的 HER_TOOLS」——把每次重启都够不着 her_say 当成了正确答案。
+test('没有注册记录时（收窄先于工具注册）allow 照基线算，her_say 也在里面', () => {
   forgetRegisteredTools()
   const ctx = fakeCtx()
   registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
   const hers = fakeAgent('C:\\h')
   ctx.emit('agent/created', { agent: hers.agent })
-  assert.deepEqual(hers.calls[0].allow, HER_TOOLS.filter((n) => n !== 'her_dream'))
+  const allow = hers.calls[0].allow
+  assert.ok(allow.includes('her_say'), `重启后第一拍她就得够得着 her_say：${allow.join(',')}`)
+  assert.ok(!allow.includes('bring_back'), '出门工具不许进家里的 allow')
+  assert.deepEqual(allow, HER_TOOLS.filter((n) => n !== 'her_dream'))
 })
 
 test('注册期记账由 withUseDuringRegistration 顺手做掉，注册失败的不记', () => {
