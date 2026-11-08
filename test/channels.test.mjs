@@ -700,3 +700,22 @@ test('群友的话（不带 owner）一条都不进记忆', async () => {
     assert.equal((await homeStatus(root)).turns, 0)
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
+
+test('「记你原话的间隔」设成 0：群里他本人说的那句也不记（issue #67）', async () => {
+  const root = await tmpRoot()
+  try {
+    await seed(root)
+    const { writeConfig } = await import('../lib/store.js')
+    const { normalizeConfig } = await import('../lib/settings.js')
+    await writeConfig(normalizeConfig({ memory: { hearEvery: 0 } }), root)
+    const { ctx } = fakeCtx()
+
+    const r = await sayToHer(ctx, '这个版本我打算先发一版试试看，有问题再说。', {
+      root, waitMs: 5_000, channel: 'qq-group:1', scene: 'group', speaker: '随便什么昵称', owner: true,
+    })
+    assert.equal(r.ok, true)
+
+    const { events } = await readEvents(root)
+    assert.equal(events.filter((e) => e.type === 'heard').length, 0, '设置页写着「0 为不记」，群里也得停')
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
