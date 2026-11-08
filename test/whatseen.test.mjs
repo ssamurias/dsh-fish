@@ -212,6 +212,29 @@ test('历史：look: 与 watched: 撞同一条时，只留「看过画面」的�
   assert.equal(items[0].how, 'watch')
 })
 
+// issue #69：v0.8.0–v0.8.7 写的 look: 只有 BV 号。它排在 browse: 前面，去重留下的是它，
+// 列表就只剩裸 BV 号；glancedItems 对同一条给的却是 browse: 里的标题，两处对不上。
+test('历史：老的 look:（只有 BV 号）和同一天 browse: 撞同一条时，标题和 UP 从 browse: 补上，和 glancedItems 一致', () => {
+  const events = [
+    meta(`look:${DK} ${B1}`),
+    meta(`browse:${DK} [{"bvid":"${B1}","title":"有标题","up":"某UP","duration":61,"view":9}]`),
+    // 别的天的同一条不算：展示信息只在同一天里补
+    meta(`browse:2026-10-29 [{"bvid":"${B2}","title":"前一天的"}]`),
+    meta(`look:${DK} ${B2}`),
+  ]
+  const items = historyFromEvents(events, { days: 400 }).find((g) => g.date === DK).items
+  assert.equal(items.filter((x) => x.bvid === B1).length, 1)
+  const one = items.find((x) => x.bvid === B1)
+  assert.deepEqual([one.title, one.up, one.duration, one.view, one.how], ['有标题', '某UP', 61, 9, 'glance'])
+  const g = glancedItems(events, DK).find((x) => x.bvid === B1)
+  assert.deepEqual([one.title, one.up], [g.title, g.up], '历史列表和翻到过的清单给同一个标题')
+  assert.equal(items.find((x) => x.bvid === B2).title, '', '别的天的记账不拿来补')
+
+  // look: 自己带了标题、当天又没有记账：照用自己的
+  const own = historyFromEvents([meta(`look:${DK} ${B3} {"title":"自己带的","up":"某个UP"}`)], { days: 7 })[0].items[0]
+  assert.deepEqual([own.title, own.up], ['自己带的', '某个UP'])
+})
+
 test('历史：天数的上限放到 366，选「一年」不再被砍成半年', () => {
   const events = []
   for (let i = 0; i < 400; i++) {
