@@ -126,3 +126,35 @@ test('请神的护栏按路径拦，读也拦：说「碰不到」，不说「�
     assert.match(t, /读和写/, `要说清读写都拦：${t.slice(0, 40)}`)
   }
 })
+
+test('清单空着时不拿日记、评论举例：它们只留一行记账，不进这张清单（issue #68）', async () => {
+  const texts = await renderTexts({ outing: outingState({ atPocket: false, workspaceName: '素材' }), outingEndAsk: true })
+  const hint = texts.filter((t) => t.includes('没有可以划掉的'))
+  assert.equal(hint.length, 1, '空清单的提示要渲染出来')
+  assert.doesNotMatch(hint[0], /写篇日记|评个视频/, '写日记、评视频不会出现在清单里，不能说「都行」')
+  assert.match(hint[0], /不在这张清单里/, '要说清日记和评论不在这里')
+})
+
+test('园区「不带项目记录」只在第一次去时成立，不能说成一直是空的（issue #68）', async () => {
+  const texts = await renderTexts({ outing: outingState({ atPocket: false, workspaceName: '素材' }) })
+  const said = texts.filter((t) => t.includes('不带项目记录'))
+  assert.ok(said.length >= 2, '说明卡和园区卡都说到了')
+  for (const t of said) assert.match(t, /第一次/, `用过以后这个工作区自己的记录会留着：${t.slice(0, 40)}`)
+})
+
+test('没有基线的那趟：「核对一次」能点，但卡上不说「已经对得上了」（issue #68）', async () => {
+  const review = { workspaceName: '素材', title: '一个对话', reason: '出门时没记下她自己的记录（文件还不存在？）', okNow: true, checkable: false, held: 0, dropped: 0, autoRejected: false }
+  const uncheckable = await renderTexts({
+    outing: { ...outingState({ atPocket: false, workspaceName: '素材' }), pendingReview: review },
+    possess: { active: null, sessions: [], pendingReview: review },
+  })
+  assert.ok(!uncheckable.some((t) => t.includes('已经对得上了')), '核对不了，就不能说对得上')
+  assert.equal(uncheckable.filter((t) => t.includes('没法核对')).length, 2, '出门卡和请神卡都说清是核对不了')
+
+  // 真的对得上的那趟照旧说。
+  const checked = await renderTexts({
+    outing: { ...outingState({ atPocket: false, workspaceName: '素材' }), pendingReview: { ...review, reason: '', checkable: true } },
+    possess: { active: null, sessions: [], pendingReview: { ...review, reason: '', checkable: true } },
+  })
+  assert.equal(checked.filter((t) => t.includes('已经对得上了')).length, 2)
+})

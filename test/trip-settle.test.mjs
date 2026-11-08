@@ -17,6 +17,9 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 
 import { registerObserve } from '../lib/observe.js'
+// 复核的结算单独拿出来测（还没有这个函数的版本上，这几条要红而不是整个文件装不上）。
+import * as observeLib from '../lib/observe.js'
+import { takeNotes } from '../lib/sessionnote.js'
 import { deriveSelf } from '../lib/derive.js'
 import { readEvents } from '../lib/store.js'
 import { writeSelfDoc, selfDocPath } from '../lib/selfdoc.js'
@@ -386,6 +389,9 @@ test('没有基线的 pending：出门卡和请神卡的「核对一次」都能
     const p = await h.call('possession', 'GET')
     assert.equal(o.json.pendingReview.okNow, true, '出门卡：接口会放行，按钮就不能灰着')
     assert.equal(p.json.pendingReview.okNow, true)
+    // 卡上要据此说「没法核对」，不能说「已经对得上了」：两张卡都要带上这一项。
+    assert.equal(o.json.pendingReview.checkable, false)
+    assert.equal(p.json.pendingReview.checkable, false)
     assert.equal((await h.call('outing', 'POST', { action: 'review' })).status, 200)
     assert.equal((await h.call('possession', 'POST', { action: 'review' })).status, 200)
     assert.equal((await readPossessions(root)).possessions[0].status, 'done')
@@ -420,4 +426,158 @@ test('园区按工作区 id 或目录认，不按名字猜（issue #68）', asyn
     await startOuting(root, { sessionId: 's-f', workspaceId: 'w-fake', workspaceName: 'outing-pocket', cwd: fakeDir, baseline: snapshotEvents(file), identity: '', now: T0 + 2 })
     assert.equal((await h.call('outing', 'GET')).json.away.atPocket, false)
   } finally { done() }
+})
+
+// ---------------------------------------------------------------------------
+// 审查第二轮（issue #68）：驳回的话、并发复核、按趟次结算的接线、给界面的台账
+// ---------------------------------------------------------------------------
+
+/** 家里那边这段时间又写了很多记账行（醒来、读材料这类，不带会话 id）。 */
+function fillHome(file, n, from = T0 + 120_000) {
+  let text = ''
+  for (let i = 0; i < n; i += 1) text += line(`ev_wake${i}`, iso(from + i * 1000), 'meta', `wake:2026-11-09 ${i}`)
+  appendFileSync(file, text, 'utf8')
+}
+
+/** 排队等着递回家里的话里，讲「不认这几条」的那些。 */
+async function rejectNotes(root) {
+  return (await takeNotes(root)).map((n) => String(n.text ?? '')).filter((t) => t.includes('不认这几条'))
+}
+
+test('划掉的那几条，隔了很久、家里又写了很多也照样讲给她听（issue #68）', async () => {
+  // 对不上回家、只划掉一条；复核之前家里写了 400 条，复核通过时要摘得到那一条的原话。
+  {
+    const { root, file, done } = setup()
+    try {
+      const h = harness(root)
+      await goOut(root, file)
+      writeTrip(file, { homeToo: false })
+      tamper(file)
+      const ended = await h.call('outing', 'POST', { action: 'end', kept: true, rejectedIds: ['ev_out1'] })
+      assert.equal(ended.status, 200, JSON.stringify(ended.json))
+      fillHome(file, 400)
+      restore(file)
+      await takeNotes(root) // 回家时排的交接句先取走
+      const reviewed = await h.call('outing', 'POST', { action: 'review' })
+      assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+      assert.equal(reviewed.json.note?.ok, true, `驳回的话要递出去：${JSON.stringify(reviewed.json.note)}`)
+      const said = (await rejectNotes(root)).join('\n')
+      assert.match(said, /外面说的第 1 句/, '划掉的那条要念到')
+      assert.doesNotMatch(said, /外面说的第 2 句/, '没划掉的不念')
+    } finally { done() }
+  }
+  // 没对不上：这趟之后家里写了 400 条再叫她回家，划掉的那条也要念到。
+  {
+    const { root, file, done } = setup()
+    try {
+      const h = harness(root)
+      await goOut(root, file)
+      writeTrip(file, { homeToo: false })
+      fillHome(file, 400)
+      const ended = await h.call('outing', 'POST', { action: 'end', kept: true, rejectedIds: ['ev_out1'] })
+      assert.equal(ended.status, 200, JSON.stringify(ended.json))
+      assert.equal(ended.json.note?.ok, true, `驳回的话要递出去：${JSON.stringify(ended.json.note)}`)
+      assert.match((await rejectNotes(root)).join('\n'), /外面说的第 1 句/)
+    } finally { done() }
+  }
+})
+
+test('两个窗口同时点「核对一次」：这趟只结一次，驳回的话只递一遍（issue #68）', async () => {
+  for (const path of ['outing', 'possession']) {
+    const { root, file, done } = setup()
+    try {
+      const h = harness(root)
+      if (path === 'outing') await goOut(root, file)
+      else await possess(root, file)
+      writeTrip(file, { homeToo: false })
+      tamper(file)
+      const ended = await h.call(path, 'POST', { action: 'end', kept: true, rejectedIds: ['ev_out1'] })
+      assert.equal(ended.status, 200, JSON.stringify(ended.json))
+      restore(file)
+      await takeNotes(root)
+      const both = await Promise.all([
+        h.call(path, 'POST', { action: 'review' }),
+        h.call(path, 'POST', { action: 'review' }),
+      ])
+      assert.deepEqual(both.map((r) => r.status).sort(), [200, 409], `${path}：晚到的那个找不到还在等的那趟：${JSON.stringify(both.map((r) => r.json))}`)
+      assert.equal((await rejectNotes(root)).length, 1, `${path}：她只该听到一遍`)
+      const after = await counted(root)
+      assert.ok(after.has('ev_out2') && !after.has('ev_out1'), `${path}：照人的选择结算`)
+    } finally { done() }
+  }
+})
+
+test('复核结的是核对过的那一趟：两趟都在等时，不会结成另一趟（issue #68）', async () => {
+  const { root, done } = setup()
+  try {
+    assert.equal(typeof observeLib.settleTripReview, 'function', '复核的结算要能单独拿来测')
+    const rec = (startedAt) => ({
+      sessionId: 's-same', workspaceId: 'w1', workspaceName: '素材', cwd: join(root, 'ws'),
+      startedAt, endedAt: startedAt + 60_000, status: 'pending', baseline: null, kept: null, identity: '',
+      rejectedIds: [], pendingRejectedIds: [],
+    })
+    // 「接着上次那条」：A、B 两趟指向同一条会话，核对的是 A（不是最后那趟）。
+    writeFileSync(join(root, 'outings.json'), JSON.stringify({ version: OUTING_SCHEMA, outings: [rec(T0), rec(T0 + 3600_000)] }), 'utf8')
+    const a = (await readOutings(root)).outings[0]
+    const s = await observeLib.settleTripReview({ get: () => undefined }, root, 'outing', a, settlePending)
+    assert.equal(s.ok, true, JSON.stringify(s))
+    const { outings } = await readOutings(root)
+    assert.equal(outings[0].status, 'done', '核对过的 A 结掉')
+    assert.equal(outings[1].status, 'pending', 'B 还在等，复核卡不能没了')
+  } finally { done() }
+})
+
+test('请神复核之后当场重写身份文档（issue #68）', async () => {
+  const { root, file, done } = setup()
+  try {
+    const h = harness(root)
+    await possess(root, file)
+    writeTrip(file, { homeToo: false })
+    await writeSelfDoc(root)
+    const doc = () => readFileSync(selfDocPath(root), 'utf8')
+    assert.match(doc(), /外面说的第 2 句/)
+
+    tamper(file)
+    await h.call('possession', 'POST', { action: 'end', kept: true })
+    assert.doesNotMatch(doc(), /外面说的第 2 句/, '这趟先不算了，文档里就不能还有')
+
+    restore(file)
+    const reviewed = await h.call('possession', 'POST', { action: 'review' })
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+    assert.match(doc(), /外面说的第 2 句/, '复核捞回来了，文档也要跟上')
+  } finally { done() }
+})
+
+test('GET 带回去的台账只有条数，没有整份 id 名单（issue #68）', async () => {
+  {
+    const { root, file, done } = setup()
+    try {
+      const h = harness(root)
+      await goOut(root, file)
+      writeTrip(file, { n: 3, homeToo: false })
+      await h.call('outing', 'POST', { action: 'end', kept: false })
+      assert.deepEqual((await readOutings(root)).outings[0].rejectedIds.length, 3, '台账本身还是存全量')
+      const got = await h.call('outing', 'GET')
+      const row = got.json.outings.at(-1)
+      assert.ok(!('rejectedIds' in row) && !('pendingRejectedIds' in row), '最近几趟里不带名单')
+      assert.equal(row.dropped, 3)
+      assert.equal(row.held, 0)
+    } finally { done() }
+  }
+  {
+    const { root, file, done } = setup()
+    try {
+      const h = harness(root)
+      await possess(root, file)
+      writeTrip(file, { n: 2, homeToo: false })
+      tamper(file)
+      await h.call('possession', 'POST', { action: 'end', kept: true })
+      const got = await h.call('possession', 'GET')
+      for (const rec of [got.json.possessions.at(-1), got.json.pending]) {
+        assert.ok(rec && !('rejectedIds' in rec) && !('pendingRejectedIds' in rec), '请神那边也不带名单')
+        assert.equal(rec.held, 2)
+      }
+      assert.equal(got.json.pendingReview.checkable, true, '有基线的那趟核对得了')
+    } finally { done() }
+  }
 })
