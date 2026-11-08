@@ -27,11 +27,22 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const CLIENT = join(HERE, '..', 'lib', 'client.js')
 const OBSERVE = join(HERE, '..', 'lib', 'observe.js')
 
-test('默认配置里上网时段是独立的一项', () => {
+test('默认配置里上网时段是独立的一项，不填就跟着醒来时段（issue #86 第 2 条）', () => {
   const cfg = normalizeConfig({})
-  assert.deepEqual(cfg.browse.window, ['08:00', '23:00'])
+  // null = 跟随：醒来 20:00–23:00，上网也就只在这段里，睡着时不会被安排出门
+  assert.deepEqual(cfg.browse.window, null)
   assert.deepEqual(cfg.window, ['20:00', '23:00'])
   assert.deepEqual(cfg.comment.window, ['20:00', '23:00'])
+  // 改了醒来时段，跟着走的就是新那段
+  const moved = normalizeConfig({ window: ['22:00', '23:30'] })
+  assert.deepEqual(moved.browse.window, null)
+  assert.deepEqual(moved.window, ['22:00', '23:30'])
+  // 自己填一段别的 → 就是独立的，原样留着
+  const own = normalizeConfig({ browse: { window: ['09:00', '18:00'] } })
+  assert.deepEqual(own.browse.window, ['09:00', '18:00'])
+  // 填得和醒来时段一模一样 = 跟随，不收两份（不然改了醒来的它不跟）
+  const same = normalizeConfig({ browse: { window: ['20:00', '23:00'] } })
+  assert.equal(same.browse.window, null)
 })
 
 test('坏时段只回退自己那一项，不牵连别的时段', () => {
