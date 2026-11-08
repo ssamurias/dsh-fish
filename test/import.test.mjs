@@ -386,19 +386,46 @@ test('导入回执分开报「这次新放行几个」和「名单现在共几�
   })
 })
 
-test('白名单写不进去：导入照样成功，回执带上原因，不说这次新加了几个', async () => {
+test('白名单写不进去（配置读不出来）：走 /import 路由，导入照样成功，回执带上原因，不说这次新加了几个', async () => {
+  // 第二轮审查：原来这条只直接调 applyHandover。走真路由时，导入之后还要再读一次配置
+  // （算「现在是第几天」），那一句没兜底，直接 500：人设已经写进去了，界面却说「导入失败」。
   await withRoot(async (root) => {
-    // 让配置读写都失败：config.json 是个文件夹
+    // config.json 是个文件夹：读写都失败
     const { mkdir } = await import('node:fs/promises')
     await mkdir(join(root, 'config.json'), { recursive: true })
-    const r = await applyHandover(DOC, root)
-    assert.equal(r.ok, true, r.why)
-    assert.equal(typeof r.toolsError, 'string')
-    assert.ok(r.toolsError.length > 0, '要说为什么没写进去')
+    const post = await routeCall(root, '/import', 'POST', { text: DOC })
+    assert.equal(post.status, 200, JSON.stringify(post.body))
+    assert.equal(post.body.ok, true)
+    assert.equal(typeof post.body.toolsError, 'string')
+    assert.ok(post.body.toolsError.length > 0, '要说为什么没写进去')
     // 只回错误码：错误信息里可能带本机路径，设置页上不出现路径
-    assert.match(r.toolsError, /^(?:[A-Z][A-Z0-9_]*|写配置失败)$/)
-    assert.deepEqual(r.toolsAdded, [])
+    assert.match(post.body.toolsError, /^(?:[A-Z][A-Z0-9_]*|写配置失败)$/)
+    const { basename } = await import('node:path')
+    assert.ok(!JSON.stringify(post.body).includes(basename(root)), '回执里不带本机路径')
+    assert.deepEqual(post.body.toolsAdded, [])
+    assert.equal(post.body.day, 1)
     const { events } = await readEvents(root)
     assert.ok(events.some((e) => e.type === 'seed'), '人设照样写进去了')
+  })
+})
+
+test('白名单写不进去（配置只读）：走 /import 路由，回执说没写进去，配置原样', { skip: process.platform !== 'win32' && '只读属性挡不住 rename 覆盖，只在 Windows 上能这样造' }, async () => {
+  const { chmodSync } = await import('node:fs')
+  await withRoot(async (root) => {
+    await updateConfig({ tools: { allow: ['her_recall'] } }, root)
+    const file = join(root, 'config.json')
+    const before = await readFile(file, 'utf8')
+    chmodSync(file, 0o444)
+    try {
+      const post = await routeCall(root, '/import', 'POST', { text: DOC })
+      assert.equal(post.status, 200, JSON.stringify(post.body))
+      assert.equal(post.body.toolsError, 'EPERM')
+      assert.deepEqual(post.body.toolsAdded, [])
+      assert.equal(await readFile(file, 'utf8'), before, '配置一个字都没改')
+      const { events } = await readEvents(root)
+      assert.ok(events.some((e) => e.type === 'seed'), '人设照样写进去了')
+    } finally {
+      chmodSync(file, 0o644)
+    }
   })
 })

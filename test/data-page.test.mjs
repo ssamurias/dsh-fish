@@ -302,3 +302,44 @@ test('导入回执：白名单没写进去时直说，不写成「这次新加 0
   assert.match(note, /2 个工具这次都没放行/)
   assert.doesNotMatch(note, /新加 0 个|一共 2 个/)
 })
+
+// ---- 第二轮审查后补的（接 #65）：包里写不下名字、只记了个数的那几个 ----
+
+test('备份回执：包里连说明行都写不下、只记了个数的，算进真实个数，单独说一句', async () => {
+  const skipped = ['home/n00.md（放进来就超过「从备份恢复」一次能收的大小）', 'home/n01.md（放进来就超过「从备份恢复」一次能收的大小）']
+  const { tree, sets } = await render({ tab: 'data' })
+  await withFetch({ 'GET /backup': { ...BUNDLE, skipped, skippedUnlisted: 5 } }, async () => {
+    await button(tree, '备份成一份文件').props.onClick()
+  })
+  const msg = last(sets, 'backupMsg')
+  assert.match(msg, /有 7 个文件没打进包/)
+  for (const s of skipped) assert.ok(msg.includes(s), `有名字的照列：${s}`)
+  assert.match(msg, /另有 5 个连名字都写不进包里/)
+  assert.doesNotMatch(msg, /还有 \d+ 个没列出来/, '有名字的都列了，不能再说「完整名单在 skipped 里」')
+
+  // 一个名字都没写下时
+  const again = await render({ tab: 'data' })
+  await withFetch({ 'GET /backup': { ...BUNDLE, skipped: [], skippedUnlisted: 3 } }, async () => {
+    await button(again.tree, '备份成一份文件').props.onClick()
+  })
+  const only = last(again.sets, 'backupMsg')
+  assert.match(only, /有 3 个文件没打进包，恢复出来也不会有：包里连它们的名字都写不下/)
+})
+
+test('恢复回执：只记了个数的那几个算进真实条数，「没列出来」只算有名字的', async () => {
+  const names = ['owner.json（读失败）']
+  const { tree, sets, made } = await render({ tab: 'data' })
+  await withFetch({
+    'POST /backup/restore': { ok: true, restored: 2, quarantined: '', skipped: names, skippedCount: 6, skippedUnlisted: 5 },
+  }, async () => {
+    button(tree, '从备份恢复').props.onClick()
+    const input = made.find((el) => el.tag === 'input')
+    input.files = [{ text: async () => JSON.stringify(BUNDLE) }]
+    await input.onchange()
+  })
+  const msg = last(sets, 'backupMsg')
+  assert.match(msg, /有 6 个文件没打进去/)
+  assert.ok(msg.includes(names[0]), msg)
+  assert.match(msg, /另有 5 个连名字都写不进包里/)
+  assert.doesNotMatch(msg, /还有 \d+ 个没列出来/)
+})

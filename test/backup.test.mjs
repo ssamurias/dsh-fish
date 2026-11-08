@@ -521,3 +521,277 @@ test('恢复回执报的是真实条数：包里 250 个没装进去，回执说
     await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
+
+// ---- 第二轮审查后补的（接 #65）：挑文件的几条规矩各有一条测试守着 ----
+
+/** 不起 http，直接调 /backup 的 handler（恢复上限调小）。回的是设置页拿到的那个对象。 */
+async function backupGet(root, restoreLimit) {
+  const { registerObserve } = await import('../lib/observe.js')
+  const routes = []
+  const ctx = {
+    get: (k) => (k === 'connection'
+      ? { requestRejection: () => null }
+      : k === 'webServer'
+        ? { register: (def) => { routes.push(def); return () => {} } }
+        : undefined),
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+  }
+  const handle = registerObserve(ctx, { root, restoreLimit })
+  try {
+    const route = routes.find((r) => r.path === '/dsh-fish/backup')
+    let status = 0
+    let text = ''
+    const res = {
+      writableEnded: false,
+      writeHead: (s) => { status = s },
+      setHeader: () => {},
+      end: (s) => { text = String(s ?? ''); res.writableEnded = true },
+    }
+    await route.handler({ method: 'GET', url: '/dsh-fish/backup', headers: {} }, res)
+    assert.equal(status, 200, text)
+    return JSON.parse(text)
+  } finally {
+    handle.dispose()
+  }
+}
+
+/** 设置页存文件、恢复时 POST 的都是这个：把拿到的对象原样 JSON.stringify 一次。 */
+const wireOf = (b) => Buffer.byteLength(JSON.stringify(b))
+
+/** 带引号、换行的事件行，凑够 bytes 字节：打进包要再转义一次。 */
+function eventLines(bytes) {
+  const line = JSON.stringify({ id: 'ev_01J0000000000000000000000G', v: 1, type: 'utterance', text: '下雨了，"真的"\n'.repeat(20), ts: '2026-10-25T00:00:00.000Z', day: 1, stage: 1 }) + '\n'
+  return line.repeat(Math.max(1, Math.ceil(bytes / Buffer.byteLength(line))))
+}
+
+test('事件流打成包之后自己就超过恢复上限：只守 64MB，owner.json、state.json、home/ 一个都不挤掉', async () => {
+  // 这时怎么挑都装不回去，导出回执照实说；为恢复上限把别的文件挤掉，只会让这份存档也不全。
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-over-'))
+  const root = join(box, 'dsh-fish')
+  try {
+    await mkdir(join(root, 'home'), { recursive: true })
+    await mkdir(join(root, 'diary'), { recursive: true })
+    const events = eventLines(120_000)
+    await writeFile(join(root, 'events.jsonl'), events)
+    await writeFile(join(root, 'owner.json'), '{"mid":"1","cookie":"x"}')
+    await writeFile(join(root, 'state.json'), '{"day":3}')
+    await writeFile(join(root, 'config.json'), '{}')
+    await writeFile(join(root, 'home', '她的身份.md'), '# 你是谁\n')
+    await writeFile(join(root, 'diary', '2026-10-28.md'), '今天\n')
+    const limit = 100_000
+    assert.ok(Buffer.byteLength(events) > limit, '事件流自己就超')
+
+    const b = await backupGet(root, limit)
+    assert.equal(b.fitsRestore, false, `restoreBytes=${b.restoreBytes}`)
+    assert.ok(b.restoreBytes >= wireOf(b), `${b.restoreBytes} < ${wireOf(b)}`)
+    assert.deepEqual(b.files.map((f) => f.path), [
+      'events.jsonl',
+      'config.json',
+      'diary/2026-10-28.md',
+      'home/她的身份.md',
+      'owner.json',
+      'state.json',
+    ])
+    assert.deepEqual(b.skipped, [])
+    assert.equal(b.skippedUnlisted, 0)
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('额度紧的时候先装丢了找不回来的：owner.json 比日记大也先进，state.json、.log 比日记小也排最后；skipped 按同样的先后', async () => {
+  // 先后看丢了能不能找回来，不看在第几层、也不只看大小：
+  // 顶层的 owner.json、config.json → 她的 diary/ → 别的子目录 media/ → 能由事件流重算的 state.json 和现场记录 .log。
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-rank-'))
+  const root = join(box, 'dsh-fish')
+  try {
+    await mkdir(join(root, 'diary'), { recursive: true })
+    await mkdir(join(root, 'media'), { recursive: true })
+    await writeFile(join(root, 'events.jsonl'), eventLines(300))
+    await writeFile(join(root, 'owner.json'), JSON.stringify({ mid: '1', cookie: 'c'.repeat(2_960) }))
+    await writeFile(join(root, 'config.json'), JSON.stringify({ pad: 'x'.repeat(480) }))
+    // 日记 60 篇，日期越早越大：同一档里「小的先」挑，名单却要按路径排
+    const diary = Array.from({ length: 60 }, (_, i) => ({
+      path: `diary/2026-${String(9 + Math.floor(i / 30)).padStart(2, '0')}-${String(1 + (i % 30)).padStart(2, '0')}.md`,
+      size: 1_500 + (59 - i),
+    }))
+    for (const d of diary) await writeFile(join(root, d.path), 'x'.repeat(d.size))
+    // 100 张小图，比日记小得多：日记装不下以后，剩下的那点地方由它们填
+    for (let i = 0; i < 100; i++) await writeFile(join(root, 'media', `p${String(i).padStart(3, '0')}.jpg`), Buffer.alloc(100 + i, i))
+    await writeFile(join(root, 'state.json'), JSON.stringify({ day: 3, pad: 's'.repeat(980) }))
+    await writeFile(join(root, 'launch.err.log'), 'e'.repeat(300))
+
+    const limit = 50_000
+    const b = await backupGet(root, limit)
+    assert.equal(b.fitsRestore, true, `restoreBytes=${b.restoreBytes}`)
+    assert.ok(wireOf(b) <= limit, `真发出去的 ${wireOf(b)} 超过了 ${limit}`)
+    const paths = b.files.map((f) => f.path)
+    assert.equal(paths[0], 'events.jsonl')
+    assert.ok(paths.includes('owner.json'), 'owner.json 比每篇日记都大，也要先进')
+    assert.ok(paths.includes('config.json'))
+    const out = b.skipped.map((s) => s.replace(/（[^（]*）$/, ''))
+    assert.ok(out.includes('state.json'), 'state.json 比日记小，但能由事件流重算，排在最后')
+    assert.ok(out.includes('launch.err.log'), '.log 是现场记录，排在最后')
+    const inDiary = diary.filter((d) => paths.includes(d.path))
+    const outDiary = diary.filter((d) => out.includes(d.path))
+    assert.ok(inDiary.length > 0 && outDiary.length > 0, `日记要装进去一部分、挑出去一部分：${inDiary.length}/${outDiary.length}`)
+    assert.equal(inDiary.length + outDiary.length, diary.length)
+    assert.ok(Math.max(...inDiary.map((d) => d.size)) <= Math.min(...outDiary.map((d) => d.size)), '同一档里小的先')
+    assert.ok(out.some((p) => p.startsWith('media/')), '小图不是全都装得下')
+    // 每个文件不是在包里，就是在 skipped 里，一个不落
+    assert.equal(b.skippedUnlisted, 0)
+    assert.equal(paths.length + out.length, 1 + 2 + 60 + 100 + 2)
+    // skipped 的先后和挑的先后一样：diary/ → media/ → launch.err.log、state.json；同一档按路径
+    const rankOf = (p) => (p === 'state.json' || p.endsWith('.log') ? 3 : p.startsWith('diary/') ? 1 : p.startsWith('media/') ? 2 : 0)
+    const want = [...out].sort((x, y) => rankOf(x) - rankOf(y) || (x < y ? -1 : x > y ? 1 : 0))
+    assert.deepEqual(out, want)
+    assert.deepEqual(out.slice(-2), ['launch.err.log', 'state.json'])
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('有很多文件会被挑出去时，先给它们每个留一行说明：包装得下，名单一个不落', async () => {
+  // 只顾往包里装、不给说明行留地方的话，装到最后，「没装进去」的那些连名字都写不下。
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-reserve-'))
+  const root = join(box, 'dsh-fish')
+  try {
+    await mkdir(join(root, 'home', '笔记'), { recursive: true })
+    await writeFile(join(root, 'events.jsonl'), eventLines(20_000))
+    await writeFile(join(root, 'owner.json'), '{"mid":"1"}')
+    // 300 份笔记，路径长：每份写一行说明要 140 字节上下，比装进去省，但地方只够装一部分
+    const notes = Array.from({ length: 300 }, (_, i) => `home/笔记/${String(i).padStart(3, '0')}-${'一段很长的笔记标题'.repeat(2)}.md`)
+    for (const [i, p] of notes.entries()) await writeFile(join(root, p), 'n'.repeat(380 + (i % 40)))
+    const limit = 90_000
+    const b = await backupGet(root, limit)
+    assert.equal(b.fitsRestore, true, `restoreBytes=${b.restoreBytes}`)
+    assert.ok(wireOf(b) <= limit, `真发出去的 ${wireOf(b)} 超过了 ${limit}`)
+    assert.ok(b.restoreBytes >= wireOf(b))
+    const out = b.skipped.map((s) => s.replace(/（[^（]*）$/, ''))
+    assert.ok(out.length > 50, `要有一批笔记装不进去：${out.length}`)
+    assert.equal(b.skippedUnlisted, 0, '地方够留，就每个都写名字')
+    assert.equal(b.files.length + out.length, 2 + notes.length)
+    // 留的是还没装进去的那几行，装进去一个就少留一行：地方不会白空着（剩下的不够再放一份笔记）
+    assert.ok(limit - b.restoreBytes < 1_000, `还剩 ${limit - b.restoreBytes} 字节没用上`)
+    assert.ok(b.files.some((f) => f.path === 'owner.json'))
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('事件流装得下，整份包就装得下：恢复上限从刚够装下事件流往上挪，每一档都装得下、个数对得上', async () => {
+  // 第二轮审查：原来拿「事件流 + 4KB 余量 + 给每个文件留的说明行」去比上限，
+  // 事件流装得下、加上这些就装不下时，干脆不守上限，整份包按 64MB 塞，结果装不回去。
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-sweep-'))
+  const root = join(box, 'dsh-fish')
+  try {
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'events.jsonl'), eventLines(30_000))
+    // 先量只有事件流的包
+    const only = (await backupGet(root, 10_000_000)).restoreBytes
+    await mkdir(join(root, 'home'), { recursive: true })
+    await writeFile(join(root, 'owner.json'), '{"mid":"1","cookie":"x"}')
+    for (let i = 0; i < 40; i++) await writeFile(join(root, 'home', `n${String(i).padStart(2, '0')}.md`), '记'.repeat(300 + i))
+    let folded = 0
+    // 外壳按最长的写法算，多估一两百字节：从多出 400 字节起往上挪
+    for (let d = 400; d < 400 + 37 * 60; d += 37) {
+      const limit = only + d
+      const b = await backupGet(root, limit)
+      assert.equal(b.fitsRestore, true, `limit=${limit} restoreBytes=${b.restoreBytes}`)
+      assert.ok(wireOf(b) <= limit, `limit=${limit}：真发出去的 ${wireOf(b)}`)
+      assert.ok(b.restoreBytes >= wireOf(b), `limit=${limit}：${b.restoreBytes} < ${wireOf(b)}`)
+      assert.equal(b.files[0].path, 'events.jsonl')
+      assert.equal(b.files.length + b.skipped.length + b.skippedUnlisted, 1 + 1 + 40, `limit=${limit}`)
+      if (b.skippedUnlisted) folded++
+      // 地方够装 owner.json 时，它总是第一个进包
+      if (b.files.length > 1) assert.ok(b.files.some((f) => f.path === 'owner.json'), `limit=${limit}`)
+    }
+    assert.ok(folded > 0, '这组上限里要有连说明行都写不下、只记个数的')
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('连说明行都写不下时只记个数：导出说装得下，恢复真能装回去，恢复回执按真实条数说', async () => {
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-fold-'))
+  const root = join(box, 'dsh-fish')
+  const events = eventLines(30_000)
+  try {
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'events.jsonl'), events)
+    const only = (await backupGet(root, 10_000_000)).restoreBytes
+    await mkdir(join(root, 'home'), { recursive: true })
+    await writeFile(join(root, 'owner.json'), '{"mid":"1","cookie":"x"}')
+    for (let i = 0; i < 40; i++) await writeFile(join(root, 'home', `n${String(i).padStart(2, '0')}.md`), '记'.repeat(1_700))
+    // 事件流装得下，再加 owner.json 和几行说明就满了
+    const limit = only + 600
+    const srv = await backupServer(root, limit)
+    try {
+      const got = await srv.request('GET', '/dsh-fish/backup')
+      const b = JSON.parse(got.text)
+      const body = JSON.stringify(b)
+      assert.equal(b.fitsRestore, true, `restoreBytes=${b.restoreBytes}`)
+      assert.ok(Buffer.byteLength(body) <= limit)
+      assert.deepEqual(b.files.map((f) => f.path), ['events.jsonl', 'owner.json'])
+      assert.ok(b.skippedUnlisted > 0, JSON.stringify(b.skipped))
+      assert.equal(b.skipped.length + b.skippedUnlisted, 40)
+
+      const put = await srv.request('POST', '/dsh-fish/backup/restore', body)
+      assert.equal(put.status, 200, put.text)
+      const r = JSON.parse(put.text)
+      assert.equal(r.skippedCount, 40)
+      assert.equal(r.skippedUnlisted, b.skippedUnlisted)
+      assert.deepEqual(r.skipped, b.skipped)
+      assert.equal(await readFile(join(root, 'events.jsonl'), 'utf8'), events)
+      assert.equal(await readFile(join(root, 'owner.json'), 'utf8'), '{"mid":"1","cookie":"x"}')
+    } finally {
+      await srv.close()
+    }
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('旧包没有 skippedUnlisted、或者被改成乱七八糟的值：恢复回执只按名单算', async () => {
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-unlisted-'))
+  try {
+    for (const [i, v] of [undefined, -3, 1.5, 'x', null].entries()) {
+      const r = await restoreBackup({
+        format: BACKUP_FORMAT,
+        schema: EVENT_SCHEMA_VERSION,
+        files: [{ path: 'events.jsonl', enc: 'utf8', data: '' }],
+        skipped: ['home/a.md（读失败）'],
+        ...(v === undefined ? {} : { skippedUnlisted: v }),
+      }, join(box, `r${i}`, 'dsh-fish'))
+      assert.equal(r.ok, true, r.why)
+      assert.equal(r.skippedCount, 1, String(v))
+      assert.equal(r.skippedUnlisted, 0)
+    }
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('别的文件原始字节合计守 64MB（事件流不算在里面）：超了的挑出去、写明原因', async () => {
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-64-'))
+  const root = join(box, 'dsh-fish')
+  try {
+    await mkdir(join(root, 'home'), { recursive: true })
+    // 事件流 10MB：不占这 64MB（算进去的话，下面 9 份里要挑出去两份）
+    await writeFile(join(root, 'events.jsonl'), eventLines(10_000_000))
+    await writeFile(join(root, 'owner.json'), '{"mid":"1"}')
+    // 9 份 7.6MB 的文本（都在 8MB 单文件上限以内），合计 68.4MB：装 8 份就到 64MB 了
+    const sizes = Array.from({ length: 9 }, (_, i) => 7_600_000 + i)
+    for (const [i, n] of sizes.entries()) await writeFile(join(root, 'home', `大${i}.md`), 'x'.repeat(n))
+    const b = await collectBackup(root, { restoreLimit: 1e12 })
+    const paths = b.files.map((f) => f.path)
+    assert.ok(paths.includes('owner.json'))
+    assert.deepEqual(b.skipped, ['home/大8.md（总量已到 64MB 上限）'], '同一档里小的先，最大的那份挑出去')
+    assert.equal(paths.filter((p) => p.startsWith('home/')).length, 8)
+    const capped = b.files.filter((f) => f.path !== 'events.jsonl').reduce((n, f) => n + f.size, 0)
+    assert.ok(capped <= 64 * 1024 * 1024, `别的文件合计 ${capped}`)
+    assert.equal(b.bytes, b.files.reduce((n, f) => n + f.size, 0))
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
