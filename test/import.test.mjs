@@ -296,3 +296,92 @@ test('重开一局、只有启动补的默认 seed 时，允许导入（issue #6
     assert.equal(deriveSelf(events).seed, parseHandover(DOC).body, '读的时候要用真正导入的那一条')
   })
 })
+
+// ---- 0.9.5 余项（接 #65）----
+
+/** 把 observe.js 的路由收下来，直接调 handler。req 用 Readable 造，res 只记状态码和正文。 */
+async function routeCall(root, path, method, body) {
+  const { registerObserve } = await import('../lib/observe.js')
+  const { Readable } = await import('node:stream')
+  const routes = []
+  const ctx = {
+    get: (k) => (k === 'connection'
+      ? { requestRejection: () => null }
+      : k === 'webServer'
+        ? { register: (def) => { routes.push(def); return () => {} } }
+        : undefined),
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+  }
+  const handle = registerObserve(ctx, { root })
+  try {
+    const route = routes.find((r) => r.path === `/dsh-fish${path}`)
+    assert.ok(route, `必须有 ${path} 路由`)
+    const req = Readable.from(body == null ? [] : [Buffer.from(JSON.stringify(body))])
+    Object.assign(req, { method, url: `/dsh-fish${path}`, headers: { 'content-type': 'application/json' } })
+    let status = 0
+    let text = ''
+    const res = {
+      writableEnded: false,
+      writeHead: (s) => { status = s },
+      setHeader: () => {},
+      end: (s) => { text = String(s ?? ''); res.writableEnded = true },
+    }
+    await route.handler(req, res)
+    return { status, body: text ? JSON.parse(text) : null }
+  } finally {
+    handle.dispose()
+  }
+}
+
+test('重开一局后重启（启动补了默认 seed 和一条 meta）：GET /import 说能导，POST 也真能导', async () => {
+  // 0.9.5：POST 已经放行「只有默认起点」的一局，GET 还是「有 seed 就不行」。
+  // 设置页只看 GET 的 canImport，于是重开 → 重启之后界面不给粘贴的地方，直接 POST 却能成。
+  const box = await mkdtemp(join(tmpdir(), 'fish-import-route-'))
+  const root = join(box, 'dsh-fish')
+  try {
+    const { appendEvent } = await import('../lib/store.js')
+    // 一局养过的：起点 + 说过的话
+    await appendEvent({ type: 'seed', text: '你不是助手。你刚开始存在。' }, { day: 1, stage: 1, source: 'system' }, root)
+    await appendEvent({ type: 'utterance', text: '今天下雨。' }, { day: 3, stage: 1, source: 'self' }, root)
+    const before = await routeCall(root, '/import', 'GET')
+    assert.equal(before.status, 200)
+    assert.equal(before.body.canImport, false, '养过的一局不能导')
+    assert.equal((await routeCall(root, '/import', 'POST', { text: DOC })).status, 409, '两边说的要一样')
+
+    // 重开一局，再照启动的样子补一条默认起点和一条系统记录
+    assert.equal((await resetAll(root)).ok, true)
+    await appendEvent({ type: 'seed', text: '你不是助手。你刚开始存在。' }, { day: 1, stage: 1, source: 'system' }, root)
+    await appendEvent({ type: 'meta', text: 'home:ready' }, { day: 1, stage: 1, source: 'system' }, root)
+
+    const get = await routeCall(root, '/import', 'GET')
+    assert.equal(get.status, 200)
+    assert.equal(get.body.canImport, true, `界面要给粘贴的地方，实际 reason=${get.body.reason}`)
+    assert.equal(get.body.reason, '')
+
+    const post = await routeCall(root, '/import', 'POST', { text: DOC })
+    assert.equal(post.status, 200, JSON.stringify(post.body))
+    assert.equal(post.body.day, 1)
+
+    // 导进来之后就有了自己的起点：两边一起说不能再导
+    const after = await routeCall(root, '/import', 'GET')
+    assert.equal(after.body.canImport, false)
+    const again = await routeCall(root, '/import', 'POST', { text: DOC })
+    assert.equal(again.status, 409)
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('导入回执分开报「这次新放行几个」和「名单现在共几个」', async () => {
+  // 原来放行 3 个，交接单写 2 个、其中 1 个重复：这次只新加 1 个，名单共 4 个。
+  // 0.9.5 只报合并后的总数，界面写成「工具白名单 4 个」，像是带进来 4 个。
+  await withRoot(async (root) => {
+    await updateConfig({ tools: { allow: ['her_recall', 'web_search', 'read_file'] } }, root)
+    const post = await routeCall(root, '/import', 'POST', { text: DOC })
+    assert.equal(post.status, 200, JSON.stringify(post.body))
+    assert.deepEqual(post.body.toolsAdded, ['skill'], '交接单里的 web_search 本来就在，不算这次带进来的')
+    assert.equal(post.body.tools.length, 4)
+    const { config } = await loadConfig(root)
+    assert.equal(config.tools.allow.length, 4)
+  })
+})

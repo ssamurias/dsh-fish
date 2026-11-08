@@ -65,8 +65,10 @@ test('备份：该拿的都拿到，日志与旧备份不进包', async () => {
     assert.equal(avatar.enc, 'base64')
     assert.equal(Buffer.from(avatar.data, 'base64').length, 8)
     assert.equal(b.files.find((f) => f.path === 'config.json').enc, 'utf8')
-    assert.ok(b.skipped.some((s) => s.startsWith('logs/')), b.skipped.join('|'))
-    assert.ok(b.skipped.some((s) => s.startsWith('backups/')), b.skipped.join('|'))
+    // 不带的两类照样列出来，但列在 excluded 里：它们是照规矩不带，不是「没装进去」。
+    assert.ok(b.excluded.some((s) => s.startsWith('logs/')), b.excluded.join('|'))
+    assert.ok(b.excluded.some((s) => s.startsWith('backups/')), b.excluded.join('|'))
+    assert.deepEqual(b.skipped, [], '这份档每个该带的文件都带上了，skipped 应该是空的')
     assert.match(backupFileName(new Date('2026-10-25T00:31:00Z')), /^大肥鱼-20261025-\d{4}\.json$/)
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
@@ -239,5 +241,178 @@ test('备份：事件流再大也要进包，别的超限文件才 skipped（iss
     assert.equal(r.ok, true, r.why)
   } finally {
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+// ---- 0.9.5 余项（接 #65）----
+
+test('事件流过了 64MB：排在它后面的文件不被挤出包（事件流不算进总量上限）', async () => {
+  // 0.9.5：事件流跳过了总量检查，但大小照样累加进总量，之后按 readdir 顺序走到的
+  // home/、owner.json、state.json 都被记成「总量已到 64MB 上限」，恢复却照报成功。
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-squeeze-'))
+  const root = join(box, 'dsh-fish')
+  try {
+    await mkdir(join(root, 'home'), { recursive: true })
+    await mkdir(join(root, 'out'), { recursive: true })
+    await mkdir(join(root, 'diary'), { recursive: true })
+    await mkdir(join(root, 'logs'), { recursive: true })
+    const line = JSON.stringify({ id: 'ev_01J0000000000000000000000C', v: 1, type: 'utterance', text: '下雨了，"真的"\n'.repeat(60), ts: '2026-10-25T00:00:00.000Z', day: 1, stage: 1 }) + '\n'
+    const big = Buffer.from(line.repeat(Math.ceil((65 * 1024 * 1024) / Buffer.byteLength(line))))
+    assert.ok(big.length > 64 * 1024 * 1024)
+    await writeFile(join(root, 'events.jsonl'), big)
+    await writeFile(join(root, 'avatar.png'), Buffer.alloc(3 * 1024 * 1024, 1))
+    await writeFile(join(root, 'config.json'), '{}')
+    await writeFile(join(root, 'diary', '2026-10-28.md'), '今天\n')
+    await writeFile(join(root, 'home', '她的身份.md'), '# 你是谁\n')
+    await writeFile(join(root, 'out', '2026-10-28.md'), '报告\n')
+    await writeFile(join(root, 'owner.json'), '{"mid":"1"}')
+    await writeFile(join(root, 'state.json'), '{"day":3}')
+    await writeFile(join(root, 'logs', 'dsh-fish.log'), '现场\n')
+
+    const b = await collectBackup(root)
+    const paths = b.files.map((f) => f.path).sort()
+    assert.deepEqual(paths, [
+      'avatar.png',
+      'config.json',
+      'diary/2026-10-28.md',
+      'events.jsonl',
+      'home/她的身份.md',
+      'out/2026-10-28.md',
+      'owner.json',
+      'state.json',
+    ], `skipped=${JSON.stringify(b.skipped)}`)
+    assert.deepEqual(b.skipped, [])
+    assert.deepEqual(b.excluded, ['logs/'])
+    assert.equal(b.bytes, b.files.reduce((n, f) => n + f.size, 0), 'bytes 还是包里所有文件的总字节数')
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('恢复的回执带上导出时就没装进包的文件；旧包里「不搬」的那几条不算', async () => {
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-skip-'))
+  const root = join(box, 'dsh-fish')
+  try {
+    const bundle = {
+      format: BACKUP_FORMAT,
+      schema: EVENT_SCHEMA_VERSION,
+      files: [{ path: 'events.jsonl', enc: 'utf8', data: '' }],
+      // 0.9.5 打的包：不搬的目录也写在 skipped 里
+      skipped: ['logs/（不搬：logs）', 'home/node_modules/（不搬：node_modules）', 'home/大.bin（9MB，超过单文件上限）', 'owner.json（总量已到 64MB 上限）'],
+    }
+    const r = await restoreBackup(bundle, root)
+    assert.equal(r.ok, true, r.why)
+    assert.deepEqual(r.skipped, ['home/大.bin（9MB，超过单文件上限）', 'owner.json（总量已到 64MB 上限）'])
+  } finally {
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+/** 起一个真的 http 服务挂上 /backup 与 /backup/restore，restoreLimit 调小，不用真造 96MB 的包。 */
+async function backupServer(root, restoreLimit) {
+  const http = await import('node:http')
+  const { registerObserve } = await import('../lib/observe.js')
+  const routes = []
+  const ctx = {
+    get: (k) => (k === 'connection'
+      ? { requestRejection: () => null }
+      : k === 'webServer'
+        ? { register: (def) => { routes.push(def); return () => {} } }
+        : undefined),
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+  }
+  const handle = registerObserve(ctx, { root, restoreLimit })
+  const exact = (p) => routes.find((r) => r.path === `/dsh-fish${p}`)
+  const server = http.createServer((req, res) => {
+    const route = req.url === '/dsh-fish/backup/restore' ? exact('/backup/restore') : exact('/backup')
+    route.handler(req, res)
+  })
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok))
+  const port = server.address().port
+  const request = (method, path, body) => new Promise((ok, bad) => {
+    const headers = body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}
+    const req = http.request({ host: '127.0.0.1', port, method, path, headers }, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => ok({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }))
+      res.on('error', bad)
+    })
+    req.on('error', bad)
+    if (body) {
+      // 分块写，像浏览器上传那样：服务端在中途就知道超了
+      const buf = Buffer.from(body)
+      for (let i = 0; i < buf.length; i += 16 * 1024) req.write(buf.subarray(i, i + 16 * 1024))
+    }
+    req.end()
+  })
+  return {
+    request,
+    async close() {
+      handle.dispose()
+      server.closeAllConnections?.()
+      await new Promise((ok) => server.close(ok))
+    },
+  }
+}
+
+test('导出时就说这份包能不能用「从备份恢复」装回去；超了的包恢复时先回 413 说原因，现在的档不动', async () => {
+  // 0.9.5：事件流不设上限，包比恢复接口的 96MB 大时导出照常说「已导出」，
+  // 恢复时服务端当场断开连接，界面上只剩一条网络错误。
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-limit-'))
+  const root = join(box, 'dsh-fish')
+  const limit = 200_000
+  const srv = await backupServer(root, limit)
+  try {
+    await mkdir(root, { recursive: true })
+    // 事件行里的引号和换行在包里要再转义一次，包比事件流大
+    const line = JSON.stringify({ id: 'ev_01J0000000000000000000000D', v: 1, type: 'utterance', text: '"引号"\n'.repeat(40), ts: '2026-10-25T00:00:00.000Z', day: 1, stage: 1 }) + '\n'
+    const events = line.repeat(Math.ceil(180_000 / Buffer.byteLength(line)))
+    assert.ok(Buffer.byteLength(events) < limit, '事件流本身没超，超的是打成包之后')
+    await writeFile(join(root, 'events.jsonl'), events)
+
+    const got = await srv.request('GET', '/dsh-fish/backup')
+    assert.equal(got.status, 200)
+    const b = JSON.parse(got.text)
+    assert.equal(b.restoreLimit, limit)
+    assert.equal(b.fitsRestore, false, `restoreBytes=${b.restoreBytes}`)
+    // 设置页存文件、恢复时都是 JSON.stringify 一次：导出时量出来的数不能比真发出去的小
+    const body = JSON.stringify(JSON.parse(JSON.stringify(b)))
+    assert.ok(Buffer.byteLength(body) > limit)
+    assert.ok(b.restoreBytes >= Buffer.byteLength(body), `${b.restoreBytes} < ${Buffer.byteLength(body)}`)
+
+    const put = await srv.request('POST', '/dsh-fish/backup/restore', body)
+    assert.equal(put.status, 413, put.text)
+    const err = JSON.parse(put.text)
+    assert.match(err.error, /装不回去/)
+    assert.match(err.error, /什么都没动/)
+    // 现在的档原样在原位，没有被封存走
+    assert.equal(await readFile(join(root, 'events.jsonl'), 'utf8'), events)
+    await assert.rejects(stat(join(box, 'dsh-fish-backups')))
+  } finally {
+    await srv.close()
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('导出时说能装回去的包，恢复真能装回去', async () => {
+  const box = await mkdtemp(join(tmpdir(), 'fish-backup-limit-'))
+  const root = join(box, 'dsh-fish')
+  const srv = await backupServer(root, 200_000)
+  try {
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'events.jsonl'), '{"id":"ev_01J0000000000000000000000E","v":1,"type":"utterance","text":"我在。","ts":"2026-10-25T00:00:00.000Z","day":1,"stage":1}\n')
+    await writeFile(join(root, 'owner.json'), '{"mid":"1"}')
+    const got = await srv.request('GET', '/dsh-fish/backup')
+    const b = JSON.parse(got.text)
+    assert.equal(b.fitsRestore, true)
+    const put = await srv.request('POST', '/dsh-fish/backup/restore', JSON.stringify(b))
+    assert.equal(put.status, 200, put.text)
+    const r = JSON.parse(put.text)
+    assert.equal(r.ok, true)
+    assert.deepEqual(r.skipped, [])
+    assert.equal(await readFile(join(root, 'owner.json'), 'utf8'), '{"mid":"1"}')
+  } finally {
+    await srv.close()
+    await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
