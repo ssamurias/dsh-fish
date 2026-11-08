@@ -235,6 +235,23 @@ test('历史：老的 look:（只有 BV 号）和同一天 browse: 撞同一条�
   assert.deepEqual([own.title, own.up], ['自己带的', '某个UP'])
 })
 
+test('历史：look: 自己带了展示信息、同一天 browse: 也有时，优先取 browse: 的；browse: 那项是空的才用 look: 自己的', () => {
+  const events = [
+    meta(`look:${DK} ${B1} {"title":"look 带的","up":"look 的UP","duration":5,"view":1}`),
+    meta(`look:${DK} ${B2} {"title":"look 带的二","up":"look 的UP二","duration":7,"view":2}`),
+    meta(`browse:${DK} [{"bvid":"${B1}","title":"记账的","up":"记账的UP","duration":61,"view":9},`
+      + `{"bvid":"${B2}","title":"  ","up":"","duration":0,"view":0}]`),
+  ]
+  const items = historyFromEvents(events, { days: 400 }).find((g) => g.date === DK).items
+  const one = items.find((x) => x.bvid === B1)
+  assert.deepEqual([one.title, one.up, one.duration, one.view], ['记账的', '记账的UP', 61, 9])
+  const g = glancedItems(events, DK).find((x) => x.bvid === B1)
+  assert.deepEqual([one.title, one.up, one.duration, one.view], [g.title, g.up, g.duration, g.view])
+  // browse: 那一项标题、UP 是空的（recordBrowse 拿不到就记空串、记 0）：不拿空的盖掉 look: 带的
+  const two = items.find((x) => x.bvid === B2)
+  assert.deepEqual([two.title, two.up, two.duration, two.view], ['look 带的二', 'look 的UP二', 7, 2])
+})
+
 test('历史：天数的上限放到 366，选「一年」不再被砍成半年', () => {
   const events = []
   for (let i = 0; i < 400; i++) {

@@ -360,6 +360,28 @@ test('打开页面之后改一项，照样停手 700ms 存一次，带的「@ �
   }
 })
 
+test('/owner 晚回来：不把用户刚拨过的「评论开头 @ 你」翻回去，也不把旧值写回盘', async () => {
+  const cfg = normalizeConfig({ comment: { atOwner: true } })
+  const ownerGate = gate()
+  // /owner 回的是发请求那一刻盘上的值（true）
+  const app = await openPage(cfg, () => ownerGate.wait({ body: { mid: '', name: '', atOwner: true } }))
+  try {
+    await app.advance(1000)
+    await app.tab('上网')
+    const sw = () => switchOf(app.field('评论开头 @ 你'))
+    assert.equal(sw().props['aria-checked'], 'true')
+    sw().props.onClick()
+    await app.settle()
+    await app.advance(700)
+    assert.deepEqual(app.posts().map((c) => c.body?.comment?.atOwner), [false], '拨成关，停手 700ms 存一次')
+    ownerGate.open()
+    await app.settle()
+    await app.advance(2000)
+    assert.equal(sw().props['aria-checked'], 'false', '/owner 晚回来不能把开关翻回去')
+    assert.deepEqual(app.posts().map((c) => c.body?.comment?.atOwner), [false], '也不能再把 true 写回盘')
+  } finally { app.unmount() }
+})
+
 // ---------------------------------------------------------------- 3：安静多久才搭话
 
 test('「安静多久才搭话」停手 700ms 再存，清空和越界不写盘，离开输入框不重复写', async () => {
