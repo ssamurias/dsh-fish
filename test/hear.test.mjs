@@ -21,6 +21,7 @@ import { hearMark, bumpTurns } from '../lib/home.js'
 import { readEvents } from '../lib/store.js'
 import { validateEvent, isContactEvent } from '../lib/schema.js'
 import { searchEvents, renderRecall, RECALL_LIMIT, RECALL_DAYS } from '../lib/recall.js'
+import { eventsSince } from '../lib/outing.js'
 
 const DAY = 86_400_000
 
@@ -288,5 +289,34 @@ test('群里那句没有值得留的句子就不写，也不抛', async () => {
     assert.equal(r.written, false)
     const { events } = await readEvents(root)
     assert.equal(events.length, 0, '「嗯」「好」记下来也翻不出什么')
+  })
+})
+
+test('家里记下的那句也带会话 id：出门/请神算「这一趟多了什么」时分得清（issue #68）', async () => {
+  await withRoot(async (root) => {
+    const cfg = { memory: { hearEvery: 1 } }
+    const a = await hearTurn(root, {
+      text: '今天我在想一件事，想了很久',
+      turns: 1,
+      sessionId: 'session-home',
+      day: 2,
+      stage: 1,
+      config: cfg,
+    })
+    assert.equal(a.written, true)
+    // 调用方没给会话 id 时照旧不写这个字段：老调用点（单测、脚本）不用跟着改
+    const b = await hearTurn(root, { text: '今天我在想一件事，想了很久', turns: 2, day: 2, stage: 1, config: cfg })
+    assert.equal(b.written, true)
+
+    const { events } = await readEvents(root)
+    const heard = events.filter((e) => e.type === 'heard')
+    assert.equal(heard.length, 2)
+    assert.equal(heard[0].sessionId, 'session-home')
+    assert.equal('sessionId' in heard[1], false)
+
+    // 在外面那一趟的账里：别的会话记的句子不算这趟的（没有 id 的仍会按时间兜底，这是已知的取舍）
+    const list = eventsSince(join(root, 'events.jsonl'), Date.now() - 60_000, { sessionId: 'session-away' })
+    assert.equal(list.ok, true)
+    assert.equal(list.items.some((x) => x.id === a.id), false, '家里那句不该被算进外头那一趟')
   })
 })
