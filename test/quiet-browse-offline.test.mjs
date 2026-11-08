@@ -3,7 +3,7 @@
  *
  * `bili.enabled` 是「彻底断网」那一项（settings.js 的 biliOn）。0.9.5 新加的安静刷只认
  * `browse.enabled`，而它默认开着，于是只关「允许她上网」时：
- *   1. 定时 tick 和设置页的 POST /browse 照样去 B 站取热门、深读、记账；
+ *   1. 定时 tick 和 POST /browse 接口（force: true）照样去 B 站取热门、深读、记账；
  *   2. 醒来那一行便条照样说「今天你自己又翻到了 N 条……自己点开」，
  *      同一轮里身份文档说她出不去、bili_look 回打不开。
  *
@@ -78,11 +78,17 @@ const cfgOf = ({ bili }) => normalizeConfig({
 })
 
 const browseLines = (events) => events.filter((e) => e?.type === 'meta' && /^(browse|browse-more|looked):/.test(String(e.text ?? '')))
+const digestLines = (events) => events.filter((e) => e?.type === 'meta' && String(e.text ?? '').startsWith('digest:'))
+
+// BV 加 10 位的真格式：whatseen.js 的 parseDigestLine 只认这种，假格式会被它滤掉，
+// 「提过的不再提」那一层就测不出来。
+const BV1 = 'BV1off000001'
+const BV2 = 'BV1off000002'
 
 function fakeClient() {
   let touched = 0
   const hit = (data) => async () => { touched++; return { ok: true, data } }
-  const item = { bvid: 'BVoff01', title: '热门一', up: '某UP', duration: 300, view: 1 }
+  const item = { bvid: BV1, title: '热门一', up: '某UP', duration: 300, view: 1 }
   return {
     get touched() { return touched },
     popular: hit([item]),
@@ -99,7 +105,7 @@ function fakeClient() {
 
 // ---------------------------------------------------------------- quietBrowse 本身
 
-test('quietBrowse：只关「允许她上网」→ 一步不走；按钮（force）也绕不过', async () => {
+test('quietBrowse：只关「允许她上网」→ 一步不走；force 也绕不过', async () => {
   await withRoot(async (root) => {
     const cfg = cfgOf({ bili: false })
     assert.equal(cfg.browse.enabled, true, '前提：自动刷是默认开着的')
@@ -143,7 +149,7 @@ test('tick：开着时照旧出门（对照组，行为不变）', async () => {
   })
 })
 
-// ---------------------------------------------------------------- 设置页 POST /browse
+// ---------------------------------------------------------------- POST /browse 接口（force: true）
 
 function routeCtx() {
   const routes = []
@@ -186,7 +192,7 @@ test('POST /browse：只关「允许她上网」→ 回 409，0 次请求，不�
     const ctx = routeCtx()
     registerObserve(ctx, { root })
     const r = await postBrowse(ctx.routes)
-    assert.deepEqual(calls, [], `断网时按钮不该连 B 站，实际请求了：${calls.join(' , ')}`)
+    assert.deepEqual(calls, [], `断网时 POST /browse 不该连 B 站，实际请求了：${calls.join(' , ')}`)
     assert.equal(r.status, 409)
     assert.equal(r.body.ok, false)
     assert.equal(r.body.count, 0)
@@ -202,7 +208,7 @@ test('POST /browse：开着时照旧出门（对照组，行为不变）', async
     const ctx = routeCtx()
     registerObserve(ctx, { root })
     await postBrowse(ctx.routes)
-    assert.ok(calls.length > 0, '开着时按钮应该照常去 B 站')
+    assert.ok(calls.length > 0, '开着时 POST /browse 应该照常去 B 站')
   })
 })
 
@@ -233,8 +239,8 @@ function wakeCtx() {
 /** 断网前（或开着时）安静刷记下、还没念过的两条。 */
 async function seedBrowsed(root) {
   await recordBrowse(root, dateKey(), [
-    { bvid: 'BVoff01', title: '热门一' },
-    { bvid: 'BVoff02', title: '热门二' },
+    { bvid: BV1, title: '热门一' },
+    { bvid: BV2, title: '热门二' },
   ], { day: 1, stage: 1 })
 }
 
@@ -251,6 +257,9 @@ test('醒来便条：断网时不念「又翻到了 N 条」，叫醒也不出�
     assert.doesNotMatch(wake, /翻到了/, `断网时不该叫她「自己点开」：${wake}`)
     assert.doesNotMatch(wake, /热门一|热门二/)
     assert.deepEqual(calls, [])
+    // digest: 只记真念出去的那几条：这一轮一条没念，就不该有这一笔。
+    const { events } = await readEvents(root)
+    assert.deepEqual(digestLines(events).map((e) => e.text), [], '断网时不该记 digest:')
   })
 })
 
@@ -263,5 +272,10 @@ test('醒来便条：开着时照旧念（对照组，行为不变）', async ()
     assert.equal(r.ok, true, JSON.stringify(r))
     const wake = getWakeSection(r.sessionId)
     assert.match(wake, /今天你自己又翻到了 2 条：《热门一》、《热门二》/)
+    // 念出去的两条记一笔「提过」，夹具的 BV 号能被 parseDigestLine 认出来。
+    const { events } = await readEvents(root)
+    const said = digestLines(events).map((e) => e.text)
+    assert.equal(said.length, 1, `开着时应该记一笔 digest:，实际：${said.join(' | ')}`)
+    assert.equal(said[0], `digest:${dateKey()} ${BV1} ${BV2}`)
   })
 })
