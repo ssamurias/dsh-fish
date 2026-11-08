@@ -971,7 +971,7 @@ test('断网时 bili_speak 直接说上不了网，不落到 comment.enabled 的
     const def = ctx.defs.find((d) => d.name === 'bili_speak')
     const out = await def.execute({ kind: 'comment', bvid: 'BV1', text: '你好' }, { sessionId: 's' })
     assert.equal(out.ok, false)
-    assert.equal(out.note, '现在上不了网。')
+    assert.equal(out.note, '这会儿不方便说。')
   })
 })
 
