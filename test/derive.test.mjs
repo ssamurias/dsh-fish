@@ -317,3 +317,17 @@ test('stability 对同一批事件只算一次（issue #3 缓存）', () => {
   assert.deepEqual(a, b)
   assert.ok(a.sample > 0, '有判断时应该真的抽过样')
 })
+
+// 2026-11-09（issue #86 第 4 条，用户拍板「N、M 都去重」）：
+// 界面上「在用的判断」与「记得很牢的」两个数都按**原话**算。
+// 同一句话说三遍时，矛盾数与体检早就是按原话去重的，这里跟上——
+// 否则一处判断被说三遍，界面上看着像她记得三件事。
+test('判断计数按原话去重：同一句话说三遍只算一条（issue #86 第 4 条）', () => {
+  const same = '我不喜欢被催。'
+  const events = [1, 2, 3].map((i) => ev(`ev_s${i}`, 'utterance', i, same))
+  events.push(ev('ev_other', 'utterance', 4, '我喜欢夜里干活。'))
+  const m = deriveSelf(events)
+  assert.equal(m.beliefCount, 2, '三遍那句 + 另一句 = 两条原话')
+  assert.equal(m.solidTotal, 1, '三遍那句够格固化，但还是一句话')
+  assert.equal(m.solid.length, 1, '摆出来的列表里也只有一条')
+})
