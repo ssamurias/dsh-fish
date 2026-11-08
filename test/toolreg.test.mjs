@@ -90,7 +90,7 @@ test('注册了什么就出现什么——加工具不用再去改一张表', ()
   const live = fishToolsNow()
   for (const n of ALL_TOOLS) assert.ok(live.includes(n), `注册了 ${n}，清单里就该有`)
   assert.equal(live.length, ALL_TOOLS.length, '不多不少，正好是注册过的那几个')
-  // 旧基线那 11 个仍然在（新清单是超集，不是替换）
+  // 基线 FISH_TOOLS 里的仍然都在（新清单是超集，不是替换）
   for (const n of FISH_TOOLS) assert.ok(live.includes(n), `老工具 ${n} 不能因为改成现算就丢了`)
 })
 
@@ -119,15 +119,15 @@ test('her_say 不再看主动搭话的开关——只要注册了就在手边', 
   forgetRegisteredTools()
   registerAll()
   const ctx = fakeCtx()
-  // proactive 关着（默认 false），allow 里仍然要有 her_say：
-  // 那个开关管的是「系统替她开一轮」，不是这个工具本身。
+  // registerToolRestrict 不收主动搭话的开关（原来那个 proactive 参数没人读，已经删了），
+  // allow 里照样要有 her_say：那个开关管的是「系统替她开一轮」，不是这个工具本身。
   registerToolRestrict(ctx, { herDir: 'C:\\her-home', log: () => {} })
   const hers = fakeAgent('C:\\her-home')
   ctx.emit('agent/created', { agent: hers.agent })
 
   assert.equal(hers.calls.length, 1, '她这条应该被收窄一次')
   const allow = hers.calls[0].allow
-  assert.ok(allow.includes('her_say'), 'proactive 关着时她也得能开口（设置页文案就是这么写的）')
+  assert.ok(allow.includes('her_say'), '不管主动搭话开没开，她都得能开口（设置页文案就是这么写的）')
   assert.ok(!allow.includes('bring_back'), '出门工具不许进家里的 allow')
   for (const n of FISH_TOOLS.filter((x) => x !== 'her_dream')) {
     assert.ok(allow.includes(n), `${n} 是家里随时能用的，得在 allow 里`)

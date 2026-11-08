@@ -14,7 +14,7 @@
  * 顺序跟真机反过来，测不出来。
  *
  * 这里用真的 `apply()`、假宿主，让 agent/created 在会话建好时发（早于工具注册），
- * 然后看三件事：下给宿主的 allow、守卫放不放行、被挡时她读到的那份清单。
+ * 然后看四件事：下给宿主的 allow、提示词里的工具段、守卫放不放行、被挡时她读到的那份清单。
  * 每个用例开头清一次注册记录：一个新进程里它本来就是空的。
  */
 
@@ -27,7 +27,7 @@ import { join } from 'node:path'
 import { apply } from '../lib/index.js'
 import { writeConfig } from '../lib/store.js'
 import { normalizeConfig } from '../lib/settings.js'
-import { readRestrictState } from '../lib/restrict.js'
+import { readRestrictState, currentToolSurface } from '../lib/restrict.js'
 import { forgetRegisteredTools, SCENE_TOOLS } from '../lib/toolreg.js'
 
 async function withRoot(fn) {
@@ -139,7 +139,16 @@ async function bootAndWait(root, opts) {
   return { h, host }
 }
 
+/** 提示词工具段里「现在手边能碰到的是这些：…」那一行列出来的名字。 */
+function surfaceNames() {
+  const line = currentToolSurface().split('\n')[0] ?? ''
+  const m = line.match(/^现在手边能碰到的是这些：(.*)。$/)
+  return m ? m[1].split('、') : []
+}
+
 test('新启动：她的会话早于工具注册建好，her_say 照样在 allow 里，守卫放行', async () => {
+  // 默认配置下主动搭话是关着的：这条同时钉住「开关关着，her_say 也在手边」。
+  assert.equal(normalizeConfig({}).proactive.enabled, false, '前提：默认不开主动搭话')
   await withRoot(async (root) => {
     const { h, host } = await bootAndWait(root)
     try {
@@ -154,6 +163,7 @@ test('新启动：她的会话早于工具注册建好，her_say 照样在 allow
       const st = readRestrictState()
       assert.ok(st.allow.includes('her_say'), '配置那份 allow 里也要有')
       assert.ok(st.effective.includes('her_say'), 'effective（真下给宿主的）里也要有')
+      assert.ok(surfaceNames().includes('her_say'), `提示词工具段那一行也要有 her_say：${currentToolSurface()}`)
 
       assert.equal(typeof host.guardFn, 'function', '兜底守卫要挂上')
       assert.equal(host.guardFn({ name: 'her_say', arguments: { text: '嗯' } }), undefined, '守卫不能拦 her_say')
@@ -198,6 +208,31 @@ test('白名单里有外部名字（宿主有的、没装的）：her_say 照样
       assert.equal(host.guardFn({ name: 'web_search', arguments: {} }), undefined, '白名单里的照样放行')
       const told = host.guardFn({ name: 'bash', arguments: {} })
       assert.ok(String(told).includes('her_say'), `挡回去的那句里列的清单要有 her_say：${told}`)
+    } finally {
+      h.dispose()
+    }
+  })
+})
+
+test('关着记梦启动：her_dream 照 #64 不给，her_say 不跟着丢', async () => {
+  await withRoot(async (root) => {
+    await writeConfig(normalizeConfig({ dream: { enabled: false } }), root)
+    const { h, host } = await bootAndWait(root)
+    try {
+      assert.equal(host.createdAt?.herSay, false, '前提：agent/created 发出时 her_say 还没注册')
+      assert.equal(host.sent.length, 1, `收窄应该下一次：${JSON.stringify(readRestrictState())}`)
+
+      const sent = host.sent[0]
+      assert.ok(sent.includes('her_say'), `下给宿主的 allow 里要有 her_say：${sent.join(',')}`)
+      assert.ok(!sent.includes('her_dream'), '记梦关着，her_dream 不进 allow（issue #64 的取舍）')
+      assert.ok(surfaceNames().includes('her_say'), `提示词工具段那一行要有 her_say：${currentToolSurface()}`)
+      assert.ok(!surfaceNames().includes('her_dream'), '提示词工具段那一行不该有 her_dream')
+
+      assert.equal(host.guardFn({ name: 'her_say', arguments: {} }), undefined, '守卫不能拦 her_say')
+      const told = host.guardFn({ name: 'her_dream', arguments: {} })
+      assert.equal(typeof told, 'string', '记梦关着，守卫要挡 her_dream')
+      assert.ok(told.startsWith('这件事我做不到'), told)
+      assert.ok(told.includes('her_say'), `挡回去的那句里列的清单要有 her_say：${told}`)
     } finally {
       h.dispose()
     }
