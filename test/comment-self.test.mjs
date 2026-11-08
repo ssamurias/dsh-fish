@@ -55,12 +55,15 @@ async function creplies(root) {
  * 假 B 站：照真接口的回包形状答（`/x/v2/reply/reply` 带 data.root、data.replies、data.page），
  * 记下 view / subReplies / replyReply 三种请求。
  *
- * threads：{ 主楼 rpid: { mid: 楼主, replies: [{ rpid, mid, message, ctime }] } }
+ * threads：{ 主楼 rpid: { mid: 楼主, replies: [{ rpid, mid, message, ctime }], rootRpid? } }
+ *   rootRpid：回包 data.root 里报的楼编号，不写就是请求的那一楼。
  * selfMid：她发出去的回复挂回楼里时用哪个 mid（和真站一样，下一轮扫描能扫到）。
+ * failSub：前几次 /x/v2/reply/reply 回一个普通错误码（-400，不是风控码，不会触发熔断）。
  */
-function fakeBili({ threads = {}, selfMid = 0 } = {}) {
+function fakeBili({ threads = {}, selfMid = 0, failSub = 0 } = {}) {
   const calls = []
   let next = 90001
+  let subFails = failSub
   const json = (o) => ({ status: 200, ok: true, text: async () => JSON.stringify(o), json: async () => o })
   const reply = (root, x) => ({
     rpid: x.rpid, rpid_str: String(x.rpid), oid: 1001, type: 1, mid: x.mid,
@@ -82,13 +85,17 @@ function fakeBili({ threads = {}, selfMid = 0 } = {}) {
     if (p === '/x/v2/reply/reply') {
       const root = Number(u.searchParams.get('root'))
       calls.push(['subReplies', root])
+      if (subFails > 0) {
+        subFails--
+        return json({ code: -400, message: '请求错误', data: null })
+      }
       const t = threads[root]
       if (!t) return json({ code: 12022, message: '已经被删除了', data: null })
       return json({
         code: 0, message: '0',
         data: {
           page: { num: 1, size: 20, count: t.replies.length },
-          root: { ...reply(0, { rpid: root, mid: t.mid, message: '她那条评论' }), parent: 0 },
+          root: { ...reply(0, { rpid: t.rootRpid ?? root, mid: t.mid, message: '她那条评论' }), parent: 0 },
           replies: t.replies.map((x) => reply(root, x)),
           upper: { mid: 1 },
         },
@@ -171,6 +178,39 @@ test('真客户端：登录号不知道时看楼主认她自己——扫回复�
   })
 })
 
+test('楼主编号和要查的楼对不上时不拿它认她自己，照旧只看 ownerMids', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root)
+    await seedComment(root, dk, 'BV1', 111)
+    await writeOwner({ mid: 555, nickname: '他' }, root) // loginMid 是 0，只能靠楼主
+    const replies = [
+      { rpid: 222, mid: 9, message: '我再补一句', ctime: 1 },
+      { rpid: 333, mid: 555, message: '我在呢', ctime: 2 },
+      { rpid: 444, mid: 777, message: '路过', ctime: 3 },
+    ]
+    const scanWith = async (rootRpid) => {
+      const fake = fakeBili({ threads: { 111: { mid: 9, rootRpid, replies } } })
+      const client = realClient(fake)
+      return {
+        scanned: await scanReplies({ root, client, dateKey: dk }),
+        mine: await readMyReplies({ root, client }),
+      }
+    }
+
+    const ok = await scanWith(111)
+    assert.deepEqual(ok.scanned.map((x) => x.rpid), [333, 444], '楼主编号对得上：她补的那句跳过')
+    assert.deepEqual(ok.mine.map((x) => x.rpid), [333, 444])
+
+    // 回包里的楼主不是这一楼的：不知道是谁，不拿它当她——和认不出楼主时一样
+    const off = await scanWith(112)
+    assert.deepEqual(off.scanned.map((x) => x.rpid), [222, 333, 444], '楼主编号对不上：不认，照旧列出来')
+    assert.equal(off.scanned.find((x) => x.rpid === 222).fromOwner, false)
+    assert.equal(off.scanned.find((x) => x.rpid === 333).fromOwner, true, 'ownerMids 照旧认他')
+    assert.deepEqual(off.mine.map((x) => x.rpid), [222, 333, 444])
+  })
+})
+
 // ---------------------------------------------------------------- 2. 老数据：owner.mid 就是她
 
 test('老数据（owner.mid 是她、没有 account、cookie 两个键）：她补的话不当成他说的', async () => {
@@ -243,6 +283,39 @@ test('老数据：额度为 0 时连跑三轮「扫回复、回扫到的」，�
     const { events } = await readEvents(root)
     assert.equal(replyCountToday(events, dk), 0)
     assert.deepEqual(await creplies(root), [])
+  })
+})
+
+test('老数据：探测那次失败、发完补查时，她自己补的那句也不记成回他，照样占额度', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root, { replyPerDay: 5 })
+    await seedComment(root, dk, 'BV1', 111)
+    await writeOwner({ mid: '9', nickname: 'x', cookie: 'SESSDATA=x; bili_jct=y' }, root)
+    const fake = fakeBili({
+      failSub: 1, // 发之前探测那次失败；发完补查那次正常
+      threads: {
+        111: {
+          mid: 9,
+          replies: [
+            { rpid: 222, mid: 9, message: '我再补一句', ctime: 1 },
+            { rpid: 444, mid: 777, message: '路人', ctime: 2 },
+          ],
+        },
+      },
+    })
+    const client = realClient(fake)
+
+    await postReply({ root, client, bvid: 'BV1', parentRpid: 222, text: '嗯', dateKey: dk })
+    // 前提：探测失败拿不到那一条，发之前查不出是她自己的，照发，然后才补查一次记账
+    assert.equal(fake.count('replyReply'), 1)
+    assert.equal(fake.count('subReplies'), 2, '探测一次、发完补查一次')
+
+    const rows = await creplies(root)
+    assert.equal(rows.length, 1)
+    assert.doesNotMatch(rows[0], / owner$/, '她自己补的那句不是他写的，不能记成回他')
+    const { events } = await readEvents(root)
+    assert.equal(replyCountToday(events, dk), 1, '不是回他，就要占额度')
   })
 })
 
