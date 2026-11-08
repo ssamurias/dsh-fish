@@ -97,6 +97,25 @@ test('工具已经到手就不再摆「他答应了，还没见到」（issue #5
   assert.equal(wishesOf(events, { now: NOW + 10 * DAY, has: (n) => n === 'npm_view' }).length, 0)
 })
 
+// issue #83：真实数据里 subject 常写成「某工具：做什么」，精确比对永远对不上。
+test('subject 里带着工具名也算到手——「her_note 的读取：…」（issue #83）', () => {
+  const events = [
+    ask({ id: 'a1', text: '想让她能列出还没划掉的那些', subject: 'her_note 的读取：列出还没划掉的那些' }),
+    answer({ id: 'x1', askId: 'a1', verdict: 'approve' }),
+  ]
+  const has = ['bring_back', 'her_note', 'her_say', 'bili_look', 'bili_watch', 'ops_bash', 'read_image', 'ask_owner']
+  assert.equal(wishesOf(events, { now: NOW + 10 * DAY, has }).length, 0, '句子里带着工具名，也算到手')
+  // 名字前后紧贴着字母/数字/下划线时不算：her_note 不该被 her_notes 命中
+  assert.equal(wishesOf(events, { now: NOW + 10 * DAY, has: ['her_notes'] }).length, 1)
+  // 4 个字以下的名字不参与这种比对（`her` 在中文句子里太容易撞）
+  const short = [{ ...events[0], ask: { ...events[0].ask, subject: '想要 her 那种东西' } }, events[1]]
+  assert.equal(wishesOf(short, { now: NOW + 10 * DAY, has: ['her'] }).length, 1)
+  // 函数写法列不出名单，只认整句——猜不了就不猜
+  assert.equal(wishesOf(events, { now: NOW + 10 * DAY, has: (n) => n === 'her_note' }).length, 1)
+  // 他答了、东西也到了，桌子与劲儿都该空
+  assert.equal(deskHasMaterial({ wish: wishesOf(events, { now: NOW + 10 * DAY, has }).length }), false)
+})
+
 test('超时那种也一样：后来在别处给了，就别再摆「你问过，还没有答复」（issue #58）', () => {
   const events = [
     ask({ id: 'a1', text: '想要能看整条视频的工具', subject: 'bili_watch' }),
@@ -109,8 +128,7 @@ test('超时那种也一样：后来在别处给了，就别再摆「你问过�
   assert.equal(deskHasMaterial({ wish: wishesOf(events, { now: NOW + 2 * DAY }).length }), true)
 })
 
-test('没填工具名的那张不拿空串去比对（issue #58）', () => {
-  // subject 为空 = 她只写了一句话，没点名要什么；空串不能当成一个「已经有的工具」
+test('没填工具名的那张不拿空串去比对（issue #58）', () => {  // subject 为空 = 她只写了一句话，没点名要什么；空串不能当成一个「已经有的工具」
   const events = [ask({ id: 'a1', text: '想要个什么都行' })]
   assert.equal(wishesOf(events, { now: NOW, has: (n) => n === '' }).length, 1)
   assert.equal(wishesOf(events, { now: NOW, has: [''] }).length, 1)
