@@ -13,9 +13,13 @@ import { dirname, join } from 'node:path'
 
 const CLIENT = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'client.js')
 
-/** 假 React：h() 产出普通对象，并记下每一个造出来的节点（各页签的树都会被造出来）。 */
+/**
+ * 假 React：h() 产出普通对象，并记下每一个造出来的节点（各页签的树都会被造出来）。
+ * 每个 setState 收到的值也记下来：点按钮之后界面说了什么，就看 setOutingMsg 收到的字。
+ */
 function fakeReact() {
   const made = []
+  const sets = []
   const h = (type, props, ...children) => {
     const node = { type, props: props || {}, children: children.flat(Infinity).filter((c) => c !== null && c !== undefined && c !== false) }
     made.push(node)
@@ -23,8 +27,9 @@ function fakeReact() {
   }
   return {
     made,
+    sets,
     createElement: h,
-    useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
+    useState: (init) => [typeof init === 'function' ? init() : init, (v) => { sets.push(v) }],
     useCallback: (fn) => fn,
     useEffect: () => {},
     useMemo: (fn) => fn(),
@@ -36,10 +41,16 @@ const SEEDS = [
   ['const [outing, setOuting] = useState(null)', 'const [outing, setOuting] = useState(globalThis.__fishCopyTest?.outing ?? null)'],
   ['const [outingEndAsk, setOutingEndAsk] = useState(false)', 'const [outingEndAsk, setOutingEndAsk] = useState(globalThis.__fishCopyTest?.outingEndAsk ?? false)'],
   ['const [possess, setPossess] = useState(null)', 'const [possess, setPossess] = useState(globalThis.__fishCopyTest?.possess ?? null)'],
+  ['const [possessEndAsk, setPossessEndAsk] = useState(false)', 'const [possessEndAsk, setPossessEndAsk] = useState(globalThis.__fishCopyTest?.possessEndAsk ?? false)'],
 ]
 
 /** 按给定状态渲染一次，返回页面上出现过的每一段字。 */
 async function renderTexts(state) {
+  return (await mount(state)).texts
+}
+
+/** 按给定状态渲染一次，返回页面上的字、造出来的节点、setState 收到过的值。 */
+async function mount(state) {
   let src = await readFile(CLIENT, 'utf8')
   for (const [from, to] of SEEDS) {
     assert.equal(src.split(from).length - 1, 1, `装载钩子要正好对上一处：${from}`)
@@ -60,7 +71,7 @@ async function renderTexts(state) {
   }
   const out = []
   for (const n of react.made) for (const c of n.children) if (typeof c === 'string') out.push(c)
-  return out
+  return { texts: out, made: react.made, sets: react.sets }
 }
 
 const pocketPath = '/home/someone/outing-pocket'
@@ -157,4 +168,108 @@ test('没有基线的那趟：「核对一次」能点，但卡上不说「已�
     possess: { active: null, sessions: [], pendingReview: { ...review, reason: '', checkable: true } },
   })
   assert.equal(checked.filter((t) => t.includes('已经对得上了')).length, 2)
+})
+
+// ---------------------------------------------------------------------------
+// 第二轮：点按钮之后界面说什么、发什么
+// ---------------------------------------------------------------------------
+
+/** 页面上文字正好是 label 的按钮（可能不止一个）。 */
+const buttons = (made, label) =>
+  made.filter((n) => n.type === 'button' && n.children.some((c) => typeof c === 'string' && c === label))
+
+/**
+ * 换掉全局 fetch 跑一段：记下每个请求，回 reply(path, body) 给的 JSON。
+ * client.js 的 jget / jpost 用的就是全局 fetch。
+ */
+async function withFetch(reply, fn) {
+  const calls = []
+  const real = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : null
+    calls.push({ url: String(url), method: init.method || 'GET', body })
+    const json = reply(String(url), body)
+    return { ok: true, status: 200, json: async () => json }
+  }
+  try { await fn() } finally { globalThis.fetch = real }
+  return calls
+}
+
+const said = (sets) => sets.filter((v) => typeof v === 'string')
+
+test('送她去园区之后的回执跟说明卡同一个说法：第一次去时才没有项目记录（issue #68）', async () => {
+  const state = outingState({ atPocket: false, workspaceName: '素材' })
+  const home = { ...state, away: { kind: null, line: '在家' } }
+  const { made, sets } = await mount({ outing: home })
+  const [go] = buttons(made, '让她去园区')
+  assert.ok(go, '园区卡上要有「让她去园区」')
+  await withFetch(() => ({ ok: true, ...home }), () => go.props.onClick())
+  const msg = said(sets).filter((t) => t.includes('她去园区了'))
+  assert.equal(msg.length, 1, '点完要有一句回执')
+  assert.doesNotMatch(msg[0], /那边没有项目笔记、交接记录这些/, '用过以后这个工作区自己的记录会留着，不能一律说没有')
+  assert.match(msg[0], /第一次去时/)
+})
+
+test('「核对一次」带上卡上那一趟的 sessionId 和 startedAt（issue #68）', async () => {
+  const card = { okNow: true, checkable: true, held: 2, dropped: 0, autoRejected: false, reason: '' }
+  const state = {
+    outing: { ...outingState({ atPocket: false, workspaceName: '素材' }), pendingReview: { ...card, sessionId: 's-out', startedAt: 111, workspaceName: '素材' } },
+    possess: { active: null, sessions: [], pendingReview: { ...card, sessionId: 's-talk', startedAt: 222, title: '一个对话' } },
+  }
+  const { made } = await mount(state)
+  const btns = buttons(made, '核对一次')
+  assert.equal(btns.length, 2, '出门卡和请神卡各一个')
+  const calls = await withFetch(() => ({ ok: true }), async () => { for (const b of btns) await b.props.onClick() })
+  const posts = calls.filter((c) => c.method === 'POST')
+  const out = posts.find((c) => c.url.endsWith('/outing'))
+  const pos = posts.find((c) => c.url.endsWith('/possession'))
+  assert.deepEqual([out?.body?.action, out?.body?.sessionId, out?.body?.startedAt], ['review', 's-out', 111], '出门卡：两趟都在等时，服务端要能认出是卡上这一趟')
+  assert.deepEqual([pos?.body?.action, pos?.body?.sessionId, pos?.body?.startedAt], ['review', 's-talk', 222], '请神卡同一套')
+})
+
+test('回家时「不算」的标记没写进去：回执不说「暂时」，说清怎么补（issue #68）', async () => {
+  const base = outingState({ atPocket: false, workspaceName: '素材' })
+  const possessActive = {
+    active: { sessionId: 's-talk', title: '一个对话', cwd: '/work/素材' },
+    sessions: [],
+    since: { ok: true, total: 2, items: [] },
+    verify: { ok: true, checkable: true },
+  }
+  for (const [tampered, part] of [[false, false], [true, true]]) {
+    const reply = (url, body) => body?.action === 'end'
+      ? { ok: true, tampered, marked: false, markWhy: 'EPERM', markedPart: part, rejected: 2, held: 0, autoRejected: true, outing: { status: 'pending' }, possession: { status: 'pending' } }
+      : { ok: true }
+    const { made, sets } = await mount({ outing: base, outingEndAsk: true, possess: possessActive, possessEndAsk: true })
+    const ends = buttons(made, '整趟不算')
+    assert.equal(ends.length, 2, '出门、请神的结束卡各一个「整趟不算」')
+    await withFetch(reply, async () => { for (const b of ends) await b.props.onClick() })
+    const msgs = said(sets).filter((t) => t.includes('标记'))
+    assert.equal(msgs.length, 2, `出门、请神各一句回执：${JSON.stringify(said(sets))}`)
+    for (const m of msgs) {
+      assert.doesNotMatch(m, /暂时/, '没有地方会自己补上，不能说「暂时」')
+      assert.match(m, /眼下还算着/)
+      assert.match(m, /核对一次/, '要说清在哪里补')
+      if (part) assert.match(m, /只写进去一部分/, '写到一半失败的，不能说成一条也没写')
+      if (tampered) assert.match(m, /恢复成/, '记录也对不上的，要先恢复')
+    }
+  }
+})
+
+test('「还没算数」卡：标记没写进去、升级前留下的请神，都不说「先不算」「还没算数」（issue #68）', async () => {
+  // 没对不上、只是回家时标记没写进去：记录对得上，核对一次就补写。
+  const unmarked = { okNow: true, checkable: true, held: 0, dropped: 2, autoRejected: true, unmarked: true, reason: '回家时「不算」的标记没写进去' }
+  const t1 = await renderTexts({
+    outing: { ...outingState({ atPocket: false, workspaceName: '素材' }), pendingReview: { ...unmarked, sessionId: 's-out', startedAt: 1, workspaceName: '素材' } },
+    possess: { active: null, sessions: [], pendingReview: { ...unmarked, sessionId: 's-talk', startedAt: 2, title: '一个对话' } },
+  })
+  assert.ok(!t1.some((t) => t.includes('记录被篡改过')), '记录没被改过，标题不能说篡改')
+  assert.equal(t1.filter((t) => t.includes('还没结完')).length, 2)
+  assert.equal(t1.filter((t) => t.includes('补上标记')).length, 2, '要说清核对时会补写')
+
+  // 0.9.5 留下的请神 pending：一条标记都没写过，记录还对不上。
+  const legacy = { okNow: false, checkable: true, held: 0, dropped: 0, autoRejected: false, unmarked: false, reason: '记录长度没变，但里面的字被改过。' }
+  const t2 = await renderTexts({ possess: { active: null, sessions: [], pendingReview: { ...legacy, sessionId: 's-talk', startedAt: 2, title: '一个对话' } } })
+  assert.ok(!t2.some((t) => t.includes('只是这趟还没算数')), '这趟写的一直算着')
+  assert.ok(!t2.some((t) => t.includes('上一次请神还没算数')))
+  assert.ok(t2.some((t) => t.includes('一直算着')))
 })
