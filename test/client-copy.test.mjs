@@ -189,14 +189,14 @@ function stateWith(extra = {}) {
 // 成长页 / 状态卡：阶段与瓶颈
 // ---------------------------------------------------------------------------
 
-test('#59-1 阶段说明写明成长期满后没过的瓶颈会放行，不再只说「要自己突破」', async () => {
+test('阶段说明写明成长期满后没过的瓶颈会放行，不再只说「要自己突破」', async () => {
   const { render } = await mount({ state: stateWith() })
   const tip = row(render(), '当前阶段').tip
   assert.match(tip, /成长期满后没过的自动放行/, `当前阶段的悬停说明：${tip}`)
   assert.doesNotMatch(tip, /但每个瓶颈要自己突破/, '只说要自己突破，等于说永远卡着')
 })
 
-test('#59-4 第四阶段没有瓶颈：阶段卡说清楚整合是按天数进的', async () => {
+test('第四阶段没有瓶颈：阶段卡说清楚整合是按天数进的', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
   const c = card(render(), '四个阶段与三道瓶颈')
   assert.ok(c.all.includes('整合没有瓶颈'), `阶段卡：${c.all}`)
@@ -208,7 +208,7 @@ test('#59-4 第四阶段没有瓶颈：阶段卡说清楚整合是按天数进�
 // 成长页：主动搭话、主观能动性、兴趣、空醒、字数、时段
 // ---------------------------------------------------------------------------
 
-test('#59-5 主观能动性：劲儿按时间攒，只在醒的时段里看，桌上没东西不开', async () => {
+test('主观能动性：劲儿按时间攒，只在醒的时段里看，桌上没东西不开', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
   const note = card(render(), '主观能动性').note
   assert.doesNotMatch(note, /桌上越有可说的东西，攒得越快/, '桌上的东西是一次性加一点，不是越攒越快')
@@ -217,14 +217,14 @@ test('#59-5 主观能动性：劲儿按时间攒，只在醒的时段里看，�
   assert.match(note, /桌上也有东西，才自己开一轮/, '空桌不开要写出来')
 })
 
-test('#59-5 主动搭话：开不开这一轮由闸门定，开了以后说不说才由她', async () => {
+test('主动搭话：开不开这一轮由闸门定，开了以后说不说才由她', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
   const note = card(render(), '主动搭话').note
   assert.doesNotMatch(note, /那是她的判断/, `开不开一轮不是她判断的：${note}`)
   assert.match(note, /开了之后说不说，由她/)
 })
 
-test('#59-6 兴趣：桌上摆的东西写全，关掉以后主动搭话照样能开', async () => {
+test('兴趣：桌上摆的东西写全，关掉以后主动搭话照样能开', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
   const note = card(render(), '兴趣').note
   assert.doesNotMatch(note, /你回没回/, '回音只看你后来来没来过，不看回没回')
@@ -233,7 +233,7 @@ test('#59-6 兴趣：桌上摆的东西写全，关掉以后主动搭话照样�
   assert.match(note, /主动搭话开不开一轮不看这个开关/)
 })
 
-test('#59-7 空醒：写出真正的触发条件，摆旧句子的那种不归这个开关', async () => {
+test('空醒：写出真正的触发条件，摆旧句子的那种不归这个开关', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
   const hint = hintOf(render(), '醒着没事时，自己找点事做')
   assert.doesNotMatch(hint, /桌上也没有东西/, `触发条件不是「桌上没东西」：${hint}`)
@@ -241,7 +241,7 @@ test('#59-7 空醒：写出真正的触发条件，摆旧句子的那种不归�
   assert.match(hint, /归「兴趣」管/)
 })
 
-test('#59-8 字数上限只加在事件卡和 /say 递进来的话上', async () => {
+test('字数上限只加在事件卡和 /say 递进来的话上', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
   const hint = hintOf(render(), '她一轮最多写多少字')
   assert.doesNotMatch(hint, /对随后的对话生效/, `会话里直接聊不带长度要求：${hint}`)
@@ -249,7 +249,7 @@ test('#59-8 字数上限只加在事件卡和 /say 递进来的话上', async ()
   assert.match(hint, /主动搭话那一轮不带/)
 })
 
-test('#59-9 醒的时段：起止填成同一时刻会被换回默认，界面要先说', async () => {
+test('醒的时段：起止填成同一时刻会被换回默认，界面要先说', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
   const hint = hintOf(render(), '每天几点醒')
   assert.match(hint, /起止不能是同一时刻/, `说明：${hint}`)
@@ -260,21 +260,21 @@ test('#59-9 醒的时段：起止填成同一时刻会被换回默认，界面�
 // 状态页
 // ---------------------------------------------------------------------------
 
-test('#59-12 互动计数：改口里修正、确认也算', async () => {
+test('互动计数：改口里修正、确认也算', async () => {
   const { render } = await mount({ state: stateWith() })
   const tip = row(render(), '互动计数').tip
   assert.match(tip, /推翻或修正/, `互动计数的口径：${tip}`)
   assert.match(tip, /确认还成立也算一次/)
 })
 
-test('#59-13 一致：说清只比字面，不判断矛盾', async () => {
+test('一致：说清只比字面，不判断矛盾', async () => {
   const { render } = await mount({ state: stateWith() })
   const tip = row(render(), '一致').tip
   assert.doesNotMatch(tip, /打不打架/, `它量的不是矛盾：${tip}`)
   assert.match(tip, /字面/)
 })
 
-test('#59-14 新鲜：只数她自己写下的话，侧栏里聊过天也不算', async () => {
+test('新鲜：只数她自己写下的话，侧栏里聊过天也不算', async () => {
   const quiet = stateWith({ quality: { ...stateWith().quality, novelty: { score: 0, recent: 0, older: 3 } } })
   const { render } = await mount({ state: quiet })
   const r = row(render(), '新鲜')
@@ -282,7 +282,7 @@ test('#59-14 新鲜：只数她自己写下的话，侧栏里聊过天也不算'
   assert.match(r.tip, /对话里回你的不算/)
 })
 
-test('#59-15 规则约束：条件够了不等于一定会提，驳回到上限后不再写「等她开口」', async () => {
+test('规则约束：条件够了不等于一定会提，驳回到上限后不再写「等她开口」', async () => {
   const rules = {
     pending: null,
     offersOn: true,
@@ -296,31 +296,65 @@ test('#59-15 规则约束：条件够了不等于一定会提，驳回到上限�
   assert.doesNotMatch(text(line), /等她开口/, `${text(line)}`)
   assert.match(text(line), /条件够了/)
   assert.match(String(line.props.title || ''), /驳回到上限/, '悬停要说清什么时候不会再提')
+
+  // 悬停要按这条规则现在的处境说，不能一律写「过几天会提」
+  const tipFor = async (over) => {
+    const app = await mount({ state: stateWith(), rules: { ...rules, ...over } })
+    const l = findAll(app.render(), (n) => n.type === 'div' && text(n).startsWith('· 试一件新事'))[0]
+    return String(l?.props?.title || '')
+  }
+  // 申请已经挂在卡上
+  const pendingTip = await tipFor({
+    pending: { id: 'o3', rule: 'r1', why: '我想试试「试一件新事」这件事。' },
+    status: [{ id: 'r1', active: false, ready: true, pending: 'o3' }],
+  })
+  assert.doesNotMatch(pendingTip, /过几天她醒来时会提/, `已经提了还说过几天会提：${pendingTip}`)
+  assert.match(pendingTip, /在上面等你答/)
+  // 已经驳回两次（到上限）
+  const capTip = await tipFor({
+    history: [
+      { id: 'o1', rule: 'r1', verdict: 'reject' },
+      { id: 'o2', rule: 'r1', verdict: 'reject' },
+    ],
+  })
+  assert.doesNotMatch(capTip, /过几天她醒来时会提/, `到上限了还说过几天会提：${capTip}`)
+  assert.match(capTip, /已经驳回到上限，她不会再自动提/)
+  // 申请通道关着
+  const offTip = await tipFor({ offersOn: false })
+  assert.match(offTip, /申请通道现在关着，她不会自动提/, `通道关着：${offTip}`)
 })
 
-test('#59-16 裁决她的申请之后有回执', async () => {
+test('裁决她的申请之后有回执', async () => {
   const pending = { id: 'o1', rule: 'r1', why: '我想试试「试一件新事」这件事。不是现在就要，是想问问你。' }
   const rules = { pending, offersOn: true, layers: [], status: [] }
-  for (const [label, want] of [['可以', /答应了/], ['这次不行', /记下了「这次不行」/]]) {
+  // 第二次驳回就到上限了（unlock.js 的 offerLimits 只有两档冷却）
+  const once = { ...rules, history: [{ id: 'o0', rule: 'r1', verdict: 'reject' }, { id: 'o1', rule: 'r1', verdict: 'pending' }] }
+  for (const [label, rs, want, not] of [
+    ['可以', rules, /答应了/],
+    ['这次不行', rules, /记下了「这次不行」。条件还够的话，过几天她可能再提一次；再驳回 1 次就不再自动提/],
+    ['这次不行', once, /这条已经驳回到上限，以后她不会再自动提了/, /过几天她可能再提一次/],
+    ['这次不行', { ...rules, offersOn: false }, /申请通道现在关着，她不会再自动提/, /过几天她可能再提一次/],
+  ]) {
     const s = stateWith()
     const restore = stubFetch({ '/decide': { ok: true }, '/state': s })
     try {
-      const app = await mount({ state: s, rules })
+      const app = await mount({ state: s, rules: rs })
       await button(app.render(), label).props.onClick()
       const note = noteOf(app.render())
       assert.match(note, want, `点「${label}」之后的回执：${note || '（没有）'}`)
+      if (not) assert.doesNotMatch(note, not, `这一次之后不会再提了：${note}`)
     } finally { restore() }
   }
 })
 
-test('#59-17 B 站登录提示卡：只有发评论和回复必须登录', async () => {
+test('B 站登录提示卡：只有发评论和回复必须登录', async () => {
   const { render } = await mount({ state: stateWith(), ow: { hasCookie: false } })
   const c = card(render(), '还没存 B 站登录')
   assert.doesNotMatch(c.all, /看视频画面、读评论、回评都要用到它/, `读热评、看画面不带 cookie 也能做：${c.all}`)
   assert.match(c.all, /发评论和回复要用到它/)
 })
 
-test('#59-18 页头的数叫「记录」，悬停不再把日记算进去', async () => {
+test('页头的数叫「记录」，悬停不再把日记算进去', async () => {
   const s = stateWith()
   const { render } = await mount({ state: s, tab: 'memory', mem: { events: s.counts.total, diaries: 2 } })
   const tree = render()
@@ -340,31 +374,35 @@ test('#59-18 页头的数叫「记录」，悬停不再把日记算进去', asyn
 // 上网页
 // ---------------------------------------------------------------------------
 
-test('#59-19 每次翻几条：挑中的都整条取来，不是她挑着细读', async () => {
+test('每次翻几条：挑中的都整条取来，不是她挑着细读', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'bili' })
   const hint = hintOf(render(), '每次翻几条')
   assert.doesNotMatch(hint, /想读的才会细读/, `说明：${hint}`)
   assert.match(hint, /整条取来/)
 })
 
-test('#59-20 评论区那颗开关只管记不记那一句，热评照样给她读', async () => {
+test('评论区那颗开关只管记不记那一句，热评照样给她读', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'bili' })
   const tree = render()
   assert.equal(findAll(tree, (n) => hasClass(n, 'flabel') && text(n) === '把评论区的话也给她读').length, 0,
     '关掉也读得到热评，开关不能叫「给她读」')
   const hint = hintOf(tree, '记下评论区的一句话')
   assert.match(hint, /热评照样跟着视频给她读/)
+  // 记下的那句不只摆进自我描述，还会让「你今天在评论区读到一个人写…」那张事件卡出得来（events.js 的 someone_said）
+  assert.match(hint, /事件卡/, `关掉的后果要说全：${hint}`)
+  assert.doesNotMatch(hint, /关掉只是不再记这一句/, '关掉连那张卡和自我描述里那一行也没了，不只是少记一句')
+  assert.match(hint, /已经记下的那句最多再摆 7 天/, '已经记下的不会因为关掉就立刻消失')
   assert.match(hint, /每条读几条热评/, '真想不让她读，要指到管热评的那一项')
 })
 
-test('#59-21 up 主黑名单是你填的，她没有拉黑的工具', async () => {
+test('up 主黑名单是你填的，她没有拉黑的工具', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'bili' })
   const hint = hintOf(render(), 'up主黑名单')
   assert.doesNotMatch(hint, /已被大肥鱼拉黑/, `说明：${hint}`)
   assert.match(hint, /她自己拉黑不了/)
 })
 
-test('#59-22 领养人验证：@ 用昵称、uid 认回复；没存的会被重读换掉', async () => {
+test('领养人验证：@ 用昵称、uid 认回复；没存的会被重读换掉', async () => {
   const ow = { hasCookie: true, hasCsrf: true, account: { mid: 4242, name: '小号' } }
   const { render } = await mount({ state: stateWith(), tab: 'bili', ow, owMid: '4242', owName: '小号' })
   const tree = render()
@@ -378,7 +416,7 @@ test('#59-22 领养人验证：@ 用昵称、uid 认回复；没存的会被重�
   assert.match(text(testHint), /没存的会换回已存的值/)
 })
 
-test('#59-23 查多久的记录：数的是有记录的日子，选 1 不叫「今天」', async () => {
+test('查多久的记录：数的是有记录的日子，选 1 不叫「今天」', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'bili' })
   const f = field(render(), '查多久的记录')
   const options = findAll(f, (n) => n.type === 'option').map(text)
@@ -391,14 +429,14 @@ test('#59-23 查多久的记录：数的是有记录的日子，选 1 不叫「�
 // 记忆页
 // ---------------------------------------------------------------------------
 
-test('#59-24 换新会话带过去的是最近几轮原话，不是核心认知', async () => {
+test('换新会话带过去的是最近几轮原话，不是核心认知', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'memory' })
   const hint = hintOf(render(), '聊满多少轮换新会话')
   assert.doesNotMatch(hint, /核心认知和初始信息/, `说明：${hint}`)
   assert.match(hint, /最近几轮原话/)
 })
 
-test('#59-25 记得很牢不是永远：90 天没碰会掉档，身份段只列 5 条', async () => {
+test('记得很牢不是永远：90 天没碰会掉档，身份段只列 5 条', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'memory', mem: { events: 3, diaries: 0 } })
   const c = card(render(), '记忆')
   assert.doesNotMatch(c.all, /固定只代表她忘不掉/, '固定会掉档，也可能被挤出身份段')
@@ -410,8 +448,8 @@ test('#59-25 记得很牢不是永远：90 天没碰会掉档，身份段只列 
 // 保存失败框：越界报错里的名字、标题那句话
 // ---------------------------------------------------------------------------
 
-/** 往一个数字框里打一个越界的数，跑一次自动保存，返回失败框里的字。 */
-async function typeOutOfRange(tab, label) {
+/** 往一个数字框里打一个越界的数，跑一次自动保存，返回失败框里的字（带上 app，好接着点别的）。 */
+async function typeOutOfRangeApp(tab, label) {
   const s = stateWith()
   const app = await mount({ state: s, tab })
   app.render()
@@ -423,10 +461,12 @@ async function typeOutOfRange(tab, label) {
   app.runAutosave()
   const box = findAll(app.render(), (n) => n.type === 'div' && hasClass(n, 'err'))[0]
   assert.ok(box, `「${label}」越界之后要出保存失败框`)
-  return text(box)
+  return { box: text(box), app }
 }
+const typeOutOfRange = async (tab, label) => (await typeOutOfRangeApp(tab, label)).box
+const errBox = (tree) => text(findAll(tree, (n) => n.type === 'div' && hasClass(n, 'err'))[0] || '')
 
-test('#59-26 数字越界时，报错里的名字和控件上的一样', async () => {
+test('数字越界时，报错里的名字和控件上的一样', async () => {
   for (const [tab, label] of [
     ['grow', '成长周期'],
     ['grow', '冷落天数'],
@@ -445,24 +485,39 @@ test('#59-26 数字越界时，报错里的名字和控件上的一样', async (
   }
 })
 
-test('#59-27 数字越界进了失败框，就别再说「不是你填错了」', async () => {
-  const box = await typeOutOfRange('grow', '冷落天数')
+test('数字越界进了失败框，就别再说「不是你填错了」；之后别的保存失败，照这一次的原因说', async () => {
+  const { box, app } = await typeOutOfRangeApp('grow', '冷落天数')
   assert.doesNotMatch(box, /不是你填错了/, `这次确实是数填错了：${box}`)
   assert.match(box, /超出了允许的范围/)
+
+  // 越界的数还停在框里，这时点一个单独提交的开关、偏偏断网：
+  // 失败框要按这一次失败的原因说，不能还说「数超出范围」。
+  const prev = globalThis.fetch
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
+  try {
+    const sw = findAll(field(app.render(), '让她自己攒这股劲'), (n) => n.type === 'button' && n.props.role === 'switch')[0]
+    assert.ok(sw, '「让她自己攒这股劲」要是一个开关')
+    sw.props.onClick()
+    await new Promise((r) => setTimeout(r, 20))
+  } finally { globalThis.fetch = prev }
+  const after = errBox(app.render())
+  assert.match(after, /Failed to fetch/, `失败框要换成这一次的失败：${after}`)
+  assert.doesNotMatch(after, /超出了允许的范围/, `这一次是断网，不是数填错了：${after}`)
+  assert.match(after, /这一项没存上/)
 })
 
 // ---------------------------------------------------------------------------
 // 住所页、数据页
 // ---------------------------------------------------------------------------
 
-test('#59-28 她的请求：放一天没人答会自动记成以后再说，之后补答不了', async () => {
+test('她的请求：放一天没人答会自动记成以后再说，之后补答不了', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'home' })
   const note = card(render(), '她的请求').note
   assert.match(note, /24 小时没人答的会自动记成「以后再说」/, `说明：${note}`)
   assert.match(note, /补答不了/)
 })
 
-test('#59-29 重开、重新搭一间之后，指到「状态」页的「现在叫醒大肥鱼」', async () => {
+test('重开、重新搭一间之后，指到「状态」页的「现在叫醒大肥鱼」', async () => {
   // 重置卡本身
   {
     const { render } = await mount({ state: stateWith(), tab: 'data' })
@@ -496,7 +551,7 @@ test('#59-29 重开、重新搭一间之后，指到「状态」页的「现在�
   }
 })
 
-test('#59-30 升级卡：新包名的副本在 node_modules 下多一层 @ssamurias', async () => {
+test('升级卡：新包名的副本在 node_modules 下多一层 @ssamurias', async () => {
   const s = stateWith({ upgrade: { stale: true, why: '源目录里是 0.9.6，正在跑的却是 0.9.5', sourcePath: 'D:/src/dsh-fish' } })
   const { render } = await mount({ state: s, tab: 'data' })
   const c = card(render(), '升级没有真正装进去')
@@ -504,7 +559,7 @@ test('#59-30 升级卡：新包名的副本在 node_modules 下多一层 @ssamur
   assert.doesNotMatch(c.all, /删掉 node_modules\\dsh-fish/, '只删老目录名，用新包名装的人删不到')
 })
 
-test('#59-31 导出报告时没有正文：别让人去点只管显示的「展开报告」', async () => {
+test('导出报告时没有正文：别让人去点只管显示的「展开报告」', async () => {
   const reports = { dates: ['2026-11-08'], date: '2026-11-08', md: '' }
   const app = await mount({ state: stateWith(), tab: 'data', reports })
   button(app.render(), '导出报告').props.onClick()
