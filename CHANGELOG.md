@@ -76,7 +76,7 @@
 - **一批 issue（#60–#69）里的真 bug 与两处口径**：这十条都是同一位用户在 2026-11-08 凌晨提交的，逐条对过代码，能改的都改了。
   - **#60 换会话后旁听再也不响**：新 home.json 的 `turns` 从 0 起，`hearAt` 却继承了上一轮的 39，`turns - hearAt` 永远是负数。轮换时 `hearAt` 跟着归零；`test/mem.test.mjs` 那条断言从 7 改成 0。
   - **#61 工具收窄永远收不窄**：`tools.restrict()` 只要名单里有一个当前工具表里没有的名字（宿主的 `read_image`、外部桥工具）就整批延后重试，而 `herToolsNow()` 恒含 `read_image`。现在只对**我方会注册**的名字延后，外部名字这次不在就从名单剔除并记一行日志；自己的名字到齐后另有 3 拍宽限，见下面 #61 的时序追问。
-  - **#62 上网开关四条路各认各的**：新增 `biliOn(config)`（`bili.enabled !== false`），`bili_look` / `bili_watch` / `bili_speak` / 发评论 / 查回复 / 身份文档「上网」全部过它；`bili_watch` 抽帧前补 `watchBlocked()`，黑名单与最短时长终于也管点名看画面。issue 里「`browse.window`/`perDay` 没人用」已过时——自动刷站还在读，没动。
+  - **#62 上网开关四条路各认各的**：新增 `biliOn(config)`（`bili.enabled !== false`），`bili_look` / `bili_watch` / `bili_speak` / 发评论 / 查回复 / 身份文档「上网」全部过它；`bili_watch` 抽帧前补 `watchBlocked()`，黑名单终于也管点名看画面（点名那条不查最短时长，最短时长只管列表）。issue 里「`browse.window`/`perDay` 没人用」已过时——自动刷站还在读，没动。
   - **#63 回评论三处**：主楼改成从最近 7 天她自己的评论里找被回复那条所在的楼，`bili_speak` 新增可选 `rootRpid` 点名；额度判定先认主人（`replyPerDay=0` 也挡不住回主人）；`loginMid` 在 `account.mid` 缺失时改读 cookie 的 `DedeUserID`，都没有就返回 0——不再退回主人 mid 把主人回她的话当她自己补的丢掉。
   - **#64 身份文档跟设置脱节**：`/config` 保存后无条件重写身份文档；`dream` 跟 `dream.enabled` 走（`index.js` 的收窄同步）；定时工具说明书按 `tools.allow` 现拼，只放一个时不再说「四个都有」。
   - **#65 数据页会丢数据**：迁移到已有 `events.jsonl` 的文件夹直接拒绝，复制改 `COPYFILE_EXCL`；备份单文件 8MB 上限对 `events.jsonl` 豁免，恢复时缺事件流报失败；重开一局只有启动补的默认 seed 时允许导入，导入的 seed 标 `source:'import'`。
