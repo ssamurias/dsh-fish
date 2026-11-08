@@ -21,6 +21,7 @@ import {
   collectBackup,
   checkBundle,
   restoreBackup,
+  badTextFiles,
   backupFileName,
   quarantineDirFor,
 } from '../lib/backup.js'
@@ -221,8 +222,11 @@ test('界面与路由都接上了（别只写了个模块）', async () => {
   assert.match(o, /\['\/backup\/restore'/)
   // 打包时把恢复上限也带进去（collectBackup(root, { restoreLimit })），还是这一个 root
   assert.match(o, /collectBackup\(root[,)]/)
-  // 恢复必须走「先封存」那条路，不许直接覆盖
-  assert.match(o, /restoreBackup\(b, root\)/)
+  // 恢复必须走「先封存」那条路，不许直接覆盖；skipBad 是 issue #65 的「人看过名单才跳过」
+  assert.match(o, /restoreBackup\(b, root[,)]/)
+  assert.match(o, /skipBad/)
+  // 备份恢复这条不拿「正文是不是 UTF-8」整包拦——旧包里本来就可能带替换符
+  assert.match(o, /readBody\(req, restoreLimit, \{ mojibake: false \}\)/)
 })
 
 test('备份：事件流再大也要进包，别的超限文件才 skipped（issue #65）', async () => {
@@ -793,5 +797,85 @@ test('别的文件原始字节合计守 64MB（事件流不算在里面）：超
     assert.equal(b.bytes, b.files.reduce((n, f) => n + f.size, 0))
   } finally {
     await rm(box, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+// ---- issue #65：一份包里混着坏文件时，先点名，再让人选跳不跳 ----
+function bundleWithBadText(extra = {}) {
+  return {
+    format: BACKUP_FORMAT,
+    schema: EVENT_SCHEMA_VERSION,
+    createdAt: '2026-11-09T00:00:00.000Z',
+    ...extra,
+    files: [
+      { path: 'events.jsonl', enc: 'utf8', size: 11, data: '{"id":"x"}\n' },
+      { path: 'config.json', enc: 'utf8', size: 7, data: '{"a":1}' },
+      // 早先导出时丢过字节，留下的是替换符
+      { path: 'home/她的身份.md', enc: 'utf8', size: 18, data: '# 她\n今天看\ufffd了海。\n' },
+    ],
+  }
+}
+
+test('恢复撞上碎字文件：先把坏文件点出来，一个文件都不动，等人拿主意（issue #65）', async () => {
+  const dest = await mkdtemp(join(tmpdir(), 'fish-restore-'))
+  try {
+    await writeFile(join(dest, 'config.json'), '{"old":true}')
+    const bundle = bundleWithBadText()
+    assert.deepEqual(badTextFiles(bundle), ['home/她的身份.md'])
+    const r = await restoreBackup(bundle, dest)
+    assert.equal(r.ok, false)
+    assert.equal(r.needDecision, true)
+    assert.deepEqual(r.badFiles, ['home/她的身份.md'])
+    assert.equal(r.badCount, 1)
+    assert.match(r.why, /碎字/)
+    // 现在的档一个字节都没动：没有封存、没有写、也没有跳到一半
+    assert.equal(await readFile(join(dest, 'config.json'), 'utf8'), '{"old":true}')
+    await assert.rejects(readFile(join(dest, 'events.jsonl'), 'utf8'))
+  } finally {
+    await rm(dest, { recursive: true, force: true })
+  }
+})
+
+test('人选了跳过：坏文件不写回去，其余照常恢复，回执点名跳过了谁（issue #65）', async () => {
+  const dest = await mkdtemp(join(tmpdir(), 'fish-restore-'))
+  try {
+    const r = await restoreBackup(bundleWithBadText(), dest, { skipBad: true })
+    assert.equal(r.ok, true, r.why)
+    assert.deepEqual(r.skippedBad, ['home/她的身份.md'])
+    assert.equal(r.restored, 2, '写明恢复了几个，不把跳过的算进去')
+    assert.equal(await readFile(join(dest, 'config.json'), 'utf8'), '{"a":1}')
+    assert.equal(await readFile(join(dest, 'events.jsonl'), 'utf8'), '{"id":"x"}\n')
+    await assert.rejects(readFile(join(dest, 'home', '她的身份.md'), 'utf8'))
+  } finally {
+    await rm(dest, { recursive: true, force: true })
+  }
+})
+
+test('不是 UTF-8 的文本文件按原字节装进包、在 nonUtf8 里点名，装回来字节一模一样（issue #65）', async () => {
+  const root = await makeRoot()
+  const dest = await mkdtemp(join(tmpdir(), 'fish-restore-'))
+  try {
+    // GBK 的「你好」：按 utf8 硬读会变成两个替换符，原字节就回不来了
+    const gbk = Buffer.from([0xc4, 0xe3, 0xba, 0xc3])
+    await mkdir(join(root, 'home'), { recursive: true })
+    await writeFile(join(root, 'home', '旧笔记.md'), gbk)
+    const b = await collectBackup(root)
+    const f = b.files.find((x) => x.path === 'home/旧笔记.md')
+    assert.equal(f.enc, 'base64', '不是 UTF-8 的文本只能按原字节装')
+    assert.equal(f.text, true, '带一个「本来是文本」的标记')
+    assert.deepEqual([...Buffer.from(f.data, 'base64')], [...gbk])
+    assert.deepEqual(b.nonUtf8, ['home/旧笔记.md'])
+    // 正常的 UTF-8 文本照旧明文装，不混进名单
+    const ok = b.files.find((x) => x.path === 'home/她的身份.md')
+    assert.equal(ok.enc, 'utf8')
+    assert.equal(ok.text, undefined)
+    assert.ok(!b.nonUtf8.includes('home/她的身份.md'))
+
+    const r = await restoreBackup(b, dest)
+    assert.equal(r.ok, true, r.why)
+    assert.deepEqual([...(await readFile(join(dest, 'home', '旧笔记.md')))], [...gbk])
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await rm(dest, { recursive: true, force: true })
   }
 })
