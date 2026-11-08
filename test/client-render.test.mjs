@@ -271,6 +271,16 @@ function findAll(node, pred, out = []) {
 const inputOf = (fld, type) => findAll(fld, (n) => n.type === type)[0]
 const switchOf = (fld) => findAll(fld, (n) => n.props?.role === 'switch')[0]
 
+/** 到「状态」页点「现在叫醒大肥鱼」：点完整页重读一次（load），再回到原来那一页。 */
+async function reloadByWake(app, back) {
+  await app.tab('状态')
+  const wake = findAll(app.tree, (n) => n.type === 'button' && textOf(n).join('') === '现在叫醒大肥鱼')[0]
+  assert.ok(wake, '「现在叫醒大肥鱼」要在（点完会整页重读）')
+  wake.props.onClick()
+  await app.settle()
+  return app.tab(back)
+}
+
 // ---------------------------------------------------------------- 1：第一次读 /state 就失败
 
 test('第一次读 /state 就失败：整节不崩，显示「读不到状态。」和原因', async () => {
@@ -431,13 +441,47 @@ test('「安静多久才搭话」停手 700ms 再存，清空和越界不写盘�
   } finally { app.unmount() }
 })
 
+test('「安静多久才搭话」清空或打 25 之后离开输入框：框里收成 1 或 24，照框里的数存一次', async () => {
+  const app = await mount()
+  try {
+    await app.advance(1000)
+    await app.tab('成长')
+    const input = () => inputOf(app.field('安静多久才搭话'), 'input')
+    const idle = () => app.posts().filter((c) => c.body?.proactive && 'minIdleHours' in c.body.proactive)
+      .map((c) => c.body.proactive.minIdleHours)
+
+    // 清空，再点别处：Num 离开输入框时按上下限收一次，空框落到下限 1
+    input().props.onChange({ target: { value: '' } })
+    await app.settle()
+    input().props.onBlur({ target: { value: '' } })
+    await app.settle()
+    assert.equal(String(input().props.value), '1', '框里收成下限')
+    await app.advance(699)
+    assert.deepEqual(idle(), [], '清空那一下不写，离开输入框也是停手 700ms 再存')
+    await app.advance(1)
+    assert.deepEqual(idle(), [1], '存的是框里显示的那个数')
+
+    // 打 25，再点别处：收成上限 24，存的也是 24
+    input().props.onChange({ target: { value: '25' } })
+    await app.settle()
+    input().props.onBlur({ target: { value: '25' } })
+    await app.settle()
+    assert.equal(String(input().props.value), '24', '框里收成上限')
+    await app.advance(700)
+    assert.deepEqual(idle(), [1, 24], '25 不写，收成的 24 存一次')
+  } finally { app.unmount() }
+})
+
 // ---------------------------------------------------------------- 4：查多久的记录
 
 function histRoutes(held) {
   return (m, p) => {
     if (!p.startsWith('/history')) return undefined
     const days = daysOf(p)
-    const body = { days, total: days, groups: [{ date: '2026-11-01', items: [] }] }
+    // 每份的视频标题带着天数：列表摆的是哪一份，看标题就知道。14 天那份多于一页，会有翻页条
+    const items = Array.from({ length: Math.min(days, 20) }, (_, i) =>
+      ({ bvid: `BV1xx411c7${String(i).padStart(2, '0')}`, title: `${days} 天那份`, up: '某UP', how: 'glance' }))
+    const body = { days, total: days, groups: [{ date: '2026-11-01', items }] }
     return held[days] ? held[days].wait({ body }) : { body }
   }
 }
@@ -473,6 +517,112 @@ test('「查多久的记录」：先选 90 再选 7，90 那次晚到也不盖�
     await app.settle()
     assert.equal(inputOf(app.field('查多久的记录'), 'select').props.value, '7')
     assert.ok(app.text().includes('共 1 天 · 7 条'), '下拉框是 7，列表也要是 7 天的')
+  } finally { app.unmount() }
+})
+
+test('「查多久的记录」：新选的天数没读到，就说没读到，不说「还没有记录」，也不摆别的天数的列表', async () => {
+  const pick = (app, v) => inputOf(app.field('查多久的记录'), 'select').props.onChange({ target: { value: v } })
+  const failing = new Set()
+  const routesWith = (held) => (m, p) => (p.startsWith('/history') && failing.has(daysOf(p))
+    ? { status: 500, body: { error: 'boom' } }
+    : histRoutes(held)(m, p))
+
+  // 一：首屏 14 天那次挂住，选 90，90 那次失败，再放开 14 天那次（被丢掉）
+  {
+    failing.clear(); failing.add(90)
+    const held = { 14: gate() }
+    const app = await mount({ routes: routesWith(held) })
+    try {
+      await app.tab('上网')
+      pick(app, '90')
+      await app.settle()
+      held[14].open()
+      await app.settle()
+      const txt = app.text()
+      assert.equal(inputOf(app.field('查多久的记录'), 'select').props.value, '90')
+      assert.ok(txt.includes('没读到'), `要说没读到，实际：${txt.slice(txt.indexOf('查多久的记录'), txt.indexOf('查多久的记录') + 200)}`)
+      assert.ok(!txt.includes('还没有记录'), '不能说成还没有记录')
+      assert.ok(!txt.includes('共 0 天'), '也不能说共 0 天')
+      assert.ok(!txt.includes('14 条') && !txt.includes('14 天那份'), '14 天那次晚到也不摆出来')
+    } finally { app.unmount() }
+  }
+
+  // 二：14 天那次正常回来，选 90 失败：不把 14 天的列表摆在 90 下面；再选 7 读到了就照常列
+  {
+    failing.clear(); failing.add(90)
+    const app = await mount({ routes: routesWith({}) })
+    try {
+      await app.tab('上网')
+      assert.ok(app.text().includes('共 1 天 · 14 条'))
+      assert.ok(app.text().includes('第 1 / 2 页'), '14 天那份有翻页条')
+      pick(app, '90')
+      await app.settle()
+      assert.ok(app.text().includes('没读到'))
+      assert.ok(!app.text().includes('14 条') && !app.text().includes('14 天那份'), '下拉框是 90，不能还摆着 14 天的')
+      assert.ok(!app.text().includes('页 · 一页'), '14 天那份的翻页条也不摆')
+      // 90 好了，整页重读一次：这回读到了，列表照常列，那句收起来
+      failing.clear()
+      await reloadByWake(app, '上网')
+      assert.ok(app.text().includes('共 1 天 · 90 条') && app.text().includes('90 天那份'))
+      assert.ok(!app.text().includes('没读到'), '读到了，那句收起来')
+      // 换成 7 天也照常
+      pick(app, '7')
+      await app.settle()
+      assert.ok(app.text().includes('共 1 天 · 7 条') && app.text().includes('7 天那份'))
+      assert.ok(!app.text().includes('没读到'))
+    } finally { app.unmount() }
+  }
+
+  // 三：列表已经是当前天数的，之后整页重读时这一项失败一次：列表留着，不收起来
+  {
+    failing.clear()
+    const app = await mount({ routes: routesWith({}) })
+    try {
+      await app.tab('上网')
+      assert.ok(app.text().includes('共 1 天 · 14 条'))
+      failing.add(14)
+      const before = app.gets('/history').length
+      await reloadByWake(app, '上网')
+      assert.equal(app.gets('/history').length, before + 1, '重读时要再取一次 /history')
+      assert.ok(app.text().includes('共 1 天 · 14 条') && app.text().includes('14 天那份'), '已经摆着的这个天数的列表留着')
+      assert.ok(!app.text().includes('没读到'))
+    } finally { app.unmount() }
+  }
+})
+
+// ---------------------------------------------------------------- 打开页面时设置没读全
+
+test('打开页面时 /beliefs 失败、/config 没灌进来：改一项也不整表写盘，说清楚为什么没存；读全以后照常存', async () => {
+  const cfg = normalizeConfig({ comment: { atOwner: false } })
+  let beliefsOk = false
+  const app = await mount({
+    cfg,
+    routes: (m, p) => (m === 'GET' && p === '/beliefs' && !beliefsOk ? { status: 500, body: { error: 'boom' } } : undefined),
+  })
+  try {
+    await app.advance(1000)
+    assert.deepEqual(app.posts(), [], '打开页面不写盘')
+    await app.tab('成长')
+    inputOf(app.field('每天醒几次'), 'select').props.onChange({ target: { value: '2' } })
+    await app.settle()
+    await app.advance(2000)
+    assert.deepEqual(app.posts(), [], '界面上除了 /state 那几项都是初值，不能整表写下去')
+    assert.ok(app.text().includes('设置还没从盘上读全'), '要说清这次为什么没存')
+
+    // 之后整页重读成功：那句收起来，再改一项照常停手 700ms 存，带的是盘上的值
+    beliefsOk = true
+    await reloadByWake(app, '成长')
+    assert.ok(!app.text().includes('设置还没从盘上读全'), '读全了，那句不再成立')
+    await app.advance(1000)
+    assert.deepEqual(app.posts(), [], '重读本身不写盘')
+    inputOf(app.field('每天醒几次'), 'select').props.onChange({ target: { value: '2' } })
+    await app.settle()
+    await app.advance(700)
+    const posts = app.posts()
+    assert.equal(posts.length, 1)
+    assert.equal(posts[0].body.wakesPerDay, 2)
+    assert.equal(posts[0].body.comment.atOwner, false, '带的是盘上的 atOwner')
+    assert.deepEqual(posts[0].body.avoid?.keywords, cfg.avoid?.keywords, '屏蔽词是盘上的，不是界面初值')
   } finally { app.unmount() }
 })
 
