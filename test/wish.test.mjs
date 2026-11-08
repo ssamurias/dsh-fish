@@ -126,8 +126,10 @@ test('判断坏掉时宁可多摆一条，不能把她的心事静默吞掉（is
 })
 
 test('调度器摆桌子、算劲儿、散尾三处都拿白名单剔一遍（issue #58 / PR #70）', () => {
+  // 只数调用点；三处真跑起来剔得对不对，见 test/wish-inhand.test.mjs（叫醒、主动回合、冷会话）。
   const src = readFileSync(new URL('../lib/scheduler.js', import.meta.url), 'utf8')
-  assert.equal((src.match(/has: toolInHandNow\(\)/g) ?? []).length, 3, '漏一处，桌上还会摆已经到手的东西')
+  const calls = src.match(/(?<!function )\btoolInHandNow\(/g) ?? []
+  assert.equal(calls.length, 3, '漏一处，桌上还会摆已经到手的东西')
 })
 
 test('「这次不行」不摆：不同意就是不问了，再提一次就成了追问', () => {

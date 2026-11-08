@@ -8,6 +8,7 @@
  * 等人答，她自己却再也想不起来。
  *
  * 这里照 `lib/index.js` 的调用注册收窄，假宿主只给它真有的工具，再真跑叫醒与主动回合。
+ * 后半是重启后的冷会话：她的 agent 要到第一次被叫起来才建，在那之前「到手」核实不了。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -57,8 +58,11 @@ function herAgent(cwd, names) {
   return { agent, sent }
 }
 
-/** 叫醒与主动回合用的宿主：投进去的那一刻把处境段一起记下来。 */
-function fakeHost() {
+/**
+ * 叫醒与主动回合用的宿主：投进去的那一刻把处境段一起记下来。
+ * `onResolve`：冷会话用——宿主第一次被要这条会话的 agent 时才建它（发 agent/created）。
+ */
+function fakeHost({ onResolve } = {}) {
   const prompts = []
   const registry = { get: () => ({ sessionIds: ['s1'] }), archivedSessionIds: [] }
   const ctx = {
@@ -67,9 +71,10 @@ function fakeHost() {
     sessionController: {
       create: async () => {},
       prompt: async () => {},
-      resolveAgent: async (sessionId) => ({
-        agent: { followup: (message) => { prompts.push({ sessionId, section: getWakeSection() }) } },
-      }),
+      resolveAgent: async (sessionId) => {
+        onResolve?.(sessionId)
+        return { agent: { followup: (message) => { prompts.push({ sessionId, section: getWakeSection() }) } } }
+      },
     },
     logger: { info() {}, warn() {}, error() {} },
   }
@@ -90,8 +95,9 @@ async function wish(root, { text, subject, ts }) {
 /**
  * 一间临时的家：按配置注册收窄，宿主只给 `host` 里的工具。
  * 叫醒的兜底定时器（2s / 30s / 90s）压成几毫秒，别让测试进程挂着等。
+ * `cold`：重启后的冷会话——她的 agent 先不建，等 `warm()`（交给 fakeHost 的 onResolve）。
  */
-async function withHer({ allow = [], host }, fn) {
+async function withHer({ allow = [], host, cold = false }, fn) {
   const root = await mkdtemp(join(tmpdir(), 'fish-inhand-'))
   const oldHomes = process.env.DSH_FISH_HOMES
   process.env.DSH_FISH_HOMES = join(root, 'homes.json')
@@ -123,8 +129,10 @@ async function withHer({ allow = [], host }, fn) {
       retryMax: 1,
     })
     const her = herAgent(herDir, host)
-    pctx.created(her.agent)
-    return await fn(root, { sent: her.sent, logs })
+    let made = false
+    const warm = () => { if (!made) { made = true; pctx.created(her.agent) } }
+    if (!cold) warm()
+    return await fn(root, { sent: her.sent, logs, warm })
   } finally {
     globalThis.setTimeout = realST
     clearWakeSection()
@@ -203,5 +211,65 @@ test('只有这一张还没到手的卡：劲儿照算，主动回合照开，�
     assert.ok(!logs.some((l) => l.includes('桌上没有可说的东西')), logs.join(' | '))
     assert.equal(h.prompts.length, 1, logs.join(' | '))
     assert.match(h.prompts[0].section, new RegExp(READ_IMAGE_WISH))
+  })
+})
+
+// ---- 冷会话（重启以后）----
+// 宿主重启后复用她那条会话，不新建；agent 要等第一次被叫起来（探活、投递）才建，
+// agent/created 也到那时才发。主动回合的劲儿在那之前就要算，叫醒的桌子也曾在那之前摆。
+
+test('冷会话：已经到手的那张卡不单独推她开主动回合（issue #58）', async () => {
+  await withHer({ allow: ['web_search'], host: [...HER_TOOLS, 'web_search'], cold: true }, async (root, { warm, sent }) => {
+    await wish(root, { text: SEARCH_WISH, subject: 'web_search', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
+    assert.equal(sent.length, 0, '前提：她的 agent 还没建，收窄还没下')
+    const h = fakeHost({ onResolve: warm })
+    const logs = []
+    const s = startScheduler(h.ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+    try {
+      await s.tick()
+    } finally {
+      s.dispose()
+    }
+    assert.equal(h.prompts.length, 0, (h.prompts[0]?.section ?? '').slice(0, 300))
+    assert.ok(logs.some((l) => l.includes('桌上没有可说的东西')), logs.join(' | '))
+  })
+})
+
+test('冷会话：叫醒时先接上会话再摆桌子，已经到手的卡不摆（issue #58）', async () => {
+  await withHer({ allow: ['web_search'], host: [...HER_TOOLS, 'web_search'], cold: true }, async (root, { warm, sent }) => {
+    const id = await wish(root, { text: SEARCH_WISH, subject: 'web_search' })
+    assert.equal((await settleAsk(root, { askId: id, verdict: 'approve' })).ok, true)
+    assert.equal(sent.length, 0, '前提：她的 agent 还没建，收窄还没下')
+    const h = fakeHost({ onResolve: warm })
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    assert.equal(h.prompts.length, 1)
+    assert.doesNotMatch(h.prompts[0].section, new RegExp(SEARCH_WISH))
+  })
+})
+
+test('冷会话、宿主上没有 read_image：叫醒的桌上照摆；核实之前它不单独推她醒（issue #58 的取舍）', async () => {
+  await withHer({ host: OWN_ONLY, cold: true }, async (root, { warm, sent }) => {
+    await wish(root, { text: READ_IMAGE_WISH, subject: 'read_image', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
+    assert.equal(sent.length, 0, '前提：她的 agent 还没建，收窄还没下')
+
+    // 劲儿算在会话接上之前：这时只有配置里的白名单可看，read_image 在里面，先当到手。
+    // 这样已经到手的卡（上一条）不会把她推起来；代价是这张也要等她醒着时才算数。
+    const quiet = fakeHost({ onResolve: warm })
+    const logs = []
+    const s = startScheduler(quiet.ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+    try {
+      await s.tick()
+    } finally {
+      s.dispose()
+    }
+    assert.equal(quiet.prompts.length, 0)
+    assert.ok(logs.some((l) => l.includes('桌上没有可说的东西')), logs.join(' | '))
+
+    // 叫醒：会话先接上，按她这条会话真有的工具摆——read_image 没有，卡照摆
+    const h = fakeHost({ onResolve: warm })
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    assert.equal(h.prompts.length, 1)
+    assert.match(h.prompts[0].section, new RegExp(READ_IMAGE_WISH))
+    assert.match(h.prompts[0].section, /你问过，还没有答复/)
   })
 })
