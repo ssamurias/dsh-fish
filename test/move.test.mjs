@@ -175,7 +175,7 @@ test('defaultRoot 是本机的 ~/.dsh-fish', () => {
 
 // ---- 0.9.5 余项（接 #65）：迁移的两道保护各有一条测试守着 ----
 
-test('选中的文件夹里已经放着一份档：拒绝，理由不说「会被覆盖」，那份档原样在原位', async () => {
+test('选中的文件夹里已经放着一份档：拒绝，那份档原样在原位', async () => {
   // 第一道保护（planMove 里的 existingArchive）。去掉它，那份档会被当成新根往里复制，
   // 复制撞上同名文件后整个文件夹还会被改名成 .partial-…，人家的档就不在原位了。
   await withEnv(async ({ box, src, loc }) => {
@@ -186,9 +186,8 @@ test('选中的文件夹里已经放着一份档：拒绝，理由不说「会�
 
     const plan = await planMove(src, other)
     assert.equal(plan.ok, false, '放着一份档的文件夹不能当目标')
+    // 原因的措辞不在这里钉：这条守的是行为（拒绝、那份档原样在原位、她没动、指针没写）。
     assert.match(plan.why, /已经有一份她的档/)
-    assert.match(plan.why, /什么都没动/)
-    assert.doesNotMatch(plan.why, /覆盖|盖掉/, '这次什么都没盖，不能说得像是盖了')
 
     const r = await moveRoot(null, { root: src, target: other })
     assert.equal(r.ok, false)

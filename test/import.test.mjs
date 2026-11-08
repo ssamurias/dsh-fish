@@ -385,3 +385,20 @@ test('导入回执分开报「这次新放行几个」和「名单现在共几�
     assert.equal(config.tools.allow.length, 4)
   })
 })
+
+test('白名单写不进去：导入照样成功，回执带上原因，不说这次新加了几个', async () => {
+  await withRoot(async (root) => {
+    // 让配置读写都失败：config.json 是个文件夹
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(root, 'config.json'), { recursive: true })
+    const r = await applyHandover(DOC, root)
+    assert.equal(r.ok, true, r.why)
+    assert.equal(typeof r.toolsError, 'string')
+    assert.ok(r.toolsError.length > 0, '要说为什么没写进去')
+    // 只回错误码：错误信息里可能带本机路径，设置页上不出现路径
+    assert.match(r.toolsError, /^(?:[A-Z][A-Z0-9_]*|写配置失败)$/)
+    assert.deepEqual(r.toolsAdded, [])
+    const { events } = await readEvents(root)
+    assert.ok(events.some((e) => e.type === 'seed'), '人设照样写进去了')
+  })
+})

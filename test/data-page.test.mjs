@@ -137,7 +137,7 @@ const BUNDLE = {
   fitsRestore: true,
 }
 
-test('备份回执：没打进包的文件一个个全列出来，不说成「太大」，照规矩不带的 logs/ 不算', async () => {
+test('备份回执：没打进包的文件列出名字、各带原因，不说成「太大」，照规矩不带的 logs/ 不算', async () => {
   // 0.9.5：只列前 3 条再写「等」，owner.json、state.json 落进了「等」里；
   // 每份档都有的 logs/ 被说成「另有 1 个文件太大没打进包」。
   const skipped = [
@@ -233,4 +233,72 @@ test('数据页的说明照代码说：迁移到放着一份档的文件夹会�
   const backup = cardText(tree, '备份与恢复')
   assert.match(backup, /登录凭据/, 'owner.json 原样在包里，备份卡要说')
   assert.match(backup, /别随手发给别人/)
+})
+
+// ---- 审查后补的（接 #65）----
+
+test('备份回执：顶层以外照规矩没带的文件夹要单独说出来，卡片上说过的 logs/、backups/ 不重复', async () => {
+  // 目录名在哪一层都认：她房间里叫 backups、node_modules 的文件夹也不带。
+  // 它们只记在 excluded 里，回执要是不提，就是不声不响地丢了。
+  const { tree, sets } = await render({ tab: 'data' })
+  const excluded = ['backups/', 'logs/', 'home/backups/', 'home/proj/node_modules/']
+  await withFetch({ 'GET /backup': { ...BUNDLE, skipped: [], excluded } }, async () => {
+    await button(tree, '备份成一份文件').props.onClick()
+  })
+  const msg = last(sets, 'backupMsg')
+  const m = msg.match(/这次没带：([^。]*)。/)
+  assert.ok(m, `回执要说哪些文件夹照规矩没带：${msg}`)
+  assert.equal(m[1], 'home/backups/、home/proj/node_modules/')
+  assert.doesNotMatch(msg, /没打进包/, '它们不是「没装进去」')
+})
+
+test('备份回执：没打进包的文件很多时只列前 10 个，报出真实个数，说完整名单在哪', async () => {
+  const skipped = Array.from({ length: 30 }, (_, i) => `media/p${String(i).padStart(2, '0')}.jpg（总量已到 64MB 上限）`)
+  const { tree, sets } = await render({ tab: 'data' })
+  await withFetch({ 'GET /backup': { ...BUNDLE, skipped } }, async () => {
+    await button(tree, '备份成一份文件').props.onClick()
+  })
+  const msg = last(sets, 'backupMsg')
+  assert.match(msg, /有 30 个文件没打进包/)
+  for (const s of skipped.slice(0, 10)) assert.ok(msg.includes(s), `前 10 个要列出来：${s}`)
+  assert.ok(!msg.includes(skipped[10]), '第 11 个起不再一个个列')
+  assert.match(msg, /还有 20 个/)
+  assert.match(msg, /skipped/)
+})
+
+test('恢复回执：个数按真实条数说，接口只带回前 200 条也不能说成 200 个', async () => {
+  const names = Array.from({ length: 200 }, (_, i) => `media/p${String(i).padStart(3, '0')}.jpg（总量已到 64MB 上限）`)
+  const { tree, sets, made } = await render({ tab: 'data' })
+  await withFetch({
+    'POST /backup/restore': { ok: true, restored: 3, quarantined: '', skipped: names, skippedCount: 250 },
+  }, async () => {
+    button(tree, '从备份恢复').props.onClick()
+    const input = made.find((el) => el.tag === 'input')
+    input.files = [{ text: async () => JSON.stringify(BUNDLE) }]
+    await input.onchange()
+  })
+  const msg = last(sets, 'backupMsg')
+  assert.match(msg, /有 250 个文件没打进去/)
+  assert.ok(msg.includes(names[0]) && msg.includes(names[9]))
+  assert.ok(!msg.includes(names[10]))
+  assert.match(msg, /还有 240 个/)
+})
+
+test('导入回执：白名单没写进去时直说，不写成「这次新加 0 个」', async () => {
+  const { tree, sets } = await render({
+    tab: 'data',
+    importInfo: { canImport: true, reason: '', persona: { imported: false, source: '' }, template: '' },
+    importAsk: true,
+    importText: '你是一条鱼。',
+  })
+  await withFetch({
+    'POST /import': { ok: true, name: '', tools: ['skill', 'web_search'], toolsAdded: [], toolsError: 'EPERM', bodyChars: 6, day: 1 },
+  }, async () => {
+    await button(tree, '接过来').props.onClick()
+  })
+  const note = last(sets, 'note')
+  assert.match(note, /白名单没写进去/)
+  assert.match(note, /EPERM/)
+  assert.match(note, /2 个工具这次都没放行/)
+  assert.doesNotMatch(note, /新加 0 个|一共 2 个/)
 })
