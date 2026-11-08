@@ -3,7 +3,7 @@
  *
  * 每一条都从外面看行为：身份文档写了什么、路由回了什么、页面印了什么。
  *   1. 「总共留几条自述」真的进身份文档；记忆页「折成一行」和文档那一行同一个数
- *   2. 「记你原话的间隔」设成 0 时，群里他本人的话也不记
+ *   2. 「记你原话的间隔」设成 0 时，群里主人本人的话也不记
  *   3. 白名单里没有 schedule_create 时，定时说明不教她新建，首行只说真放了的动作
  *   5. 每天醒 0 次 / 每天事件 0 条时，手动叫醒被拒的理由说的是「手动也叫不醒」
  *   6. 状态页的「认知矛盾」用总数；体检卡写清「共 N 处，列出前 3 处」
@@ -14,7 +14,8 @@
  *  12. 成长期过后，「下一个成长瓶颈」不指着已经过了或已兜底放行的那道；
  *      选卡仍然给第一道还没真过的门加权（立场清单只认真过的门）
  *   另：/state 的「稳定」按她真读到的那份身份文档量（同样带上「总共留几条自述」）；
- *      日记删过旧文件时，身份文档说清翻得到的是哪几篇
+ *      日记删过旧文件时，身份文档说清翻得到的是哪几篇；her_diary 和记忆页的篇数跟身份文档同一个口径；
+ *      成长期满以后，状态页写清立场还在等哪道真过的门
  */
 
 import { test } from 'node:test'
@@ -33,6 +34,8 @@ import { pick } from '../lib/generator.js'
 import { CATALOG } from '../lib/events.js'
 import { wakeNow } from '../lib/scheduler.js'
 import { registerObserve } from '../lib/observe.js'
+import { registerHerDiary } from '../lib/herdiary.js'
+import { heardLine } from '../lib/use.js'
 
 const DAY = 86_400_000
 const iso = (ms) => new Date(ms).toISOString()
@@ -191,9 +194,31 @@ test('第 1 条：状态页的「稳定」量的是她真读到的那份身份�
   })
 })
 
+test('第 1 条：事件流没变、只改了「总共留几条自述」，状态页的「稳定」不拿改之前的缓存', async () => {
+  await withRoot(async (root) => {
+    const twelve = TWENTY.slice(0, 12)
+    const t0 = Date.now() - 3 * DAY
+    await writeEvents(root, [
+      line('seed', '你不是助手。', t0),
+      ...twelve.map((text, i) => line('utterance', text, t0 + (i + 1) * 60_000)),
+    ])
+    const seen = []
+    for (const sleepKeep of [2, 0]) {
+      await writeConfig(normalizeConfig({ memory: { beliefsShown: 3, sleepKeep } }), root)
+      await writeSelfDoc(root)
+      const text = await doc(root)
+      const inDoc = twelve.filter((t) => text.includes(t)).length
+      const st = await call(root, '/state')
+      seen.push(inDoc)
+      assert.equal(st.json.quality.stability.visible, inDoc, `sleepKeep=${sleepKeep}：抽样池按 ${st.json.quality.stability.visible} 条算，她读到的是 ${inDoc} 条`)
+    }
+    assert.notEqual(seen[0], seen[1], `前提：两种设置下她读到的条数不一样（${seen.join(' / ')}）`)
+  })
+})
+
 // ---------------------------------------------------------------- 2
 
-test('第 2 条：「记你原话的间隔」为 0 时，群里他本人的话也不记', async () => {
+test('第 2 条：「记你原话的间隔」为 0 时，群里主人本人的话也不记', async () => {
   await withRoot(async (root) => {
     await writeConfig(normalizeConfig({ memory: { hearEvery: 0 } }), root)
     // 收消息那条路（turns.js）不带 config，要自己读
@@ -519,8 +544,119 @@ test('第 10 条：弹幕说明不再说「前 8 条」', async () => {
   assert.ok(txt.includes('等距挑'))
 })
 
-test('第 2 条：设置说明写清 0 时群聊里也不记', async () => {
+test('第 2 条：设置说明写清 0 时群聊里也不记，群聊不按间隔', async () => {
   const txt = await render({ state: stateWith(), tab: 'memory' })
   assert.ok(txt.includes('记你原话的间隔'), '前提：渲染到了记忆页')
-  assert.ok(txt.includes('群聊里你的话也不记'))
+  assert.ok(txt.includes('0 为不记，群聊里也一样'))
+  assert.ok(txt.includes('群聊不按间隔'), '不为 0 时群里每条都记，不能让人以为群聊也按间隔')
+})
+
+// ---------------------------------------------------------------- 8（her_diary 和记忆页那半）
+
+/** 抓注册出来的 her_diary，直接调 execute */
+function herDiary(root) {
+  let def = null
+  registerHerDiary({ tools: { register: (d) => ((def = d), d) } }, { root })
+  return def
+}
+
+/** 120 天每天一篇、事件流各一条 diary: 记录，再按 30 天清一遍 */
+async function prunedDiaries(root) {
+  const today = '2026-11-09'
+  const base = Date.parse(`${today}T12:00:00Z`)
+  const dates = Array.from({ length: 120 }, (_, i) => iso(base - (119 - i) * DAY).slice(0, 10))
+  await mkdir(paths(root).diaryDir, { recursive: true })
+  for (const d of dates) await writeFile(join(paths(root).diaryDir, `${d}.md`), `${d} 的日记`)
+  await writeEvents(root, [
+    line('seed', '你不是助手。', base - 130 * DAY),
+    ...dates.map((d, i) => line('meta', `diary:${d}`, base - (119 - i) * DAY)),
+  ])
+  await writeConfig(normalizeConfig({ diary: { keepDays: 30 } }), root)
+  await pruneDiary(30, today, root)
+  const kept = (await readdir(paths(root).diaryDir)).map((n) => n.slice(0, 10)).sort()
+  assert.ok(kept.length < 40, `前提：旧文件被删掉了，还剩 ${kept.length} 个`)
+  return { dates, kept }
+}
+
+test('第 8 条：her_diary 说的「一共写过几篇」跟身份文档同一个数，翻到清掉的那天说清是写过的', async () => {
+  await withRoot(async (root) => {
+    const { dates, kept } = await prunedDiaries(root)
+    const t = herDiary(root)
+
+    // 不给日期：读最近那篇，坐标里的篇数按写过的算，并说清翻得到几篇
+    const latest = await t.execute({})
+    assert.equal(latest.found, true)
+    assert.ok(!latest.text.includes(`你一共写过 ${kept.length} 篇`), `只数了还留着的文件：${latest.text}`)
+    assert.ok(latest.text.includes(`你一共写过 120 篇，现在翻得到的有 ${kept.length} 篇`), latest.text)
+    // 和身份文档同一个数：她两边都看得见
+    await writeSelfDoc(root)
+    assert.ok((await doc(root)).includes('你自己写过 120 篇日记'), '身份文档说的也是 120 篇')
+
+    // 翻一个已经清掉的日子：是写过的，不是「那天没有日记」
+    const gone = await t.execute({ date: dates[0] })
+    assert.equal(gone.found, false)
+    assert.ok(!gone.text.includes('那天没有日记'), gone.text)
+    assert.ok(gone.text.includes(`${dates[0]} 那天你写过日记，那一篇已经清掉了`), gone.text)
+    assert.ok(gone.text.includes(`现在翻得到的是从 ${kept[0]} 起的 ${kept.length} 篇`), gone.text)
+    // 记进她的工具账的那一句也不能说「那天没有日记」
+    assert.notEqual(heardLine(gone, 'her_diary'), '那天没有日记。')
+
+    // 真没写过的日子照旧
+    const never = await t.execute({ date: '2026-01-01' })
+    assert.match(never.text, /2026-01-01 那天没有日记/)
+
+    // 日期清单：标题说清写过几篇、列的是翻得到的
+    const list = await t.execute({ list: true })
+    const head = list.text.split('\n')[0]
+    assert.ok(head.includes('你一共写过 120 篇日记') && head.includes(`现在翻得到的有 ${kept.length} 篇`), head)
+    assert.ok(!list.text.includes(`- ${dates[0]}`), '清掉的日子不列：列了她也翻不开')
+
+    // 一篇都没留下：不能说「还没写过日记」
+    for (const d of kept) await rm(join(paths(root).diaryDir, `${d}.md`))
+    const none = await t.execute({})
+    assert.equal(none.found, false)
+    assert.ok(!none.text.includes('还没写过日记'), none.text)
+    assert.ok(none.text.includes('一共写过 120 篇日记，现在一篇也翻不到了'), none.text)
+  })
+})
+
+test('第 8 条：记忆页的日记篇数也写出写过几篇', async () => {
+  await withRoot(async (root) => {
+    const { kept } = await prunedDiaries(root)
+    const { status, json } = await call(root, '/memory')
+    assert.equal(status, 200)
+    assert.equal(json.diaries, kept.length, '现存的文件数照旧')
+    assert.equal(json.diariesWritten, 120, '写过几篇跟身份文档同一个数')
+
+    const txt = await render({ state: stateWith(), tab: 'memory', mem: json })
+    assert.ok(txt.includes(`日记 ${kept.length} 篇（一共写过 120 篇`), txt.match(/· 记录：[^\n]*/)?.[0])
+  })
+})
+
+// ---------------------------------------------------------------- 12（状态页那半）
+
+test('第 12 条：成长期满以后，状态页写清立场还在等哪道真过的门', async () => {
+  await withRoot(async (root) => {
+    const now = Date.now()
+    // 信任、自主真过了，主动是按时间放行的
+    await writeEvents(root, [
+      line('seed', '你不是助手。', now - 40 * DAY),
+      line('utterance', '下雨天的窗户上有很多条水路', now - 30 * DAY),
+      line('refusal', '我不替你写那份周报，这件事我不做。', now - 20 * DAY),
+      line('refusal', '我不帮你删那些聊天记录，这件事我不做。', now - 15 * DAY),
+    ])
+    await writeConfig(normalizeConfig({ growthDays: 30 }), root)
+    const st = await call(root, '/state')
+    assert.equal(st.status, 200)
+    assert.equal(st.json.stageForced, true, '前提：有瓶颈是按时间放行的')
+    assert.deepEqual(st.json.forcedGates, ['revise'], '主动是放行的，立场还在等它')
+    assert.equal(st.json.pendingGate, null)
+
+    // 拿这份真的状态渲染一次
+    const txt = await render({ state: st.json, tab: 'now' })
+    assert.ok(txt.includes('期满放行（立场还等她真过「主动」）'), txt.match(/期满放行[^\n]*/)?.[0])
+    assert.ok(txt.includes('立场清单只认她真过的瓶颈，还在等「主动」'), '悬停提示也要说')
+    assert.ok(txt.includes('按时间放行的瓶颈不算走完，还差「主动」'), '「立场 · 还没开始」的提示要说缺哪一道')
+    assert.ok(!txt.includes('还差「自主」'), '自主是真过了的')
+  })
 })

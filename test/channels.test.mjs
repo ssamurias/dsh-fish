@@ -701,7 +701,7 @@ test('群友的话（不带 owner）一条都不进记忆', async () => {
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
 
-test('「记你原话的间隔」设成 0：群里他本人说的那句也不记（issue #67）', async () => {
+test('「记你原话的间隔」设成 0：群里主人本人说的那句也不记', async () => {
   const root = await tmpRoot()
   try {
     await seed(root)
