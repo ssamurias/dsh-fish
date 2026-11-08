@@ -91,9 +91,9 @@ async function mount(seed = {}) {
   new Function('window', 'require', 'document', SRC)(window, req, document)
   const ex = loaded[0].factory(req)
   const render = () => { react.begin(); return ex.FishSection() }
-  // 自动保存那一个 effect：依赖是 [cfgSig, state]
+  // 自动保存那一个 effect：依赖以 [cfgSig, state] 开头（后面再多一个依赖也认得出）
   const runAutosave = () => {
-    const e = react.effects().find((x) => Array.isArray(x.deps) && x.deps.length === 2
+    const e = react.effects().find((x) => Array.isArray(x.deps) && x.deps.length >= 2
       && typeof x.deps[0] === 'string' && x.deps[0].startsWith('{') && x.deps[1] === seed.state)
     assert.ok(e, '要能认出自动保存那个 effect')
     e.fn()
@@ -295,7 +295,12 @@ test('规则约束：条件够了不等于一定会提，驳回到上限后不�
   assert.ok(line, '规则那一行要在')
   assert.doesNotMatch(text(line), /等她开口/, `${text(line)}`)
   assert.match(text(line), /条件够了/)
-  assert.match(String(line.props.title || ''), /驳回到上限/, '悬停要说清什么时候不会再提')
+  const tip = String(line.props.title || '')
+  assert.match(tip, /驳回到上限/, '悬停要说清什么时候不会再提')
+  // 挂在一条规则上，说的就是这一条：不写成「条件够了的」那一类。
+  // 到期日（证据日加 1–3 天）可能已经过了，那就是下一次醒来就提，不写「过几天」。
+  assert.match(tip, /^条件够了，她之后醒来时会提一次申请/, `悬停：${tip}`)
+  assert.doesNotMatch(tip, /过几天/, `到期日可能已经过了：${tip}`)
 
   // 悬停要按这条规则现在的处境说，不能一律写「过几天会提」
   const tipFor = async (over) => {
@@ -308,7 +313,7 @@ test('规则约束：条件够了不等于一定会提，驳回到上限后不�
     pending: { id: 'o3', rule: 'r1', why: '我想试试「试一件新事」这件事。' },
     status: [{ id: 'r1', active: false, ready: true, pending: 'o3' }],
   })
-  assert.doesNotMatch(pendingTip, /过几天她醒来时会提/, `已经提了还说过几天会提：${pendingTip}`)
+  assert.doesNotMatch(pendingTip, /醒来时会提/, `已经提了还说之后会提：${pendingTip}`)
   assert.match(pendingTip, /在上面等你答/)
   // 已经驳回两次（到上限）
   const capTip = await tipFor({
@@ -317,11 +322,39 @@ test('规则约束：条件够了不等于一定会提，驳回到上限后不�
       { id: 'o2', rule: 'r1', verdict: 'reject' },
     ],
   })
-  assert.doesNotMatch(capTip, /过几天她醒来时会提/, `到上限了还说过几天会提：${capTip}`)
+  assert.doesNotMatch(capTip, /醒来时会提/, `到上限了还说之后会提：${capTip}`)
   assert.match(capTip, /已经驳回到上限，她不会再自动提/)
   // 申请通道关着
   const offTip = await tipFor({ offersOn: false })
   assert.match(offTip, /申请通道现在关着，她不会自动提/, `通道关着：${offTip}`)
+})
+
+test('驳回上限：界面数到的次数和调度器用的冷却档数是同一个数', async () => {
+  // 悬停和回执里的「驳回到上限（N 次）」是前端按历史数的；调度器拿 offerLimits(config) 的 retryDays，
+  // 驳回次数到了档数就不再自动提（offerDueDay 回 null）。哪边改了档数，这里要红。
+  const { offerLimits } = await import('../lib/unlock.js')
+  const max = offerLimits({}).retryDays.length
+  for (const cooldownDays of [1, 3, 30, 'x']) {
+    assert.equal(offerLimits({ rules: { cooldownDays } }).retryDays.length, max,
+      `cooldownDays=${cooldownDays} 只改天数，不改档数`)
+  }
+  const tipAfter = async (rejects) => {
+    const rules = {
+      pending: null,
+      offersOn: true,
+      layers: [{ name: '成长层', mutable: true, note: '可以自己申请。', rules: [{ id: 'r1', title: '试一件新事', inPrompt: true }] }],
+      status: [{ id: 'r1', active: false, ready: true }],
+      history: Array.from({ length: rejects }, (_, i) => ({ id: `o${i}`, rule: 'r1', verdict: 'reject' })),
+    }
+    const app = await mount({ state: stateWith(), rules })
+    const l = findAll(app.render(), (n) => n.type === 'div' && text(n).startsWith('· 试一件新事'))[0]
+    return String(l?.props?.title || '')
+  }
+  const below = await tipAfter(max - 1)
+  assert.match(below, new RegExp(`驳回到上限（${max} 次）之后就不会再自动提`), `差一次到上限：${below}`)
+  assert.doesNotMatch(below, /已经驳回到上限/, `差一次到上限：${below}`)
+  const at = await tipAfter(max)
+  assert.match(at, /已经驳回到上限，她不会再自动提/, `驳回了 ${max} 次：${at}`)
 })
 
 test('裁决她的申请之后有回执', async () => {
@@ -350,8 +383,10 @@ test('裁决她的申请之后有回执', async () => {
 test('B 站登录提示卡：只有发评论和回复必须登录', async () => {
   const { render } = await mount({ state: stateWith(), ow: { hasCookie: false } })
   const c = card(render(), '还没存 B 站登录')
-  assert.doesNotMatch(c.all, /看视频画面、读评论、回评都要用到它/, `读热评、看画面不带 cookie 也能做：${c.all}`)
+  assert.doesNotMatch(c.all, /看视频画面、读评论、回评都要用到它/, `读热评、看画面不带 cookie 也会去做：${c.all}`)
   assert.match(c.all, /发评论和回复要用到它/)
+  // 看画面没有 cookie 也会去取，可直链缺登录态可能拉不到：不能说看画面用不着它
+  assert.match(c.all, /看画面没有它也会试着取，但不一定取得到/, `${c.all}`)
 })
 
 test('页头的数叫「记录」，悬停不再把日记算进去', async () => {
@@ -506,6 +541,48 @@ test('数字越界进了失败框，就别再说「不是你填错了」；之�
   assert.match(after, /这一项没存上/)
 })
 
+test('越界的数改回原来存的值，失败框自己收起来', async () => {
+  // 最常见的路：多打一位、再删掉。改回的正好是盘上的值，自动保存不会再写一次，
+  // 框要是还挂着「超出了允许的范围…改回就会自动再存」，说的就不对了。
+  const s = stateWith()
+  const app = await mount({ state: s, tab: 'grow' })
+  app.render()
+  app.runAutosave() // 首屏只记基线
+  const inputOf = () => findAll(field(app.render(), '冷落天数'), (n) => n.type === 'input' && n.props.type === 'number')[0]
+  const saved = String(inputOf().props.value)
+  const posts = []
+  const restore = stubFetch({ '/config': (path, opts) => { posts.push(opts.body); return { ok: true } } })
+  try {
+    inputOf().props.onChange({ target: { value: String(Number(inputOf().props.max) + 1) } })
+    app.render()
+    app.runAutosave()
+    assert.match(errBox(app.render()), /超出了允许的范围/, '先得出越界的失败框')
+    inputOf().props.onChange({ target: { value: saved } })
+    app.render()
+    app.runAutosave()
+    assert.equal(errBox(app.render()), '', `数已经改回 ${saved}，失败框还在：${errBox(app.render())}`)
+    assert.equal(posts.length, 0, '改回的就是盘上的值，不用再写一次')
+  } finally { restore() }
+})
+
+test('越界的数还在框里时，别的开关存上了，失败框接着说那个数', async () => {
+  // 开关是单独提交的，存上的只是开关；越界的那个数没写盘，自动保存那边也不会再查一次。
+  const { app } = await typeOutOfRangeApp('grow', '冷落天数')
+  const posts = []
+  const restore = stubFetch({ '/config': (path, opts) => { posts.push(JSON.parse(opts.body)); return { ok: true } } })
+  try {
+    const sw = findAll(field(app.render(), '让她自己攒这股劲'), (n) => n.type === 'button' && n.props.role === 'switch')[0]
+    assert.ok(sw, '「让她自己攒这股劲」要是一个开关')
+    await sw.props.onClick()
+    await new Promise((r) => setTimeout(r, 20))
+  } finally { restore() }
+  assert.equal(posts.length, 1, '只发出开关那一次')
+  assert.ok(!('absenceAfterDays' in posts[0]), `开关那次不带冷落天数：${JSON.stringify(posts[0])}`)
+  const box = errBox(app.render())
+  assert.match(box, /超出了允许的范围/, `冷落天数还没存上，失败框不能跟着开关一起消失：${box || '（没有失败框）'}`)
+  assert.ok(box.includes('「冷落天数（'), `说的还是那个数：${box}`)
+})
+
 // ---------------------------------------------------------------------------
 // 住所页、数据页
 // ---------------------------------------------------------------------------
@@ -535,6 +612,21 @@ test('重开、重新搭一间之后，指到「状态」页的「现在叫醒�
       const note = noteOf(app.render())
       assert.doesNotMatch(note, /上面的「叫醒大肥鱼」/, `回执：${note}`)
       assert.match(note, /到「状态」页点一下「现在叫醒大肥鱼」/)
+    } finally { restore() }
+  }
+  // 本来就没有档时重开：服务端回 movedTo 为空，note 里是它自己那句（按钮名字是旧的）。
+  // 回执不拿它当开头，免得一条回执里叫醒的说法出现两遍、两个名字。
+  {
+    const s = stateWith()
+    const serverNote = '旧的一切已经封存，旧会话移进「已归档」。新的一局已经开好；点一下「叫醒大肥鱼」，侧栏里才会出现那条会话。'
+    const restore = stubFetch({ '/reset': { ok: true, movedTo: '', note: serverNote }, '/state': s })
+    try {
+      const app = await mount({ state: s, tab: 'data', resetAsk: true })
+      await button(app.render(), '确定，重开').props.onClick()
+      const note = noteOf(app.render())
+      assert.match(note, /^已重开。/, `回执：${note}`)
+      assert.doesNotMatch(note, /点一下「叫醒大肥鱼」/, `回执里夹着旧按钮名：${note}`)
+      assert.equal(note.split('现在叫醒大肥鱼').length - 1, 1, `叫醒那一步只说一遍：${note}`)
     } finally { restore() }
   }
   // 会话被收起来之后「重新搭一间」的回执
