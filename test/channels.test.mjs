@@ -651,3 +651,52 @@ test('POST /dsh-fish/say：桥只发 HTTP 就能开房，room/title/guest 原样
     assert.equal((await homeStatus(root)).turns, 0, '外客不涨轮数')
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
+
+// ------------------------ 2026-11-08（用户 m00394）：群里他本人的话进记忆，群友的一句都不进
+
+test('群里他本人说的那句（owner:true）：进记忆，仍不算他来过', async () => {
+  const root = await tmpRoot()
+  try {
+    await seed(root)
+    const { ctx, calls } = fakeCtx()
+
+    const r = await sayToHer(ctx, '这个版本我打算先发一版试试看，有问题再说。', {
+      root, waitMs: 5_000, channel: 'qq-group:1', scene: 'group', speaker: '随便什么昵称', owner: true,
+    })
+    assert.equal(r.ok, true)
+
+    const { events } = await readEvents(root)
+    const heard = events.filter((e) => e.type === 'heard')
+    assert.equal(heard.length, 1, '群里他自己说的那句要进记忆')
+    assert.equal(heard[0].scene, 'group', '场次留下：她翻到时才知道这是在群里说的')
+    assert.equal(heard[0].source, 'system')
+
+    // 边界：进记忆 ≠ 生命体征。写一条 seen，冷落检测就废了。
+    const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+    assert.equal(seen.length, 0, '群聊里说话不算他来找过她——这条是 m00394 点名的边界')
+    assert.equal((await homeStatus(root)).turns, 0, '群聊不涨轮数')
+
+    const sent = calls.find((c) => c.op === 'prompt' && c.req?.sessionId === r.sessionId && String(c.req?.requestId).startsWith('say-'))
+    const text = sent?.req?.content?.[0]?.text ?? ''
+    assert.match(text, /## 他在群里跟你说话/, '他本人在群里，不能写成「群里有人」')
+    assert.match(text, /他在群里说/, '要让她知道这话是在群里说的')
+    assert.doesNotMatch(text, /群里有人/, '不能把他降格成群友')
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('群友的话（不带 owner）一条都不进记忆', async () => {
+  const root = await tmpRoot()
+  try {
+    await seed(root)
+    const { ctx } = fakeCtx()
+
+    const r = await sayToHer(ctx, '群里有人问你在不在，说想找你聊两句。', {
+      root, waitMs: 5_000, channel: 'qq-group:1', scene: 'group', speaker: '张三',
+    })
+    assert.equal(r.ok, true)
+
+    const { events } = await readEvents(root)
+    assert.equal(events.filter((e) => e.type === 'heard').length, 0, '群友的话不进记忆——产品边界，不是遗漏')
+    assert.equal((await homeStatus(root)).turns, 0)
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})

@@ -281,3 +281,18 @@ test('重置之后新的一局没有豁免（事件流被搬走，config 抄回�
     assert.equal(deriveSelf(events).persona.imported, false)
   })
 })
+
+test('重开一局、只有启动补的默认 seed 时，允许导入（issue #65）', async () => {
+  await withRoot(async (root) => {
+    // 模拟 index.js 启动播种：一条没有 source:'import' 的默认起点
+    const { appendEvent } = await import('../lib/store.js')
+    await appendEvent({ type: 'seed', text: '你不是助手。你刚开始存在。' }, { day: 1, stage: 1, source: 'system' }, root)
+    const r = await applyHandover(DOC, root)
+    assert.equal(r.ok, true, r.why)
+    const { events } = await readEvents(root)
+    const seeds = events.filter((e) => e.type === 'seed')
+    assert.equal(seeds.length, 2, '旧的默认起点留着（事件流只追加）')
+    assert.equal(seeds.at(-1).source, 'import')
+    assert.equal(deriveSelf(events).seed, parseHandover(DOC).body, '读的时候要用真正导入的那一条')
+  })
+})

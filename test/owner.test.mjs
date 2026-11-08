@@ -279,11 +279,11 @@ test('saveAccount 只记登录账号，不覆盖领养人', async () => {
   }
 })
 
-test('loginMid：认登录账号，没有才退回领养人', async () => {
+test('loginMid：认登录账号；没有账号就认 cookie，都没记时返回 0（issue #63）', async () => {
   const root = await mkdtemp(join(tmpdir(), 'fish-ow6-'))
   try {
     await saveOwner({ mid: '42', nickname: '大号' }, root)
-    assert.equal(await loginMid(root), 42, '没存过账号时用领养人（兼容老数据）')
+    assert.equal(await loginMid(root), 0, '不能退回领养人——退回就把主人回她的话当成她自己补的丢掉')
     await saveAccount({ mid: 777, uname: '小号' }, root)
     assert.equal(await loginMid(root), 777, '存过账号后，判断「她自己」要用小号')
   } finally {

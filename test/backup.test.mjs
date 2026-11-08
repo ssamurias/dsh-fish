@@ -74,9 +74,10 @@ test('备份：该拿的都拿到，日志与旧备份不进包', async () => {
 })
 
 test('校验：格式不对、空包、路径穿越、比程序新，全都要拦', () => {
-  const ok = { format: BACKUP_FORMAT, schema: 1, files: [{ path: 'a.json', enc: 'utf8', data: '{}' }] }
+  const ok = { format: BACKUP_FORMAT, schema: 1, files: [{ path: 'events.jsonl', enc: 'utf8', data: '' }] }
   assert.equal(checkBundle(ok).ok, true)
 
+  assert.equal(checkBundle({ ...ok, files: [{ path: 'a.json', enc: 'utf8', data: '{}' }] }).ok, false, '没有事件流的包不能恢复')
   assert.equal(checkBundle(null).ok, false)
   assert.equal(checkBundle({ ...ok, format: 'dsh-fish-backup/99' }).ok, false)
   assert.match(checkBundle({ ...ok, format: 'x' }).why, /只认/)
@@ -219,4 +220,24 @@ test('界面与路由都接上了（别只写了个模块）', async () => {
   assert.match(o, /collectBackup\(root\)/)
   // 恢复必须走「先封存」那条路，不许直接覆盖
   assert.match(o, /restoreBackup\(b, root\)/)
+})
+
+test('备份：事件流再大也要进包，别的超限文件才 skipped（issue #65）', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-backup-big-'))
+  try {
+    // 9MB 的 events.jsonl：单文件上限 8MB，但它不能因此被丢掉——
+    // 丢了它，备份看起来成功、装回去她会失忆。
+    const line = JSON.stringify({ id: 'ev_01J0000000000000000000000B', v: 1, type: 'utterance', text: 'x'.repeat(900), ts: '2026-10-25T00:00:00.000Z', day: 1, stage: 1 })
+    await writeFile(join(root, 'events.jsonl'), (line + '\n').repeat(Math.ceil(9 * 1024 * 1024 / (line.length + 1))))
+    await writeFile(join(root, 'huge.bin'), Buffer.alloc(9 * 1024 * 1024))
+    const b = await collectBackup(root)
+    assert.ok(b.files.some((f) => f.path === 'events.jsonl'), '事件流必须进包')
+    assert.ok(!b.files.some((f) => f.path === 'huge.bin'))
+    assert.ok(b.skipped.some((x) => x.startsWith('huge.bin')), `skipped 应提到 huge.bin，实际 ${JSON.stringify(b.skipped)}`)
+    assert.ok(!b.skipped.some((x) => x.startsWith('events.jsonl')))
+    const r = checkBundle(b)
+    assert.equal(r.ok, true, r.why)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

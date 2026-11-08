@@ -2,8 +2,9 @@
  * turns.test.mjs —— 侧栏里直接跟她说话，也算一轮（issue #6）
  *
  * 这一组守五件事：
- *   ① 来源判据：真人打的（带 clientTimeZone）/ 插件 prompt 的（wake-/say- 前缀、
- *      无时区）/ 宿主拼的上下文（kind 不是 user）分得清；
+ *   ① 来源判据：真人打的（带 clientTimeZone）/ 桥接的（带 rpcId，可能没时区）/
+ *      插件 prompt 的（wake-/say- 前缀、无时区）/ 宿主拼的上下文（kind 不是 user）
+ *      分得清；
  *   ② 真机会话事件的形态能取到正文（content 数组里的 text 块）；
  *   ③ 她屋里那一轮的 turn/end 结账：turns +1、原话进 talkmem；
  *   ④ 不是她屋里、或者不是人打的，一律不涨轮数；
@@ -16,7 +17,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { classifyMessage, messageText, assistantText, registerTurns } from '../lib/turns.js'
+import { classifyMessage, messageText, assistantText, stripChannelNote, registerTurns } from '../lib/turns.js'
 import { homeStatus } from '../lib/home.js'
 import { appendEvent, readEvents, writeAtomic, paths } from '../lib/store.js'
 import { recentExchanges } from '../lib/talkmem.js'
@@ -165,8 +166,15 @@ test('来源判据：真人 / 插件 / 上下文 / 外渠道 分得清', () => {
   assert.equal(classifyMessage({ source: { kind: 'skill-catalog' } }), 'context')
   assert.equal(classifyMessage({ source: { kind: 'plugin:hindsight' } }), 'context')
   assert.equal(classifyMessage({}), 'context')
-  // 老客户端 / 别的插件灌的：没有时区，分不清就不算——宁可少算一轮
-  assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'uuid-2' } }), 'unknown')
+  // 2026-11-08（用户转来的微信桥反馈）：桥走宿主 `sessionController.prompt()`
+  // 时传不进 source，宿主把 kind 写死成 'user'；rpcId 是它唯一留下的记号。
+  // 带 rpcId 的 user 消息就是「有人代他递话」——微信桥、别的桥都算。
+  assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'uuid-2' } }), 'human')
+  assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'wechat-1234' } }), 'human')
+  // 真正认不出来源的只剩没 rpcId 的 append（fish 自己的交接句/便条）
+  assert.equal(classifyMessage({ source: { kind: 'user' } }), 'unknown')
+  // observe.js 的出门首轮也走 prompt，漏在名单外会掉进 unknown
+  assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'outing-s-her-1700000000000' } }), 'plugin')
 
   // 2026-11-03（issue #18）：外渠道注入的消息是他打的字，不能当上下文吞掉。
   // 宿主的 v4 校验不限制 kind 取值（非空、≠'plugin' 即可），所以只能做机器侧黑名单：
@@ -188,6 +196,18 @@ test('来源判据：真人 / 插件 / 上下文 / 外渠道 分得清', () => {
   // 私聊与书房仍算人：私聊就是"融合"那个选项，不能因为带 scene 就不算
   assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'private' } }), 'human')
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'uuid-5', clientTimeZone: 'Asia/Shanghai', scene: 'desk' } }), 'human')
+
+  // 2026-11-08（用户 m00394）：群里他本人说的那句。
+  // 桥按 QQ 号判、给 owner:true；插件一个字都不猜（nickname 自由字符串，猜错比不写更糟）。
+  // 它仍是 group 场次：进记忆，但不涨轮数、不写 seen——边界在 m00394 里点过名。
+  assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'group', owner: true } }), 'group-owner')
+  // 标了 guest 的按外客走，owner 再多也不认——两句话打架时按更保守的那个
+  assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'group', owner: true, guest: true } }), 'group')
+  // 只认布尔 true：字符串 'true' / 1 都不算，别让桥的宽松写法把她对主人的记忆写歪
+  assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'group', owner: 'true' } }), 'group')
+  assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'group', owner: 1 } }), 'group')
+  // owner 只对 group 有意义：私聊本来就是人
+  assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'private', owner: true } }), 'human')
 })
 
 test('来源判据：宿主拼的上下文和通知都不算人（2026-11-05）', () => {
@@ -250,12 +270,12 @@ test('宿主每轮的时间快照不涨轮数、不记他来过、不换房（20
           source: { kind: 'time-context', form: 'snapshot', sections: [{ name: 'time-context', text }] },
         },
       })
-      // 真机一轮桥接消息的形状：不带时区的 user，再加一条时间快照。
+      // 真机里认不出来源的 user（没有 rpcId），再加一条时间快照。
       // 她那条会话和别的会话里都会出现，两边都不能算他来过。
       for (let i = 0; i < 6; i += 1) {
         ctx.emit('session/event', session(), {
           type: 'user/message',
-          data: { id: `im-${i}`, role: 'user', content: [{ type: 'text', text: `桥接 ${i}` }], source: { kind: 'user', rpcId: `im-qq-${i}` } },
+          data: { id: `im-${i}`, role: 'user', content: [{ type: 'text', text: `桥接 ${i}` }], source: { kind: 'user' } },
         })
         ctx.emit('session/event', session(), timeContext(`当前时间 12:0${i}`))
         ctx.emit('session/event', session('s-other'), timeContext(`当前时间 12:0${i}`))
@@ -311,6 +331,55 @@ test('人话后面跟时间快照：只算一轮，记的是人话（2026-11-05�
   }
 })
 
+test('桥接消息带 rpcId 就算他来过，渠道提示不进记忆（2026-11-08）', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { memory: { hearEvery: 1 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      const note = '[渠道：微信] 你在和微信上的用户对话，对方在手机上，看不到这台电脑的屏幕和文件系统。'
+      ctx.emit('session/event', session(), {
+        type: 'user/message',
+        data: {
+          id: 'm-wechat-1',
+          role: 'user',
+          content: [{ type: 'text', text: `今晚想吃点什么，面条还是米饭\n\n${note}` }],
+          // 宿主 prompt 写死 kind:'user'，桥只能留下 rpcId；这条以前会掉进 unknown
+          source: { kind: 'user', rpcId: 'wechat-1234' },
+        },
+      })
+      await settled()
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '面条吧。' }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+      await settled()
+
+      const { events } = await readEvents(root)
+      assert.equal(events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length, 1, '他来过一次')
+      const heard = events.filter((e) => e.type === 'heard')
+      assert.equal(heard.length, 1, '这一轮记一句原话')
+      assert.equal(heard[0].text, '今晚想吃点什么，面条还是米饭')
+      const exchanges = await recentExchanges(root)
+      assert.equal(exchanges.length, 1)
+      assert.equal(exchanges[0].me, '今晚想吃点什么，面条还是米饭', '渠道提示不进 talkmem')
+
+      // 首条消息桥还会单独发一条只有提示的：裁完是空，不算他来过
+      ctx.emit('session/event', session(), {
+        type: 'user/message',
+        data: { id: 'm-wechat-note', role: 'user', content: [{ type: 'text', text: note }], source: { kind: 'user', rpcId: 'wechat-note' } },
+      })
+      await settled()
+      const after = await readEvents(root)
+      assert.equal(after.events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length, 1, 'note-only 不再多记一条')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
 test('不带时区的 user 轮和叫醒轮不结账：她说的话不写成聊天行（2026-11-05）', async () => {
   const root = await tmpRoot()
   try {
@@ -318,7 +387,7 @@ test('不带时区的 user 轮和叫醒轮不结账：她说的话不写成聊�
     const off = registerTurns(ctx, { root, log: () => {} })
     try {
       const context = (id, source) => ({ type: 'user/message', data: { id, role: 'user', content: [{ type: 'text', text: '上下文' }], source } })
-      ctx.emit('session/event', session(), { type: 'user/message', data: { id: 'im-1', role: 'user', content: [{ type: 'text', text: '桥接来的话' }], source: { kind: 'user', rpcId: 'im-qq-1' } } })
+      ctx.emit('session/event', session(), { type: 'user/message', data: { id: 'im-1', role: 'user', content: [{ type: 'text', text: '桥接来的话' }], source: { kind: 'user' } } })
       ctx.emit('session/event', session(), context('t-1', { kind: 'time-context', form: 'snapshot', sections: [] }))
       await settled()
       ctx.emit('session/event', session(), herMsg([{ type: 'text', text: '这句没有人在等。' }]))
@@ -353,6 +422,20 @@ test('正文提取：真机 content 数组、老宿主 data.text 都兜得住', 
   assert.equal(messageText({ message: { content: '包了一层' } }), '包了一层')
   assert.equal(messageText({}), '')
   assert.equal(messageText(null), '')
+})
+
+test('渠道提示只从记账正文里裁掉，不碰真正的话（2026-11-08）', () => {
+  const note = '[渠道：微信] 你在和微信上的用户对话，对方在手机上，看不到这台电脑的屏幕和文件系统。'
+  assert.equal(stripChannelNote(`今晚吃什么\n\n${note}`), '今晚吃什么')
+  assert.equal(stripChannelNote(`今晚吃什么\n\n${note}\n\n${note}`), '今晚吃什么')
+  // 首条消息桥会单独再发一条只有提示的：不能当成「他来过」
+  assert.equal(stripChannelNote(note), '')
+  assert.equal(stripChannelNote('[Channel: WeChat] They are on a phone.'), '')
+  // 不是独立段落、或不在末尾，就不动
+  assert.equal(stripChannelNote('他说 [渠道：微信] 是桥的名字'), '他说 [渠道：微信] 是桥的名字')
+  assert.equal(stripChannelNote(`${note}\n\n今晚吃什么`), `${note}\n\n今晚吃什么`)
+  assert.equal(stripChannelNote(''), '')
+  assert.equal(stripChannelNote(null), '')
 })
 
 test('她说出口的话：只收 text 块，reasoning 不算她说的话', () => {
@@ -738,8 +821,8 @@ test('认识不出来的来源，日志里要留一行（别静默丢消息）',
           id: 'm-1',
           role: 'user',
           content: [{ type: 'text', text: '不知道谁发的' }],
-          // kind='user' 但没有时区：老客户端 / 别的插件灌的，判不出来
-          source: { kind: 'user', rpcId: 'uuid-9' },
+          // kind='user' 但既没有时区也没有 rpcId：只剩 fish 自己 append 的交接句/便条
+          source: { kind: 'user' },
         },
       }
       ctx.emit('session/event', session(), mystery)
@@ -808,7 +891,7 @@ test('认不出来源：同一个 kind 连着丢十条，日志也只留一行',
           id: `m-${n}`,
           role: 'user',
           content: [{ type: 'text', text: `不知道谁发的 ${n}` }],
-          source: { kind: 'user', rpcId: `uuid-${n}` },
+          source: { kind: 'user' },
         },
       })
       for (let n = 0; n < 10; n += 1) ctx.emit('session/event', session(), mystery(n))
@@ -1074,6 +1157,61 @@ test('同一进程里重复注册：只挂一个观察者，seen: 不会写两�
     } finally {
       off1()
       off2()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('群聊里他本人说的一句（owner:true）：进记忆，但不算他来过（2026-11-08，用户 m00394）', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      const ownerMsg = {
+        type: 'user/message',
+        data: {
+          id: 'g-owner-1',
+          role: 'user',
+          content: [{ type: 'text', text: '嗯。这个版本我打算先发一版试试看，有问题再说。' }],
+          // 桥按 QQ 号判出来「这是主人」，写在 source 上（AGENTS.md §7.1）
+          source: { kind: 'qq', scene: 'group', owner: true },
+        },
+      }
+      ctx.emit('session/event', session('s-group'), ownerMsg)
+      ctx.emit('session/event', session('s-group'), TURN_END)
+      await settled()
+
+      const { events } = await readEvents(root)
+      const heard = events.filter((e) => e.type === 'heard')
+      assert.equal(heard.length, 1, '群里他本人说的那句要进记忆')
+      assert.equal(heard[0].scene, 'group', '场次要留下，她翻到时才知道这是在群里说的')
+      assert.equal(heard[0].source, 'system', 'heard 只能系统侧写——她能伪造就等于能编一句「他说过」')
+      assert.match(heard[0].text, /先发一版/)
+
+      // 边界：进记忆 ≠ 他来找过她
+      assert.equal((await homeStatus(root)).turns, 0, '群里说话不涨轮数')
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 0, '群里说十句也不该让冷落检测以为他一直在')
+
+      // 群友的话一条都不进：同一轮里再灌一条不带 owner 的
+      ctx.emit('session/event', session('s-group'), {
+        type: 'user/message',
+        data: {
+          id: 'g-other-1',
+          role: 'user',
+          content: [{ type: 'text', text: '群里另一个人插了句嘴，说的也挺长的一段话。' }],
+          source: { kind: 'qq', scene: 'group' },
+        },
+      })
+      ctx.emit('session/event', session('s-group'), TURN_END)
+      await settled()
+      const after = (await readEvents(root)).events.filter((e) => e.type === 'heard')
+      assert.equal(after.length, 1, '群友的话不进记忆——这是产品边界，不是遗漏')
+      assert.ok(!after.some((e) => String(e.text).includes('插了句嘴')))
+    } finally {
+      off()
     }
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })

@@ -16,10 +16,10 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { pickHearSentence, hearTurn, HEAR_SNIPPET, HEAR_MIN_CHARS } from '../lib/hear.js'
+import { pickHearSentence, hearTurn, rememberGroupWord, HEAR_SNIPPET, HEAR_MIN_CHARS } from '../lib/hear.js'
 import { hearMark, bumpTurns } from '../lib/home.js'
 import { readEvents } from '../lib/store.js'
-import { validateEvent } from '../lib/schema.js'
+import { validateEvent, isContactEvent } from '../lib/schema.js'
 import { searchEvents, renderRecall, RECALL_LIMIT, RECALL_DAYS } from '../lib/recall.js'
 
 const DAY = 86_400_000
@@ -260,4 +260,33 @@ test('回忆：认领的 +4 不能盖过字面命中差很多的情况', () => {
   ]
   const { rows } = searchEvents(events, q, { now })
   assert.equal(rows[0].id, 'chat', '字面命中差得多的时候，认领的加权不该盖过它')
+})
+
+// ---------------------------------------- 2026-11-08（用户 m00394）群里他本人的话
+
+test('群里他本人说的一句：记成 heard + scene:group，只留最长的一句', async () => {
+  await withRoot(async (root) => {
+    const r = await rememberGroupWord(root, {
+      text: '嗯。这个版本我打算先发一版试试看，后面有问题再说。', day: 3, stage: 2, sessionId: 's-group-1',
+    })
+    assert.equal(r.written, true)
+    const { events } = await readEvents(root)
+    const ev = events.find((e) => e.type === 'heard')
+    assert.ok(ev, '要真的落进事件流')
+    assert.equal(ev.scene, 'group', '场次必须留下：她翻到时才知道这是在群里说的')
+    assert.equal(ev.text, '这个版本我打算先发一版试试看，后面有问题再说')
+    assert.equal(ev.sessionId, 's-group-1', '群聊那句要知道是哪间房说的')
+    assert.equal(ev.source, 'system', '她不能写 heard——那就等于能凭空造一句「他说过」')
+    // 进记忆 ≠ 他来找过她
+    assert.equal(isContactEvent(ev), false)
+  })
+})
+
+test('群里那句没有值得留的句子就不写，也不抛', async () => {
+  await withRoot(async (root) => {
+    const r = await rememberGroupWord(root, { text: '嗯。好的。', day: 1, stage: 1 })
+    assert.equal(r.written, false)
+    const { events } = await readEvents(root)
+    assert.equal(events.length, 0, '「嗯」「好」记下来也翻不出什么')
+  })
 })

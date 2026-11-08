@@ -566,3 +566,38 @@ test('划掉的那张改不了也放不下——回翻里留着的是当时那�
     assert.match(await call({ action: 'drop', text: '已经做完的', reason: '改主意' }), /^\[没放下：这张已经划掉了/)
   })
 })
+
+test('放下的那张按原话找得到——回执说「已经放下了」，不是「桌上没有这一张」（issue #82）', async () => {
+  await withRoot(async (root) => {
+    const { def, call } = herTool(root)
+    await def.execute({ text: '明天把字幕看完' }, { session: {} })
+    assert.equal(await call({ action: 'drop', text: '明天把字幕看完', reason: '那条已经看过了' }), '[放下了]')
+
+    assert.match(
+      await call({ action: 'update', text: '明天把字幕看完', newText: '后天看' }),
+      /^\[没改：这张已经放下了/,
+      '看得到的纸条不能说「没有」',
+    )
+    assert.equal(await call({ action: 'drop', text: '明天把字幕看完', reason: '再放一次' }), '[放下了]', '重复放下不算错')
+
+    const [n, ...rest] = await readNotes(root)
+    assert.equal(rest.length, 0, '放下不是删除')
+    assert.equal(n.status, 'dropped')
+    assert.equal(n.text, '明天把字幕看完', '改不了就不该改')
+    assert.equal(n.reason, '那条已经看过了', '重复放下不改当时那句为什么')
+  })
+})
+
+test('放下的那张用 id 也划不掉，状态还是放下（issue #82）', async () => {
+  await withRoot(async (root) => {
+    const { def, call } = herTool(root)
+    const a = await def.execute({ text: '看那场展' }, { session: {} })
+    assert.equal(await call({ action: 'drop', id: a.id, reason: '不想去了' }), '[放下了]')
+
+    assert.match(await call({ id: a.id, status: 'done' }), /^\[没划掉：这张已经放下了/)
+    const [n, ...rest] = await readNotes(root)
+    assert.equal(rest.length, 0)
+    assert.equal(n.status, 'dropped', '放下不该被改写成划掉')
+    assert.equal(n.reason, '不想去了')
+  })
+})

@@ -13,6 +13,7 @@ import { join } from 'node:path'
 
 import { eventsSince } from '../lib/outing.js'
 import { deriveSelf } from '../lib/derive.js'
+import { metaIdLines } from '../lib/observe.js'
 
 function tmp() {
   const root = mkdtempSync(join(tmpdir(), 'fish-review-'))
@@ -160,4 +161,47 @@ test('tsMs：数值、ISO 字符串、坏值三种都给毫秒（不抛）', asy
   assert.equal(tsMs({ ts: '不是时间' }), 0)
   assert.equal(tsMs({}), 0)
   assert.equal(tsMs(null), 0)
+})
+
+
+test('eventsSince：带着别的会话 id 的条目不算这一趟（issue #68）', () => {
+  const { root, done } = tmp()
+  try {
+    const list = [
+      // 门外那条会话里写的——同一时间窗，但不是这一趟做的。
+      ev('ev_home', 2_100, 'utterance', '在家里说的一句话', { sessionId: 's-home' }),
+      // 出门那条会话里写的。
+      ev('ev_trip', 2_200, 'utterance', '在外面说的一句话', { sessionId: 's-trip' }),
+      // 老事件没有 sessionId（系统侧写入）：按时间窗兜底，不硬删。
+      ev('ev_old', 2_300, 'utterance', '没记会话的一条'),
+    ]
+    const r = eventsSince(writeEvents(root, list), 2_000, { sessionId: 's-trip' })
+    assert.equal(r.total, 2)
+    assert.deepEqual(r.items.map((x) => x.id), ['ev_trip', 'ev_old'])
+    assert.ok(!r.items.some((x) => x.id === 'ev_home'), '家里写的不能算进这趟')
+  } finally {
+    done()
+  }
+})
+
+test('复核通过：keep 把 pending 时先标掉的条目捞回来（issue #68）', () => {
+  const events = [
+    ev('ev_a', 1_000, 'refusal', '这句算'),
+    ev('ev_b', 1_100, 'refusal', '这句还是不算'),
+    ev('ev_mark', 1_200, 'meta', 'outing-reject:ev_a ev_b'),
+    ev('ev_keep', 1_300, 'meta', 'outing-keep:ev_a'),
+  ]
+  const m = deriveSelf(events, { now: 1_400 })
+  assert.deepEqual(m.refusals.map((x) => x.id), ['ev_a'], 'keep 之后只有没被划掉的回来')
+  assert.equal(m.refusals.length, 1)
+})
+
+test('issue #68：标记太多时拆成几行，每行都在 2000 字以内（PR #80）', () => {
+  const ids = Array.from({ length: 500 }, (_, i) => 'ev_' + String(i).padStart(32, '0'))
+  const lines = metaIdLines('outing-reject:', ids)
+  assert.ok(lines.length > 1, '500 条不可能塞进一行')
+  for (const line of lines) assert.ok(line.length <= 1800, `这一行 ${line.length} 字`)
+  const back = lines.flatMap((line) => line.slice('outing-reject:'.length).split(' '))
+  assert.deepEqual(back, ids, '拆行之后一条都不能丢')
+  assert.deepEqual(metaIdLines('outing-keep:', []), [], '空名单不写空标记')
 })

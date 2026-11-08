@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeConfig, DEFAULTS, inWindow, dateKey, pickWakeTime, updateConfig, loadConfig } from '../lib/settings.js'
+import { normalizeConfig, DEFAULTS, inWindow, dateKey, pickWakeTime, updateConfig, loadConfig, biliOn } from '../lib/settings.js'
 import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -161,4 +161,19 @@ test('配置文件带 UTF-8 BOM 也要读得出来，不能当成坏文件改名
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
+})
+
+// ---- issue #62：上网开关只留一处判据 ----
+// 以前四条路各认各的：看列表认 bili.enabled、看画面认 browse.enabled、身份文档认 browse.enabled、
+// 说话认 comment.enabled。同一份配置能同时说「出不去」和「能出去」。
+// 现在统一过 biliOn()：只有 bili.enabled === false 才算断网；没写这一节一律当开着。
+test('biliOn：只有 bili.enabled 明确为 false 才算断网（issue #62）', () => {
+  assert.equal(biliOn(undefined), true, '没有配置 = 没关过')
+  assert.equal(biliOn({}), true)
+  assert.equal(biliOn({ bili: {} }), true)
+  assert.equal(biliOn({ bili: { enabled: true } }), true)
+  assert.equal(biliOn({ bili: { enabled: false } }), false)
+  // 别的开关不参与这个判断：它们各管一摊，在 biliOn 之后
+  assert.equal(biliOn({ browse: { enabled: false } }), true)
+  assert.equal(biliOn({ comment: { enabled: false } }), true)
 })

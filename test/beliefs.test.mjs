@@ -90,9 +90,9 @@ test('配置项：默认 3，越界被夹回 1–8', () => {
 
 test('客户端：设置项、buildConfig、上限表都在', () => {
   const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.ok(src.includes('每轮对话认知记忆条数'), '设置项标签')
+  assert.ok(src.includes('眼前的判断条数'), '设置项标签（PR #59 F5：原「每轮对话认知记忆条数」）')
   assert.ok(src.includes('beliefsShown: Number(beliefsShown)'), 'buildConfig 要提交它')
-  assert.ok(src.includes("['一次看见几条', beliefsShown, 1, 8]"), '坏值校验表')
+  assert.ok(src.includes("['眼前的判断条数', beliefsShown, 1, 8]"), '坏值校验表（PR #59 F5 改名后同步）')
   assert.ok(src.includes('setBeliefsShown(Number(cfg.memory?.beliefsShown ?? 3))'), 'load 要读它')
 })
 
@@ -103,7 +103,12 @@ test('观测台与身份文档同源：/memory 用 shownCount 而不是写死的
     src.includes('personaBudget(model, { budget, withBans: model?.persona?.imported !== true, shown: shownCap })'),
     '禁不禁用要跟身份文档同源，并且只认事件流里的导入标记（备份/恢复搬来的 config 不算）',
   )
-  assert.ok(src.includes('Math.min(shownCap, model.beliefs.length)'))
+  // 0.9.7 起多一层「总共留几条」：先按 sleepKeep 夹住总数，再在留下的里面取眼前几条。
+  assert.ok(
+    src.includes('const kept = keepCap === null ? model.beliefs.length : Math.min(model.beliefs.length, Math.max(keepCap, shownCap))'),
+    '总数上限要先夹住，再看眼前几条',
+  )
+  assert.ok(src.includes('const shown = Math.min(shownCap, kept)'), '眼前几条永远不超过 shownCap')
 })
 
 test('白名单里额外放行的工具要念给她听（0.6.1，用户 m01371）', () => {

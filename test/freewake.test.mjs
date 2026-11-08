@@ -90,11 +90,19 @@ test('摆料那一轮不摆世界：只有 think 和普通叫醒才看 B 站、�
   assert.equal(keepWorldOnWake(null), true)
 })
 
-test('叫醒拼装处：世界在门内，够不着的那件事桌上有一行，常驻工具句已经撤掉', () => {
+test('叫醒拼装处：不再整段摆世界，只留一行「今天又翻到了什么」，常驻工具句已经撤掉', () => {
   const here = dirname(fileURLToPath(import.meta.url))
   const src = readFileSync(join(here, '..', 'lib', 'scheduler.js'), 'utf8')
-  // 0.9.0（用户 m02562）：刷站不再挂在唤醒上，所有醒来都不摆世界。
-  assert.match(src, /const showWorld = false/)
+  // 0.9.0（用户 m02562）：刷站不再挂在唤醒上；2026-11-07（用户 m00365）恢复自动刷，
+  // 但走另开的一趟（quietBrowse），也不往正文里塞十几条标题简介热评。
+  assert.doesNotMatch(src, /const showWorld = false/, '唤醒里不该再有「摆不摆世界」这颗开关')
+  assert.doesNotMatch(src, /parts\.push\('', look\.intro/, '唤醒里不该再整段塞素材')
+  assert.match(src, /browseDigestLine\(fresh, \{ since, max: DIGEST_NAMES_MAX \}\)/, '只留一行便条')
+  assert.match(src, /const since = lastWakeAt\(evs, dk\)/, '便条的 since 要是上次醒来，不是这一次')
+  // 2026-11-08（用户 m00187 第 4 条）：提过的不再提。
+  // 安静刷隔几个钟头就把同一个列表再记一遍 browse:，只按 since 过滤拦不住。
+  assert.match(src, /filter\(\(x\) => !said\.has\(x\.bvid\)\)/, '便条要剔掉已经提过的')
+  assert.match(src, /digestMentioned\(evs, \{ now: now\.getTime\(\) \}\)/, '「提过谁」从事件流读')
   const desk = src.indexOf('const desk = deskFor({')
   assert.ok(desk > 0, '桌子还在')
   // 2026-11-07（用户 m01602 拍板 B + D）：原来每次醒来都 push 的 TOOL_ASK_NOTE 撤了。

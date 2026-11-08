@@ -251,12 +251,12 @@ test('已经绑了会话的那条不能被当空壳撤掉', async () => {
 // 0.6.16（用户 m01613 / m01677）：复用同一趟、驳回话术、想念天数
 // ------------------------------------------------------------------
 
-test('想念天数只按整天算：5 分钟是 0 天，25 小时是 1 天', () => {
+test('想念天数按天向上取整：出门 5 分钟也算第 1 天（issue #68）', () => {
   const o = { startedAt: 1_700_000_000_000, endedAt: 1_700_000_000_000 + 5 * 60_000 }
-  assert.equal(tripDays(o), 0)
-  assert.equal(tripDays({ startedAt: 1_700_000_000_000, endedAt: 1_700_000_000_000 + 25 * 3600_000 }), 1)
+  assert.equal(tripDays(o), 1)
+  assert.equal(tripDays({ startedAt: 1_700_000_000_000, endedAt: 1_700_000_000_000 + 25 * 3600_000 }), 2)
   assert.equal(tripDays({}), 0)
-  assert.equal(tripDays({ startedAt: Date.now() - 5 * 60_000 }), 0, '还在外面就从现在算，不四舍五入成 1 天')
+  assert.equal(tripDays({ startedAt: Date.now() - 5 * 60_000 }), 1, '还在外面就从现在算：5 分钟也是第 1 天')
 })
 
 test('复用同一趟：找的是同一个工作区、已经结束、带会话 id 的那条', () => {
@@ -434,4 +434,29 @@ test('/outing 复核接口：GET 带回 pendingReview，POST action=review 通�
   assert.ok(client.includes('上一趟还没算数'), '要有一张卡告诉人上一趟卡在哪')
   assert.ok(client.includes('等着核对'), '台账状态词用「等着核对」，不是「等确认」')
   assert.ok(!client.includes('她留在外面，等你确认过再说'), 'pending 之后她其实已经回家了，旧文案会骗人')
+})
+
+
+test('回家台账记下两份名单：人划掉的、pending 时先替她标掉的（issue #68）', async () => {
+  const { root, done } = tmp()
+  try {
+    const now = 1_700_000_000_000
+    await startOuting(root, {
+      ...base(root),
+      sessionId: 's-p',
+      baseline: snapshotEvents(join(root, 'events.jsonl')),
+      identity: '',
+      now,
+    })
+    await endOuting(root, {
+      sessionId: 's-p', status: 'pending', kept: null, now: now + 60_000,
+      rejectedIds: ['ev_b'], pendingRejectedIds: ['ev_a', 'ev_b'],
+    })
+    const pend = pendingOf(await readOutings(root))
+    assert.ok(pend)
+    assert.deepEqual(pend.rejectedIds, ['ev_b'], '人划掉的要留着，复核时靠它决定哪些不回来')
+    assert.deepEqual(pend.pendingRejectedIds, ['ev_a', 'ev_b'], 'pending 时整趟先标掉的名单也要留着')
+  } finally {
+    done()
+  }
 })

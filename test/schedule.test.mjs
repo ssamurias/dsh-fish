@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { HER_TOOLS, SCHEDULE_TOOLS, toolSurfaceText } from '../lib/restrict.js'
-import { SCHEDULE_BRIEF } from '../lib/persona.js'
+import { SCHEDULE_BRIEF, scheduleBrief } from '../lib/persona.js'
 import { classifyMessage } from '../lib/turns.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -45,11 +45,15 @@ test('说明书讲清三件事：怎么定、到点怎么做、出门时先别�
   assert.ok(SCHEDULE_BRIEF.includes('不替你记成长'), '别让她以为提醒做完就自动算成长')
 })
 
-test('身份文档只在放行时挂这段说明书', () => {
+test('身份文档只在放行时挂这段说明书，而且只写真的放行的那几个', () => {
   const src = readFileSync(join(libDir, 'selfdoc.js'), 'utf8')
-  assert.ok(/import .*SCHEDULE_BRIEF/.test(src), 'selfdoc 得 import 它')
-  assert.ok(/schedule \? \[SCHEDULE_BRIEF/.test(src), '得有条件地挂：没放行就不能告诉她「你有」')
-  assert.ok(src.includes("=== 'schedule_create'"), '判据要读白名单里的 schedule_create')
+  assert.ok(/import .*scheduleBrief/.test(src), 'selfdoc 得 import 它')
+  assert.ok(/scheduleNames\.length \? \[scheduleBrief\(scheduleNames\)/.test(src), '得按实际放行的名字现拼，不能写死四个')
+  assert.ok(src.includes('SCHEDULE_NAMES.includes(n)'), '判据要读白名单里的 schedule_*')
+  // 只放 schedule_create 时，说明书里不能出现另外三个
+  const one = scheduleBrief(['schedule_create'])
+  assert.ok(one.includes('schedule_create'))
+  assert.ok(!one.includes('schedule_list'), '没放行的工具不能念给她听')
 })
 
 test('设置页只在放行时改口说「她能自己定提醒」', () => {

@@ -102,83 +102,24 @@ test('六种不该开口的情况各有各的理由，别混成一句「不到�
   assert.match(proactiveState({ config: { ...ON, window: win }, events: quiet, now }).why, /时段/)
 })
 
-test('概率随「多久没说话」上升，但有上限；配置读进来会夹紧', () => {
-  const now = Date.now()
-  const hours = (h) => ev({ ts: new Date(now - h * 3_600_000).toISOString() })
-  const a = proactiveState({ config: ON, events: [hours(7)], now })
-  const b = proactiveState({ config: ON, events: [hours(20)], now })
-  assert.equal(a.ok, true)
-  assert.ok(b.chance > a.chance, '越久没说话，越可能开口')
-  assert.ok(b.chance <= proactiveConfig(ON).maxChance)
-
-  const far = proactiveState({ config: { proactive: { enabled: true, maxChance: 0.3 } }, events: [hours(99)], now })
-  assert.ok(far.chance <= 0.3, '封顶必须生效，不然久了就必触发')
-
-  const clamped = proactiveConfig({ proactive: { maxPerDay: 99, minIdleHours: -5, baseChance: 7 } })
+test('配置读进来会夹紧（issue #67 后只剩频次与冷却）', () => {
+  const clamped = proactiveConfig({ proactive: { maxPerDay: 99, minIdleHours: -5, cooldownHours: 999 } })
   assert.equal(clamped.maxPerDay, 12)
-  assert.equal(clamped.minIdleHours, 0)
-  assert.equal(clamped.baseChance, 1)
+  assert.equal(clamped.minIdleHours, 1)
+  assert.equal(clamped.cooldownHours, 240)
+  assert.equal('baseChance' in clamped, false, '概率那三个键已经删了')
 })
 
-// ---- 节奏随成长变（2026-11-04，用户 m01466）----
-//
-// 用户原话：「这个自己开口的出口不该是恒温的」。之前 `proactiveState()` 的签名里
-// 根本没有 model，于是第 3 天和第 27 天算出来的 chance 一个数都不差——成长只影响
-// `plan()` 派哪张卡（被叫醒时手里拿什么），完全不影响她多久才自己想开口一次。
-//
-// 三个杠杆都从已有事件推出来：不写盘、不加配置项、不让她看见任何数值（不撞 no-read-self）。
-
-test('不传 model 时与改动前一字不差（老调用方的行为不许漂）', () => {
+test('到点只判闸门，不再掷骰子：state 里没有 chance（issue #67）', () => {
   const now = Date.now()
-  const old = new Date(now - 7 * 3_600_000).toISOString()
-  const events = [ev({ ts: old })]
-  const noModel = proactiveState({ config: ON, events, now })
-  const explicitNull = proactiveState({ config: ON, events, now, model: null })
-  const cfg = proactiveConfig(ON)
-  // 基础概率 0.15 + (7-6)*0.05 = 0.20，这是 2026-11-04 之前的算式。
-  assert.equal(noModel.chance, 0.2, `恒温算式被改动了：${noModel.chance}`)
-  assert.deepEqual(explicitNull, noModel, 'model=null 必须等于不传')
-  assert.equal(noModel.chance, Math.min(cfg.maxChance, cfg.baseChance + 1 * cfg.gainPerHour))
-})
-
-test('阶段越高，同样的安静时长里越容易自己开口', () => {
-  const now = Date.now()
-  const events = [ev({ ts: new Date(now - 7 * 3_600_000).toISOString() })]
-  const at = (stage) => proactiveState({ config: ON, events, now, model: { stage } })
-  const s1 = at(1)
-  const s2 = at(2)
-  const s4 = at(4)
-  assert.equal(s1.chance, 0.2, '阶段 1 = 配置原值')
-  assert.ok(s2.chance > s1.chance, '阶段 2 要比阶段 1 更主动')
-  assert.ok(s4.chance > s2.chance, '阶段 4 要比阶段 2 更主动')
-  // 封顶 0.80：再高就不是「她想不想」，而是「几乎一定」。
-  const far = proactiveState({ config: ON, events: [ev({ ts: new Date(now - 99 * 3_600_000).toISOString() })], now, model: { stage: 4 } })
-  assert.ok(far.chance <= 0.8, `阶段 4 的封顶没生效：${far.chance}`)
-})
-
-test('刚推翻过自己的话：24 小时内更容易开口（revise 抬基础概率）', () => {
-  const now = Date.now()
-  // 都要安静够 minIdleHours（默认 6 小时）才轮得到概率这一段，
-  // 所以两条用例的「上一次说话」都摆在同一时刻，只差那条 revise。
-  const tenHoursAgo = new Date(now - 10 * 3_600_000).toISOString()
-  const quiet = [ev({ ts: tenHoursAgo })]
-  const revised = [
-    ev({ id: 'ev_r', type: 'revise', text: '我改口', ts: tenHoursAgo, refs: ['ev_x'] }),
-    ev({ ts: tenHoursAgo }),
-  ]
-  const plain = proactiveState({ config: ON, events: quiet, now, model: { stage: 1 } })
-  const after = proactiveState({ config: ON, events: revised, now, model: { stage: 1 } })
-  assert.equal(plain.ok, true, plain.why)
-  assert.equal(after.ok, true, after.why)
-  assert.ok(after.chance > plain.chance, '刚改过口的人有话没说完')
-  assert.ok(Math.abs(after.chance - (plain.chance + 0.1)) < 1e-9)
-
-  // 超过 24 小时的 revise 不再抬——不然一次改口能被记一辈子。
-  const old = [
-    ev({ id: 'ev_r2', type: 'revise', text: '我改口', ts: new Date(now - 30 * 3_600_000).toISOString(), refs: ['ev_x'] }),
-    ev({ ts: tenHoursAgo }),
-  ]
-  assert.equal(proactiveState({ config: ON, events: old, now, model: { stage: 1 } }).chance, plain.chance)
+  const quiet = [ev({ ts: new Date(now - 7 * 3_600_000).toISOString() })]
+  const s = proactiveState({ config: ON, events: quiet, now })
+  assert.equal(s.ok, true, s.why)
+  assert.equal('chance' in s, false)
+  // 成长阶段只影响别处；开口这件事不再随阶段改概率
+  const s4 = proactiveState({ config: ON, events: quiet, now, model: { stage: 4 } })
+  assert.equal(s4.ok, true, s4.why)
+  assert.equal('chance' in s4, false)
 })
 
 test('刚有人跟她说过话：余温还在，冷却从 4 小时缩到 2 小时', () => {
@@ -205,7 +146,7 @@ test('刚有人跟她说过话：余温还在，冷却从 4 小时缩到 2 小�
 })
 
 test('空手回合的正文只说事实和许可，不写「你应该」', () => {
-  const text = proactiveSection({ now: Date.now(), state: { idleHours: 9.5, chance: 0.3 }, material: [{ id: 'ev_a', type: 'utterance', text: '今天有点累' }], loose: [{ id: 'ev_b', text: '你问过一件事，还没答复。' }] })
+  const text = proactiveSection({ now: Date.now(), state: { idleHours: 9.5 }, material: [{ id: 'ev_a', type: 'utterance', text: '今天有点累' }], loose: [{ id: 'ev_b', text: '你问过一件事，还没答复。' }] })
   assert.match(text, /没有人跟你说话/)
   assert.match(text, /想说什么就说/)
   // 2026-11-06（issue #41）：原文写「他看得见」，装了渠道路由插件就不成立。

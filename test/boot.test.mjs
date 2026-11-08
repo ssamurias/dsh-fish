@@ -558,7 +558,7 @@ test('手动唤醒：当天次数已经用满，仍然拒绝（配额不因手�
     const { ctx, prompts } = fakeCtx()
     const r = await wakeNow(ctx, { root })
     assert.equal(r.ok, false, JSON.stringify(r))
-    assert.match(String(r.why), /今日事件已满/, `拒绝理由要说配额，不是说没卡：${r.why}`)
+    assert.match(String(r.why), /设置里每天最多 0 条事件/, `拒绝理由要说配额，不是说没卡：${r.why}`)
     assert.equal(prompts.length, 0)
   })
 })

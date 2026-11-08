@@ -16,7 +16,7 @@ import { mkdtemp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { grabFrames, sampleTimes, normalizeAt } from '../lib/video.js'
+import { grabFrames, sampleTimes, normalizeAt, watchBlocked } from '../lib/video.js'
 import { detectFfmpeg, mediaDir } from '../lib/media.js'
 
 const BVID = 'BV1ph4y1g75E'
@@ -333,4 +333,23 @@ test('grabFrames：拼图失败时不把 ffmpeg 的报错当成图落盘', async
   const dir = await mediaDir(root)
   const sheets = (await readdir(dir).catch(() => [])).filter((x) => x.startsWith('sheet-'))
   assert.equal(sheets.length, 0, `失败时不该留下拼图文件，实际有 ${sheets.join(',')}`)
+})
+
+// issue #62：点名看画面以前不看黑名单，只有自动刷站 rankVideos 才过 avoidHit。
+// 于是「这条我不想看」能被一句「看看 BVxxx」绕过去。现在抽帧前统一过 watchBlocked()。
+test('watchBlocked：黑名单里的 UP 与关键词都拦得住（issue #62）', () => {
+  const cfg = { avoid: { upMids: ['42'], keywords: ['鬼畜'] } }
+  assert.equal(watchBlocked({ mid: 42, title: '随便什么' }, cfg), '这条我不想看。')
+  assert.equal(watchBlocked({ mid: '42', title: '随便什么' }, cfg), '这条我不想看。', 'mid 数字/字符串都要认')
+  assert.equal(watchBlocked({ mid: 7, title: '【鬼畜】全明星' }, cfg), '这条我不想看。')
+  assert.equal(watchBlocked({ mid: 7, up: '某某鬼畜区' }, cfg), '这条我不想看。', 'UP 名里带关键词也拦')
+  assert.equal(watchBlocked({ mid: 7, title: '普通视频' }, cfg), '')
+})
+
+test('watchBlocked：太短的先拦，且黑名单优先（issue #62）', () => {
+  const cfg = { avoid: { keywords: ['鬼畜'] } }
+  assert.equal(watchBlocked({ title: '一条很短的', duration: 20 }, cfg, 60), '这条太短了，不想看。')
+  assert.equal(watchBlocked({ title: '一条很长的', duration: 600 }, cfg, 60), '')
+  assert.equal(watchBlocked({ title: '一条很短的', duration: 20 }, cfg, 0), '', '没设最短时长就不拦')
+  assert.equal(watchBlocked({ title: '鬼畜短片', duration: 20 }, cfg, 60), '这条我不想看。', '两样都占时先说黑名单')
 })

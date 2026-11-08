@@ -18,7 +18,7 @@ import { personaLine, assemble, foldOlderBeliefs, HARD_BANS, sleepPrompt } from 
 import { renderSelfDoc } from '../lib/selfdoc.js'
 import { addExchange, recentExchanges, renderCarry, TALK_KEEP } from '../lib/talkmem.js'
 import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS, ROTATE_RETRY_MS } from '../lib/home.js'
-import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET } from '../lib/recall.js'
+import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET, literalsOf, freshnessOf, FRESH_FLOOR } from '../lib/recall.js'
 import { normalizeConfig, DEFAULTS } from '../lib/settings.js'
 
 const DAY = 86_400_000
@@ -165,11 +165,12 @@ test('轮换：旧会话改名留档、新会话接管、原话搬过去', () =>
   assert.equal(saved.lastWords, undefined)
 }))
 
-test('换会话只换该换的：preset / hearAt / title 这些还不能丢（issue #14 第二报）', () => withRoot(async (root) => {
+test('换会话只换该换的：preset / title 要留下，hearAt 跟着轮数归零（issue #14 第二报 / issue #60）', () => withRoot(async (root) => {
   const { writeAtomic, paths } = await import('../lib/store.js')
   const homeFile = join(paths(root).root, 'home.json')
-  // 以前这里整份覆盖写，preset/hearAt/title 全被抹掉 —— 换完会话旁听节奏归零、
-  // 她挑的那套预设也丢了，但没有任何日志能看出来。
+  // 以前这里整份覆盖写，preset/title 全被抹掉 —— 换完会话她挑的那套预设丢了，
+  // 但没有任何日志能看出来。hearAt 是另一回事：它记的是「上次旁听在第几轮」，
+  // 新会话 turns 从 0 起，照搬旧值会让旁听永远追不上（issue #60）。
   await writeAtomic(homeFile, JSON.stringify({
     wsId: 'ws-1',
     sessionId: 'sess-old',
@@ -187,7 +188,7 @@ test('换会话只换该换的：preset / hearAt / title 这些还不能丢（is
   assert.equal(raw.sessionId, 'sess-new')
   assert.equal(raw.turns, 0)
   assert.equal(raw.preset, '那个人挑的那套')
-  assert.equal(raw.hearAt, 7)
+  assert.equal(raw.hearAt, 0)
   assert.equal(raw.title, '她自己起的名字')
   assert.equal(raw.rotatedFrom, 'sess-old')
   assert.ok(raw.rotatedAt)
@@ -722,14 +723,79 @@ test('回忆：改口关系另起缩进行，并带对方原话（issue #23）',
 test('回忆：不是她说的要标来源（voice / answer / heard，issue #23）', async () => {
   const { searchEvents, renderRecall } = await import('../lib/recall.js')
   const now = new Date('2026-11-04T12:00:00.000Z').getTime()
-  const ev = (id, type, ts, text) => ({ id, type, ts: new Date(ts).toISOString(), text })
+  const ev = (id, type, ts, text, extra = {}) => ({ id, type, ts: new Date(ts).toISOString(), text, ...extra })
   const events = [
     ev('v', 'voice', now - 3 * DAY, '评论里有人这么说'),
     ev('a', 'answer', now - 2 * DAY, '评论我回过一句'),
     ev('h', 'heard', now - DAY, '评论他说的'),
   ]
-  const txt = renderRecall(searchEvents(events, '评论', { now, solidIds: [] }).rows)
+  // 2026-11-08（用户 m00394）：群聊里的 heard 要写成「他在群里说」。
+  // 不然她翻旧账时会把群里的热闹当成「他私下跟我说的」。
+  const events2 = [...events, ev('g', 'heard', now - DAY, '评论群里那句', { scene: 'group' })]
+  const txt = renderRecall(searchEvents(events2, '评论', { now, solidIds: [] }).rows)
   assert.match(txt, /读到别人说：评论里有人这么说/)
   assert.match(txt, /回复：评论我回过一句/)
   assert.match(txt, /他说：评论他说的/)
+  assert.match(txt, /他在群里说：评论群里那句/)
+})
+
+// ------------------------------------------------ 2026-11-08（用户 m00187）排序三件事
+
+test('回忆：字面量只收「带数字或分隔符」的，普通英文单词与纯数字不收', () => {
+  assert.deepEqual(literalsOf('0.9.3 的坑').sort(), ['0.9.3'])
+  assert.deepEqual(literalsOf('snapshot.json 坏了').sort(), ['snapshot.json'])
+  assert.deepEqual(literalsOf('her_recall 翻不到').sort(), ['her_recall'])
+  assert.deepEqual(literalsOf('ok 和 deepseek 这两个词'), [], '普通英文单词不收：整词与二字切片够用')
+  assert.deepEqual(literalsOf('第 3 条'), [], '纯数字不收：年份、条数到处都是')
+})
+
+test('回忆：版本号整串比，不被二字切片切碎', () => {
+  const now = Date.now()
+  const events = [
+    // 两字切片会把这句里的字撞上「0.9.3」的碎片（`3的`、`的坑`）
+    { id: 'noise', type: 'utterance', ts: new Date(now).toISOString(), text: '今天的事，说了那些话' },
+    { id: 'hit', type: 'narration', ts: new Date(now - 20 * DAY).toISOString(), text: '0.9.3 的坑是 bundles 对不齐' },
+  ]
+  const { rows } = searchEvents(events, '0.9.3 的坑', { now, solidIds: [] })
+  assert.equal(rows.length, 1, '没命中这个版本号的条目不该被碎片带进来')
+  assert.equal(rows[0].id, 'hit')
+})
+
+test('回忆：到处都是的词（今天）不该跟罕见的词（疤）同分', () => {
+  const now = Date.now()
+  const at = (d) => new Date(now - d * DAY).toISOString()
+  const events = [
+    ...Array.from({ length: 4 }, (_, i) => ({ id: `f${i}`, type: 'utterance', ts: at(i + 2), text: '今天没什么事' })),
+    // 常见词这条更新——原来新旧就是唯一的排序依据
+    { id: 'common', type: 'utterance', ts: at(0), text: '今天' },
+    { id: 'rare', type: 'narration', ts: at(5), text: '疤' },
+  ]
+  const { rows } = searchEvents(events, '今天 疤', { now, solidIds: [] })
+  assert.equal(rows[0].id, 'rare', '罕见词命中要排在没有信息量的常见词前面')
+})
+
+test('回忆：新旧折算 —— 工具账 45 天半衰，她自己的话 180 天，判断类永不折', () => {
+  const now = 1_800_000_000_000
+  const at = (d) => new Date(now - d * DAY).toISOString()
+  const ev = (type, d) => ({ id: type, type, ts: at(d) })
+  const solid = new Set()
+
+  const metaF = freshnessOf(ev('meta', 30), { now, solid })
+  assert.ok(metaF > 0.7 && metaF < 0.85, `meta 30 天约 0.78，实际 ${metaF}`)
+  const saidF = freshnessOf(ev('utterance', 30), { now, solid })
+  assert.ok(saidF > 0.9, `她自己的话 30 天该 > 0.9，实际 ${saidF}`)
+  assert.equal(freshnessOf(ev('revise', 3000), { now, solid }), 1, '判断类永不折')
+  assert.equal(freshnessOf({ id: 'x', type: 'utterance', ts: at(3000) }, { now, solid: new Set(['x']) }), 1, '固化过的不折')
+  assert.ok(freshnessOf(ev('utterance', 100_000), { now, solid }) >= FRESH_FLOOR, '再旧也有地板')
+})
+
+test('回忆：字面命中相同时，昨天的先于三个月前的（只在加权时折）', () => {
+  const now = Date.now()
+  const at = (d) => new Date(now - d * DAY).toISOString()
+  const events = [
+    { id: 'old', type: 'utterance', ts: at(90), text: '评论这件事' },
+    { id: 'new', type: 'utterance', ts: at(1), text: '评论这件事' },
+  ]
+  assert.equal(searchEvents(events, '评论', { now, weigh: false }).rows[0].id, 'new', '不加权：只按新旧')
+  assert.equal(searchEvents(events, '评论', { now }).rows[0].id, 'new')
 })

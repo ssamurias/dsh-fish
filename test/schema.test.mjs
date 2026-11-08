@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { newId, idTime, validateEvent, detectSelfMod, Reject, HER_TYPES, isBlankNarration } from '../lib/schema.js'
+import { newId, idTime, validateEvent, detectSelfMod, Reject, HER_TYPES, isBlankNarration, isContactEvent } from '../lib/schema.js'
 
 test('ULID 单调递增，且能从 id 反解时间', () => {
   const t = 1759000000000
@@ -102,4 +102,18 @@ test('confidence 被夹到 0–1，未知 flag 被丢弃', () => {
   assert.equal(ev.confidence, 1)
   assert.deepEqual(ev.flags, [])
   assert.ok(Reject)
+})
+
+test('「他来过」的证据：群聊里的 heard 不算（2026-11-08，用户 m00394）', () => {
+  const at = new Date(Date.now() - 86_400_000).toISOString()
+  // 他自己在群里说的话现在也进记忆，但那不代表他来找过她——
+  // 群里聊两句就算一次，冷落检测永远不会触发。
+  assert.equal(isContactEvent({ type: 'heard', text: '群里说的那句', scene: 'group', ts: at }), false)
+  // 私聊/书房那条仍是「他来过」的证据（侧栏聊天不写 seen 的那段时间只靠它）
+  assert.equal(isContactEvent({ type: 'heard', text: '私聊说的那句', ts: at }), true)
+  assert.equal(isContactEvent({ type: 'heard', text: '私聊说的那句', scene: 'private', ts: at }), true)
+  // 主证据照旧
+  assert.equal(isContactEvent({ type: 'meta', text: `seen:${at}` }), true)
+  // 她自己的话永远不算
+  assert.equal(isContactEvent({ type: 'utterance', text: '我自己的话', ts: at }), false)
 })

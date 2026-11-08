@@ -69,7 +69,7 @@
 node --test
 ```
 
-当前基线 **1674 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **1793 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
@@ -111,6 +111,7 @@ POST /dsh-fish/say
 | `room` | 否 | `house`（并进书房）或 `channel`（另开一间）。不传时私聊回书房、群聊另开 |
 | `speaker` | 否 | 这句话是谁说的。**任何场次都写进正文前缀**，不再只限群聊 |
 | `guest` | 否 | `true` = 外客（群友私聊这类）。标明「不是他」，不算他来过、不涨轮数、不进书房桶 |
+| `owner` | 否 | `true` = **这条是他本人说的**（2026-11-08，用户 m00394）。桥按 QQ 号判，插件**不猜昵称**。只对 `scene:'group'` 有意义：群里他的话进记忆（一句原话，`heard` + `scene:group`），但仍然**不算他来找过她**。不传 = 老行为 |
 | `title` | 否 | 侧栏显示名（群名、昵称）。不传才回落到 channel 键 |
 
 路由规则（`lib/channels.js` 的 `resolveChannel`）：
@@ -120,6 +121,7 @@ POST /dsh-fish/say
 - **`scene: 'private'`** → 默认**仍进家里那条会话**（"QQ 私聊和 DSH 对话融合"那个选项）。要每人一间，传 `room: 'channel'`。
 - **`scene: 'group'`** → 默认按 `channel` 自建/复用一间房（记在 `channels.json`），cwd 仍是她的屋子，身份、工具面、白板都照旧——**还是同一个人，只是换了个房间说话**。想让所有群并进书房，传 `room: 'house'`。
 - **`guest: true`** → 房间照开（如果 `room` 要求），但这条不算他来过：不写 `seen:`、不 `bumpTurns`、不触发轮换；正文标「有个不是他的人跟你说话」，她不会把群友当成主人。
+- **`scene: 'group'` + `owner: true`**（2026-11-08，用户 m00394）→ 群里**他本人**说的话。进记忆（写一条 `heard`，带 `scene:'group'`，她翻到时读到的是「他在群里说：…」），但不进生命体征：不写 `seen:`、不 `bumpTurns`、不触发轮换、不进书房桶。**群友的话（不带 `owner`）一条都不进记忆**——这是产品边界，不是遗漏。
 
 **常见布局都由桥表达，插件不写死：** 全部并进书房（不传 `channel`，或 `room:'house'`）；每群一间（`channel:'qq-group:<群号>'` + `group`）；群友私聊每人一间（`channel:'qq:dm:<QQ号>'` + `private` + `room:'channel'` + `guest:true`）；群友私聊进书房但标身份（`private` + `guest:true` + `speaker`）；只有 @ 她才进（桥侧过滤，不投递就不建房）。
 
@@ -137,19 +139,20 @@ GET /dsh-fish/whoami
 
 **桥那边怎么实现是桥的事**；我们这边只保证上面这几个字段能收、能落到正确的地方。
 
-### 7.2 四个配套约定（改桥之后的正确性全押在这四条上）
+### 7.2 五个配套约定（改桥之后的正确性全押在这五条上）
 
 1. **场次要进事件流**。`validateEvent` 现在接受可选 `scene`（非 `desk` 才落库，纯加法，不升 `EVENT_SCHEMA_VERSION`）。桥注入 `user/message` 时把 `scene` 写进 **`source.scene`**，`classifyMessage` 才会认出来（`lib/turns.js`）。
-2. **外客不动生命体征**。`seen:`、`heard`、`bumpTurns`、会话轮换只由 desk/private 且非 `guest` 触发；群聊与群友私聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。
+2. **外客不动生命体征**。`seen:`、`bumpTurns`、会话轮换只由 desk/private 且非 `guest` 触发；群聊与群友私聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。`heard` 分两种：私聊/书房那条算「他来过」，群聊那条（`scene:'group'`）**不算**——`schema.js` 的 `isContactEvent` 已经把群聊的 `heard` 排除掉了（2026-11-08）。
 3. **外来场次必须带说话人前缀**。`lib/say.js` 对 `group` 与 `guest` 都用 `speaker` 拼 `某某在群里说：…` / `某某说：…`。不拼的话，群里三个人的话在她看来跟一个人连说三句一模一样，她会把三个人的观点拼成一个"他"。外来文本统一过 `lib/guard.js` 的 `sanitizeForeign`。
 4. **桥不要用宿主的 `source.form`**。`snapshot`、`notice`、`catalog`、`instructions`、`recall` 是宿主前端的保留词表，`classifyMessage` 见到就当上下文，不算人（`MACHINE_FORMS`）。转述人说的话，要么不带 `form`，要么用 `relay`。
+5. **走宿主 prompt 的桥，`rpcId` 就是记号**。`sessionController.prompt()` 把 `kind` 写死成 `user`，把调用方的 `requestId` 写进 `source.rpcId`，桥传不进自己的 `source`；`clientTimeZone` 是可选字段，忘了不会报错。2026-11-08 起 `classifyMessage` 把「带 rpcId 的 user 消息」也认作人：我们自己的 prompt 用 `PLUGIN_RPC` 前缀先挡掉，`possess.js` / `sessionnote.js` 的 append 没有 rpcId，仍留 unknown。桥仍应带 `clientTimeZone`——`dsh-time-context` 只认「kind user + rpcId + 时区」三者齐全的 source。正文末尾的 `[渠道：…]` / `[Channel: …]` 独立段落只影响记账（`lib/turns.js` 的 `stripChannelNote` 会裁掉），会话原文不动；只有提示的那条不算他来过。
 
 ### 7.3 对话靠工具发出去的部署
 
 先问一句：**她写的正文会被插件自动发出去吗？** 会，就什么都不用填，只认正文的默认行为是对的。不会，也就是正文只留在会话里、要调工具才发得出去，才填下面这几项。都不认具体插件，工具名由配置给。
 
 - `proactive.sendTools`：发送工具的名字，也要放进 `tools.allow`（工具面收窄开着时，没放行她调不到）。填了之后，只有这些工具调成功才算她开了口（记 `proactive-turn:`，占额度，不折叠），代码模式（run_code）里调的也算；只写正文算没开口。处境和身份段会照实写用这个工具、正文发不到聊天里。工具自己返回「没发出去」但没有报错的，这里认不出来。
-- `proactive.idleCountsSeen`：`true` 时 `seen:` 也算打断安静、也算「他接了」。她靠工具回话、正文不进事件流时要开。它要有 `seen:` 可认：走 `/say`，或者 `source.kind` 不是 `user`，或者带 `clientTimeZone`；`{kind:'user'}` 不带时区的桥要自己写。代价是他在这台机器上和别的 agent 说话也算，所以默认关。
+- `proactive.idleCountsSeen`：`true` 时 `seen:` 也算打断安静、也算「他接了」。她靠工具回话、正文不进事件流时要开。它要有 `seen:` 可认：走 `/say`，或者 `source.kind` 不是 `user`，或者带 `clientTimeZone`，或者带 `rpcId`（走宿主 prompt 的桥一定会带）；`{kind:'user'}` 又没时区、又没 rpcId 的桥要自己写。代价是他在这台机器上和别的 agent 说话也算，所以默认关。
 
 还有一项和工具无关：`proactive.foldSilent` 是 `false` 时，没开口的一轮只记账、不折。折叠会改历史，上下文很大、靠缓存省钱时可以关。
 
@@ -214,7 +217,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 三个依赖字段还是 `{}`
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `guard.js`
-- [ ] `node --test` 1674 全绿
+- [ ] `node --test` 1793 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节

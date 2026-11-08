@@ -80,6 +80,56 @@ test('放一天没人答的卡不被说成「他说以后再说」：仍是还�
   assert.equal(wishesOf(events, { now: NOW + 4 * DAY }).length, 0, '还是 3 天窗口，不是 30 天')
 })
 
+// issue #58：卡上答「可以」不发权限，他只能在卡外给（装插件 / 加白名单），
+// 事件流里一个字都不记。所以「还在不在手上」要看白名单，不能只看 ask/answer。
+test('工具已经到手就不再摆「他答应了，还没见到」（issue #58）', () => {
+  const events = [
+    ask({ id: 'a1', text: '想要个能查 npm 版本的东西', subject: 'npm_view' }),
+    answer({ id: 'x1', askId: 'a1', verdict: 'approve' }),
+  ]
+  // 不传 has：老调用点行为不变，照摆 14 天
+  assert.equal(wishesOf(events, { now: NOW + 10 * DAY }).length, 1)
+  // 传 has：已经在手上，一句都不该再摆
+  assert.equal(wishesOf(events, { now: NOW + 10 * DAY, has: new Set(['npm_view']) }).length, 0)
+  // 手上别的东西不关这条的事
+  assert.equal(wishesOf(events, { now: NOW + 10 * DAY, has: ['bili_look'] }).length, 1)
+  // 函数写法也认（scheduler 想现查也行）
+  assert.equal(wishesOf(events, { now: NOW + 10 * DAY, has: (n) => n === 'npm_view' }).length, 0)
+})
+
+test('超时那种也一样：后来在别处给了，就别再摆「你问过，还没有答复」（issue #58）', () => {
+  const events = [
+    ask({ id: 'a1', text: '想要能看整条视频的工具', subject: 'bili_watch' }),
+    answer({ id: 'x1', askId: 'a1', verdict: 'later', via: 'timeout' }),
+  ]
+  assert.equal(wishesOf(events, { now: NOW + 2 * DAY }).length, 1)
+  assert.equal(wishesOf(events, { now: NOW + 2 * DAY, has: ['bili_watch'] }).length, 0)
+  // 桌上是空的，劲儿也不该靠它推她醒
+  assert.equal(deskHasMaterial({ wish: wishesOf(events, { now: NOW + 2 * DAY, has: ['bili_watch'] }).length }), false)
+  assert.equal(deskHasMaterial({ wish: wishesOf(events, { now: NOW + 2 * DAY }).length }), true)
+})
+
+test('没填工具名的那张不拿空串去比对（issue #58）', () => {
+  // subject 为空 = 她只写了一句话，没点名要什么；空串不能当成一个「已经有的工具」
+  const events = [ask({ id: 'a1', text: '想要个什么都行' })]
+  assert.equal(wishesOf(events, { now: NOW, has: (n) => n === '' }).length, 1)
+  assert.equal(wishesOf(events, { now: NOW, has: [''] }).length, 1)
+})
+
+test('判断坏掉时宁可多摆一条，不能把她的心事静默吞掉（issue #58）', () => {
+  const events = [
+    ask({ id: 'a1', text: '想要个能查 npm 版本的东西', subject: 'npm_view' }),
+    answer({ id: 'x1', askId: 'a1', verdict: 'approve' }),
+  ]
+  const boom = () => { throw new Error('白名单还没读出来') }
+  assert.equal(wishesOf(events, { now: NOW, has: boom }).length, 1)
+})
+
+test('调度器摆桌子、算劲儿、散尾三处都拿白名单剔一遍（issue #58 / PR #70）', () => {
+  const src = readFileSync(new URL('../lib/scheduler.js', import.meta.url), 'utf8')
+  assert.equal((src.match(/has: toolInHandNow\(\)/g) ?? []).length, 3, '漏一处，桌上还会摆已经到手的东西')
+})
+
 test('「这次不行」不摆：不同意就是不问了，再提一次就成了追问', () => {
   const events = [ask({ id: 'a1', text: '想要一个能看全片的工具' }), answer({ id: 'x1', askId: 'a1', verdict: 'reject' })]
   assert.equal(wishesOf(events, { now: NOW }).length, 0)

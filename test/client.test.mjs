@@ -212,7 +212,7 @@ test('组件在"有数据"时把关键信息渲染出来', async () => {
   const srcAll = await readFile(CLIENT, 'utf8')
   assert.ok(!/\[\s*'all'\s*,/.test(srcAll), '源码里不该再留 all 页签')
   assert.ok(src.includes('让我看日记'), '日记可见性开关必须在')
-  assert.ok(src.includes('黑名单（逗号分隔'), '黑名单可追加必须在')
+  assert.ok(src.includes('屏蔽关键词'), '黑名单可追加必须在（PR #59 E18：原「视频内容黑名单（逗号分隔，可随时加）」）')
   assert.ok(src.includes('允许她上网（B 站）'), '上网总开关必须在')
   delete globalThis.fetch
 })
@@ -821,8 +821,10 @@ test('设置页切页不能把判据 showTab 当成开关用（issue #12）', as
 
 test('时段控件下面补一行 24 小时制：00:00 不会被读成中午十二点', async () => {
   // 「每天几点醒」在「生长」页（lib/client.js 里 growPage 那张卡），默认停在「状态」页，
-  // 得把 tab 拨过去。tab 是本组件第 44 个 useState（lib/client.js:361，0 基下标 43）。
-  const react = fakeReact({ 43: 'grow' })
+  // 得把 tab 拨过去。tab 是本组件第 45 个 useState（lib/client.js:386，0 基下标 44）。
+  // 下标挪过一次：0.9.7 在白名单那组加了一个 state（只在特定场合才给她的工具），
+  // 它在 tab 之前，于是 tab 从 43 挪到 44。以后再往它前面加 state，这里要跟着挪。
+  const react = fakeReact({ 44: 'grow' })
   const { exports } = await loadClient({ react })
   react.resetCursor()
   const txt = textOf(exports.FishSection()).join(' ')
@@ -830,4 +832,37 @@ test('时段控件下面补一行 24 小时制：00:00 不会被读成中午十�
   // 用户看到窗口 00:00–23:00 里凌晨五点醒来，很容易当成 bug（2026-11-06 反馈）。
   assert.ok(txt.includes('每天几点醒'), '生长页得真的渲染出来（tab 下标漂了就改这里）')
   assert.ok(txt.includes('24 小时制：20:00 → 23:00'), '默认时段要按 24 小时写出来')
+})
+
+// ---------------------------------------------------------------------------
+// 2026-11-08：issue #69 —— 数字框范围、提醒开关、历史天数
+// ---------------------------------------------------------------------------
+
+test('数字框的范围跟 settings.js 的 LIMITS 对齐：事件/问题能到 6，旁听间隔也在表里（issue #69）', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+
+  // 0–5 会把用户选的「6」判成非法：保存按钮一直红着，却说不出是哪一项。
+  assert.ok(src.includes("['每天最多几条事件', eventsPerDay, 0, 6]"), '事件条数上限是 6')
+  assert.ok(src.includes("['每天最多几个问题', questionsPerDay, 0, 6]"), '问题条数上限是 6')
+
+  // 这个框一直有（growPage 里那行），但不在 NUM_BOUNDS 里 —— 清空或越界时不会被拦。
+  assert.ok(src.includes("['每几轮记一句', hearEvery, 0, 50]"), '旁听间隔要参与范围校验')
+})
+
+test('桌面提醒有开关：界面写 /notify，不再只靠配置里那个永远 false 的键（issue #69）', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+
+  assert.ok(src.includes("group('桌面提醒'"), '设置页要有这张卡')
+  assert.ok(src.includes("await jpost('/notify', { enabled: v })"), '开关要真的写到服务端')
+  assert.ok(src.includes('允许浏览器通知'), '没有权限时得能给一个申请入口')
+  // 服务端 GET 只回答 due/text；页面拿不到 pending 标记时，别把默认关着的键当开着
+  assert.ok(src.includes("setNotifyOn(cfg.notify?.enabled === true)"), '读配置时只认明确的 true')
+})
+
+test('回家/请神「等核对」看 tampered，不再看一个响应里根本不存在的 status（issue #69）', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+
+  assert.ok(src.includes('(r?.tampered || r?.status === \'pending\')'), '出门要认 tampered')
+  assert.ok(src.includes('r?.tampered'), '请神同一套判据')
+  assert.ok(src.includes('histDaysRef.current'), '历史天数走 ref，load 的闭包读不到新 state')
 })

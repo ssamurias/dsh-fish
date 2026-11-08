@@ -9,7 +9,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RULES, LAYERS, promptBans, rulesByLayer, ruleById } from '../lib/rules.js'
@@ -17,7 +17,7 @@ import { personaLine, buildSections, HARD_BANS } from '../lib/persona.js'
 import { appendEvent, readEvents } from '../lib/store.js'
 import { deriveSelf, consistency, novelty } from '../lib/derive.js'
 import {
-  assess, offerDueDay, pendingOffer, offerHistory, activeGrants, grantableRules, EVIDENCE,
+  assess, offerDueDay, offerLimits, pendingOffer, offerHistory, activeGrants, grantableRules, EVIDENCE,
 } from '../lib/unlock.js'
 
 const NOW = Date.parse('2026-10-24T12:00:00+08:00')
@@ -84,7 +84,7 @@ test('只有成长层的规则可以被申请', () => {
 
 /**
  * 一份"证据够了"的事件流：
- *   corrected 1（话里认过错）· revises 2（两次 verdict=refined）· refusals 2 · narration 1 · 跨 6 天
+ *   corrected 1（话里认过错）· revises 2（两次 verdict=refined；refuted 也算，见 issue #66）· refusals 2 · narration 1 · 跨 6 天
  * 注意 revise 必须带 verdict:'refined' 才算改对——没有 verdict 的 revise 只换说法，不计数。
  */
 function baseEvidence(from = 3) {
@@ -144,6 +144,45 @@ test('驳回之后要等冷却，且不撤销已有授权', () => {
   assert.ok(due !== null && due >= 13, `驳回后要到第 10+3 天之后，实际 ${due}`)
 })
 
+test('rules.cooldownDays 真的接上了：驳回冷却跟着设置走（2026-11-08，用户 m00804）', () => {
+  // 这个键从 0.1.0 起就在设置里，但没有任何代码读它，改了什么都不会变。
+  // 现在 offerDueDay 收一份 limits，由 scheduler 从 config 现算传进来。
+  const base = baseEvidence(3)
+  const offer = {
+    ...ev('grant_offer', 9, { text: '我想试试' }),
+    id: 'ev_OFFER00000000000000000000C',
+    grant: { rule: 'learn-affection', offerId: '', verdict: null, reason: '' },
+  }
+  const reject = {
+    ...ev('grant', 10),
+    id: 'ev_GRANT00000000000000000000C',
+    grant: { rule: 'learn-affection', offerId: offer.id, verdict: 'reject', reason: '这次不行。' },
+  }
+  const events = [...base, offer, reject]
+  const m = modelOf(events)
+
+  // 默认值必须和写死的 [3, 7] 一字不差，不能因为"接上了"就悄悄改行为。
+  assert.deepEqual(offerLimits({}).retryDays, [3, 7])
+  assert.deepEqual(offerLimits(undefined).retryDays, [3, 7])
+  assert.deepEqual(offerLimits({ rules: { cooldownDays: 3 } }).retryDays, [3, 7])
+  assert.deepEqual(offerLimits({ rules: { cooldownDays: 10 } }).retryDays, [10, 21])
+  assert.deepEqual(offerLimits({ rules: { cooldownDays: 1 } }).retryDays, [1, 3])
+  // 坏值：非数字、0、负数 → 回默认 3；超过 30 夹住。
+  assert.deepEqual(offerLimits({ rules: { cooldownDays: 'abc' } }).retryDays, [3, 7])
+  assert.deepEqual(offerLimits({ rules: { cooldownDays: 0 } }).retryDays, [1, 3])
+  assert.deepEqual(offerLimits({ rules: { cooldownDays: 99 } }).retryDays, [30, 61])
+
+  const at3 = offerDueDay('learn-affection', m, events, offerLimits({ rules: { cooldownDays: 3 } }))
+  const at10 = offerDueDay('learn-affection', m, events, offerLimits({ rules: { cooldownDays: 10 } }))
+  const at1 = offerDueDay('learn-affection', m, events, offerLimits({ rules: { cooldownDays: 1 } }))
+  assert.ok(at3 >= 13 && at3 <= 15, `默认 3 天：第 13–15 天，实际 ${at3}`)
+  assert.ok(at10 >= 20 && at10 <= 22, `设成 10 天：第 20–22 天，实际 ${at10}`)
+  assert.ok(at1 >= 11 && at1 <= 13, `设成 1 天：第 11–13 天，实际 ${at1}`)
+  assert.ok(at10 > at3 && at3 > at1, '数值越大，下一次越晚')
+  // 不给 limits 时仍旧是默认，老调用点不受影响。
+  assert.equal(offerDueDay('learn-affection', m, events), at3)
+})
+
 test('未裁决的申请会挡住新卡', () => {
   const events = [
     ...baseEvidence(3),
@@ -166,6 +205,9 @@ test('门禁看次数，不看 needs 的 0–1 满足度', () => {
   // 胜任门：两条 verdict=refined 的 revise
   const m2 = modelOf([ev('revise', 1, { verdict: 'refined' }), ev('revise', 2, { verdict: 'refined' })])
   assert.equal(m2.facts.revises, 2)
+  // issue #66（用户裁定「认错也是改」）：refuted 也算一次改口，但不进 model.refuted 以外的口径
+  const m3 = modelOf([ev('revise', 1, { verdict: 'refined' }), ev('revise', 2, { verdict: 'refuted', text: '我错了' })])
+  assert.equal(m3.facts.revises, 2, 'refuted 要计入 revises')
 })
 
 test('补写进来的 uncommitted 话：拒绝计数读它，信念和自我叙述不读', () => {
@@ -270,4 +312,9 @@ test('EVIDENCE 里没有 0–1 的阈值字段（防止有人偷偷把分数加�
       assert.ok(Number.isInteger(v) && v >= 1, `${rule}.${k} 必须是次数（≥1 的整数），实际 ${v}`)
     }
   }
+})
+
+test('scheduler 是从 config 现算 limits 的，不是自己另写一份常量', () => {
+  const src = readFileSync(new URL('../lib/scheduler.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('offerDueDay(r.id, model, ev2, offerLimits(config))'), '调用点要把 config 算出来的 limits 传进去')
 })

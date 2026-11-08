@@ -151,7 +151,7 @@ test('工具分组：四组 chips 都挂进 toolsCard，且排在白名单输入
   const card = src.slice(cardStart, src.indexOf('// 导入卡（2026-10-27）'))
   assert.ok(card.includes('chipSection,'), '分组要真的挂进这张卡（源码里有、界面上点不到等于没做）')
   const chipAt = card.indexOf('chipSection,')
-  const inputAt = card.indexOf("placeholder: '例如：skill, web_search, read_image")
+  const inputAt = card.indexOf("placeholder: '例如：web_search, schedule_create")
   assert.ok(chipAt > 0 && inputAt > chipAt, '分组清单要摆在输入框上面：先给可点的，再留手工兜底')
 
   // 四组的标题必须在（组是空的就不摆，所以只查源码里有没有这四句）

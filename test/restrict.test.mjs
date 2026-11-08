@@ -13,7 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { HER_TOOLS, currentToolSurface, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
+import { HER_TOOLS, currentToolSurface, currentAllowTools, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
 
 /** 一个够用的假插件 ctx：能 on('agent/created')，也能被我们主动触发。 */
 function fakeCtx() {
@@ -66,9 +66,9 @@ function fakeAgent(cwd, { withRestrict = true, withGuard = true } = {}) {
 }
 
 test('清单里她该有的工具都在，且不含危险口子', () => {
-  // 九个是她自己的（0.7.6 加了 ask_owner，0.8.9 补 her_note），外加 read_image。
+  // 十个是她自己的（0.7.6 加了 ask_owner，0.8.9 补 her_note，0.9.7 补 her_appoint），外加 read_image。
   // 定时工具默认不放（m04504），要放由用户自己加白名单——这里不许出现。
-  for (const name of ['growth_commit', 'her_recall', 'her_diary', 'her_leave', 'her_note', 'bili_look', 'bili_watch', 'bili_speak', 'ask_owner', 'read_image']) {
+  for (const name of ['growth_commit', 'her_recall', 'her_diary', 'her_leave', 'her_note', 'her_appoint', 'bili_look', 'bili_watch', 'bili_speak', 'ask_owner', 'read_image']) {
     assert.ok(HER_TOOLS.includes(name), `清单里少了 ${name}`)
   }
   // 这几个一旦放进去，收窄就白做了
@@ -171,6 +171,17 @@ test('关掉开关就一个都不动', () => {
   assert.equal(ctx.count('agent/created'), 0, '关掉时不该挂监听')
   assert.equal(typeof off, 'function')
   assert.equal(readRestrictState().why, 'disabled')
+})
+
+test('currentAllowTools：关着是「不知道」，开着是白名单（issue #58）', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', enabled: false, log: () => {} })
+  assert.equal(currentAllowTools(), null, '关着时她能看见全部工具，不能拿空清单去过滤')
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], log: () => {} })
+  const allow = currentAllowTools()
+  assert.ok(Array.isArray(allow), '开着时要给得出这份清单')
+  assert.ok(allow.includes('bili_look'))
+  assert.ok(allow.includes('web_search'))
 })
 
 test('describeRestrict 的三种说法不能混', () => {
@@ -396,6 +407,115 @@ test('own 层（dsh-ops 的 ops_*）能进白名单，但不会被塞给 restric
   // 守卫放行名单是配置里的全量：写进白名单 = 守卫不再拦
   assert.equal(guards[0]({ name: 'ops_bash' }), undefined)
   assert.match(guards[0]({ name: 'web_search' }), /^这件事我做不到。/)
+})
+
+test('宿主没有 read_image：外部名字这次剔掉，照常收窄，不再永远延后（issue #61）', () => {
+  // issue #61 真机：herToolsNow() 恒含 read_image；宿主没这个工具时，旧实现把它算成
+  // 「还没登记完」，于是 restrict 每次都抛错、延后、再等——一次都没收窄过。
+  // 名字不是我们自己注册的，等下去也不会出现；剔掉它，剩下的人照收。
+  const ctx = fakeCtx()
+  const calls = []
+  const logs = []
+  const guards = []
+  const seen = []
+  const names = HER_TOOLS.filter((n) => n !== 'read_image')
+  const agent = {
+    session: { header: { cwd: 'C:\\\\h' } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: (scope) => scope === agent
+          ? { restrictableNames: new Set(names), visible: new Map(names.map((n) => [n, {}])) }
+          : { restrictableNames: new Set() },
+        restrict: (filter) => { calls.push(filter); return () => {} },
+        guard: (fn) => { guards.push(fn); return () => {} },
+      },
+    },
+  }
+  registerToolRestrict(ctx, {
+    herDir: 'C:\\\\h',
+    extra: ['qq_send_message'],
+    log: (m) => logs.push(m),
+    onResult: (r) => seen.push(r),
+  })
+  ctx.emit('agent/created', { agent })
+
+  assert.equal(calls.length, 1, '应该当场收窄，而不是延后')
+  assert.ok(!calls[0].allow.includes('read_image'), '机器上没有的名字不该下给 restrict')
+  assert.ok(!calls[0].allow.includes('qq_send_message'), '白名单里的外部名字也一样')
+  assert.ok(calls[0].allow.includes('bili_look'), '真有的工具一个都不能少')
+  assert.ok(seen.some((r) => r.why === 'applied'), '要报成真的收窄了，不能停在 registered')
+  assert.ok(logs.some((m) => m.includes('read_image') && m.includes('没有')), '剔掉的名字要留一行日志')
+  // 守卫仍按配置的全量放行：名字以后真出现了，不会被自己人挡住
+  assert.equal(guards[0]({ name: 'qq_send_message' }), undefined)
+})
+
+// 2026-11-08（issue #61，@BBleae 追问的时序）：启动时她的会话先建好，插件自己的
+// 工具随后才注册，别的插件的工具、附件服务挂上的 read_image 还可能再晚一点。
+// 自己的名字一齐就收窄，晚到的那一个这一局就再也进不来（restrict 只能减不能加）。
+test('自己的工具晚到、read_image 紧跟着到：宽限里等一等，晚到的手不留在门外（issue #61）', async () => {
+  const ctx = fakeCtx()
+  const calls = []
+  // retryMax 故意给大：宽限只从「自家的到齐」那一拍起算 3 拍，不该等到 retryMax 用完才收窄。
+  registerToolRestrict(ctx, { herDir: 'C:\\h', retryMs: 5, retryMax: 20, log: () => {} })
+  const own = HER_TOOLS.filter((n) => n !== 'read_image' && n !== 'her_dream')
+  // 一开始宿主只认得一个外部工具：这时算得出「我们自己的名字还没登记」。
+  let names = new Set(['web_search'])
+  const agent = {
+    session: { header: { cwd: 'C:\\h' } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: () => ({ restrictableNames: new Set(names), visible: new Map([...names].map((n) => [n, {}])) }),
+        restrict: (filter) => { calls.push(filter); return () => {} },
+        guard: () => () => {},
+      },
+    },
+  }
+  setTimeout(() => { names = new Set(own) }, 7) // 自己的到齐
+  setTimeout(() => { names = new Set([...own, 'read_image']) }, 17) // read_image 晚两拍
+  ctx.emit('agent/created', { agent })
+  await new Promise((r) => setTimeout(r, 80))
+
+  assert.equal(calls.length, 1, '只收窄一次')
+  assert.ok(calls[0].allow.includes('read_image'), '宽限期内到的名字要收进去，不能当场剔掉')
+  assert.ok(calls[0].allow.includes('growth_commit'), '自己的工具一个都不能少')
+})
+
+test('外部名字一直没来：宽限用完剔掉照收，不报 deferred（issue #61）', async () => {
+  const ctx = fakeCtx()
+  const calls = []
+  const seen = []
+  const logs = []
+  registerToolRestrict(ctx, {
+    herDir: 'C:\\h',
+    retryMs: 5,
+    retryMax: 3,
+    log: (m) => logs.push(m),
+    onResult: (r) => seen.push(r),
+  })
+  const own = HER_TOOLS.filter((n) => n !== 'read_image' && n !== 'her_dream')
+  let names = new Set(['web_search'])
+  const agent = {
+    session: { header: { cwd: 'C:\\h' } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: () => ({ restrictableNames: new Set(names), visible: new Map([...names].map((n) => [n, {}])) }),
+        restrict: (filter) => { calls.push(filter); return () => {} },
+        guard: () => () => {},
+      },
+    },
+  }
+  setTimeout(() => { names = new Set(own) }, 7) // 自己的到齐；read_image 始终没来
+  ctx.emit('agent/created', { agent })
+  await new Promise((r) => setTimeout(r, 80))
+
+  assert.equal(calls.length, 1, '宽限过了也要照收，不能停在 deferred')
+  assert.ok(!calls[0].allow.includes('read_image'), '这台机器真没有的名字要剔掉')
+  assert.equal(seen.at(-1).why, 'applied-late')
+  assert.equal(seen.at(-1).applied, 1)
+  assert.ok(logs.some((m) => m.includes('read_image') && m.includes('没有')), '剔掉的名字要留一行日志')
 })
 
 test('rememberFromView：restrictable ∪ visible 才算「认得的名字」', () => {

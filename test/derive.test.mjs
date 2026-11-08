@@ -98,6 +98,26 @@ test('他主动给的名字、她自己改口的叫法都算称呼', () => {
   assert.equal(pickName('以后叫他他吧'), null)
 })
 
+// issue #81（2026-11-08）：她说过「说你让我叫你老大——可这句不是我从你嘴里听见的」。
+// 排除集里原来只有空白和常见标点，没有破折号，{1,8} 正好抓满 8 个字 →
+// 「老大——可这句不」。破折号与省略号都是「话说到一半」的标记，名字不可能跨过去。
+test('称呼不会跨过破折号截成半句话（issue #81）', () => {
+  assert.equal(pickName('说你让我叫你老大——可这句不是我从你嘴里听见的'), '老大')
+  assert.equal(pickName('所以叫你阿岸–行吗'), '阿岸')
+  assert.equal(pickName('就叫他阿岸…算了'), '阿岸')
+  // 「他的名字是 X」用的是同一份排除集
+  assert.equal(pickName('他给的名字是阿岸——你记着'), '阿岸')
+  // 顺手不能改坏的两条：尾巴语气词照剥，「的」不剥
+  assert.equal(pickName('我叫你老张好了'), '老张')
+  assert.equal(pickName('我想叫他“开灯的”。'), '开灯的')
+  // 整条链路：身份文档里那句称呼也要跟着变对
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '说你让我叫你老大——可这句不是我从你嘴里听见的'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 2 * DAY_MS }).name, '老大')
+})
+
 test('needs 只有三个键，且绝不出现好感度类字段', () => {
   const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' }), ev('ev_a', 'utterance', 2, '我不喜欢被催。')]
   const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
