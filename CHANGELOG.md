@@ -39,7 +39,7 @@
   - `test/events-adaptive.test.mjs` 10 条；设计单 `../docs/Q-成长周期自适应-设计单.md`。
 
 - **need-tool 卡不再问「你给了没有」（#58，@BBleae）。** 她已经拿到那样工具了，桌上还摆着「这件东西我还没见到」，点「放行」也不会进事件流——因为收窄名单是注册期才算得出来的，摆桌子的时候没人问。
-  - `lib/restrict.js` 加模块级 `allowTools` 与 `currentAllowTools()`，注册时 `allowTools = allow.slice()`；`lib/wish.js` 加 `toolInHand(has,name)`，`wishesOf({ has })` 跳过已经到手的；`lib/scheduler.js` 的 `toolInHandNow()` 把这份名单传给 `driveDesk.wish`、`looseEnds`、`wishesOf` 与 `/state`。收窄关着时返回 `null`（她能看见全部工具，不传）。
+  - `lib/restrict.js` 加模块级 `allowTools` 与 `currentAllowTools()`，注册时 `allowTools = allow.slice()`；`lib/wish.js` 加 `toolInHand(has,name)`，`wishesOf({ has })` 跳过已经到手的；`lib/scheduler.js` 的 `toolInHandNow()` 把这份名单传给 `driveDesk.wish`、`looseEnds` 与 `wishesOf`。收窄关着时返回 `null`（她能看见全部工具，不传）。
   - **没有加 issue 里建议的「已经给了」按钮**：`verdict` 的 schema 只认 `approve` / `reject` / `later`，多一个值会让旧客户端与事件流都得多一条分支，而这件事本来就是「查一下手上有没有」，不该让她去点。
   - `test/wish.test.mjs` 补 5 条。
 

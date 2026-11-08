@@ -1,0 +1,207 @@
+/**
+ * wish-inhand.test.mjs —— 「已经到手」只认她手上真有的（issue #58，0.9.5 复核）
+ *
+ * 0.9.5 拿配置里的白名单回答「到手没有」。可白名单里写了不等于宿主上有：
+ * `read_image` 是宿主给的可选能力（默认就在 allow 里），白名单里的桥工具也可能没装上——
+ * 这些名字收窄时会被剔掉、不下给宿主，她手上根本没有。照旧算「到手」的话，她要它们的
+ * 那张 need-tool 卡一开出来，叫醒的桌子、劲儿、悬着的事三处就都看不到了；卡还在住所页
+ * 等人答，她自己却再也想不起来。
+ *
+ * 这里照 `lib/index.js` 的调用注册收窄，假宿主只给它真有的工具，再真跑叫醒与主动回合。
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { HER_TOOLS, currentAllowTools, registerToolRestrict } from '../lib/restrict.js'
+import { wishesOf } from '../lib/wish.js'
+import { looseEnds } from '../lib/proactive.js'
+import { startScheduler, wakeNow } from '../lib/scheduler.js'
+import { appendEvent, readEvents, writeConfig } from '../lib/store.js'
+import { normalizeConfig } from '../lib/settings.js'
+import { clearWakeSection, getWakeSection } from '../lib/identity.js'
+import { settleAsk } from '../lib/ask.js'
+
+const HOUR = 3_600_000
+const READ_IMAGE_WISH = '想要一个能看图的工具'
+const IMAGE_GEN_WISH = '想要一个能画图的工具'
+const SEARCH_WISH = '想要一个能上网搜东西的工具'
+
+/** 插件 ctx：只要 agent/created 能挂、能发。 */
+function pluginCtx() {
+  const ls = []
+  return {
+    on: (ev, fn) => { if (ev === 'agent/created') ls.push(fn); return () => {} },
+    created: (agent) => { for (const fn of ls) fn({ agent }) },
+  }
+}
+
+/** 宿主建好的她：`view(agent)` 报的是宿主此刻真有的工具。 */
+function herAgent(cwd, names) {
+  const sent = []
+  const agent = {
+    session: { header: { cwd } },
+    ctx: {
+      effect() {},
+      tools: {
+        view: (scope) => scope === agent
+          ? { restrictableNames: new Set(names), visible: new Map(names.map((n) => [n, {}])) }
+          : { restrictableNames: new Set() },
+        restrict: ({ allow }) => { sent.push(allow); return () => {} },
+        guard: () => () => {},
+      },
+    },
+  }
+  return { agent, sent }
+}
+
+/** 叫醒与主动回合用的宿主：投进去的那一刻把处境段一起记下来。 */
+function fakeHost() {
+  const prompts = []
+  const registry = { get: () => ({ sessionIds: ['s1'] }), archivedSessionIds: [] }
+  const ctx = {
+    on: () => () => {},
+    get: (name) => (name === 'workspaceRegistry' ? registry : undefined),
+    sessionController: {
+      create: async () => {},
+      prompt: async () => {},
+      resolveAgent: async (sessionId) => ({
+        agent: { followup: (message) => { prompts.push({ sessionId, section: getWakeSection() }) } },
+      }),
+    },
+    logger: { info() {}, warn() {}, error() {} },
+  }
+  return { ctx, prompts }
+}
+
+/** 她自己开的一张 need-tool 卡（走 appendEvent，和 ask_owner 写的同形）。 */
+async function wish(root, { text, subject, ts }) {
+  const ev = await appendEvent({
+    type: 'ask',
+    text,
+    ...(ts ? { ts } : {}),
+    ask: { kind: 'need-tool', subject, options: ['可以', '以后再说'], reason: '' },
+  }, { day: 1, stage: 1, source: 'system' }, root)
+  return ev.id
+}
+
+/**
+ * 一间临时的家：按配置注册收窄，宿主只给 `host` 里的工具。
+ * 叫醒的兜底定时器（2s / 30s / 90s）压成几毫秒，别让测试进程挂着等。
+ */
+async function withHer({ allow = [], host }, fn) {
+  const root = await mkdtemp(join(tmpdir(), 'fish-inhand-'))
+  const oldHomes = process.env.DSH_FISH_HOMES
+  process.env.DSH_FISH_HOMES = join(root, 'homes.json')
+  const realST = globalThis.setTimeout
+  globalThis.setTimeout = (f, ms, ...a) => realST(f, [2000, 30_000, 90_000].includes(ms) ? 5 : ms, ...a)
+  try {
+    const config = normalizeConfig({
+      window: ['00:00', '23:59'],
+      daily: { events: 2 },
+      wakesPerDay: 4,
+      tools: { restrict: true, allow },
+      proactive: { enabled: true, minIdleHours: 1 },
+      browse: { enabled: false },
+      comment: { enabled: false },
+      rules: { offers: false },
+      memory: { sleepEveryDays: 0 },
+    })
+    await writeConfig(config, root)
+    await writeFile(join(root, 'home.json'), JSON.stringify({ wsId: 'ws1', sessionId: 's1' }), 'utf8')
+    const herDir = join(root, 'her')
+    const pctx = pluginCtx()
+    const logs = []
+    registerToolRestrict(pctx, {
+      herDir,
+      extra: config.tools.allow,
+      enabled: config.tools.restrict !== false,
+      log: (m) => logs.push(m),
+      retryMs: 1,
+      retryMax: 1,
+    })
+    const her = herAgent(herDir, host)
+    pctx.created(her.agent)
+    return await fn(root, { sent: her.sent, logs })
+  } finally {
+    globalThis.setTimeout = realST
+    clearWakeSection()
+    if (oldHomes === undefined) delete process.env.DSH_FISH_HOMES
+    else process.env.DSH_FISH_HOMES = oldHomes
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+}
+
+const hasNow = () => {
+  const a = currentAllowTools()
+  return a ? new Set(a) : null
+}
+
+// 默认配置（allow 为空），宿主上只有插件自己的工具，没有 read_image。
+const OWN_ONLY = HER_TOOLS.filter((n) => n !== 'read_image')
+
+test('宿主上没有 read_image：她要它的那张卡不算到手，桌上、悬着的事里都还在（issue #58）', async () => {
+  await withHer({ host: OWN_ONLY }, async (root, { sent, logs }) => {
+    // 前提：read_image 确实没下给宿主（收窄时剔掉了）
+    assert.equal(sent.length, 1)
+    assert.ok(!sent[0].includes('read_image'))
+    assert.ok(logs.some((m) => m.includes('read_image') && m.includes('没有')))
+
+    await wish(root, { text: READ_IMAGE_WISH, subject: 'read_image' })
+    const { events } = await readEvents(root)
+    const now = Date.now()
+    assert.equal(wishesOf(events, { now, has: hasNow() }).length, 1, '手上没有的东西不能当成已经到手')
+    assert.equal(looseEnds(events, { now, has: hasNow() }).length, 1, '悬着的事里也得有它')
+
+    const h = fakeHost()
+    const r = await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    assert.equal(r.ok, true, JSON.stringify(r))
+    assert.equal(h.prompts.length, 1)
+    assert.match(h.prompts[0].section, new RegExp(READ_IMAGE_WISH), '叫醒的桌子上要摆着这张卡')
+    assert.match(h.prompts[0].section, /你问过，还没有答复/)
+  })
+})
+
+test('白名单里写了、宿主上没装：答应过的卡照摆「还没见到」；真到手的那张照旧撤掉（issue #58）', async () => {
+  await withHer({ allow: ['image_gen', 'web_search'], host: [...HER_TOOLS, 'web_search'] }, async (root, { sent }) => {
+    assert.ok(!sent[0].includes('image_gen'), '前提：image_gen 这台机器上没有，没下给宿主')
+    assert.ok(sent[0].includes('web_search'))
+
+    const genId = await wish(root, { text: IMAGE_GEN_WISH, subject: 'image_gen', ts: new Date(Date.now() - 2 * HOUR).toISOString() })
+    assert.equal((await settleAsk(root, { askId: genId, verdict: 'approve' })).ok, true)
+    // 更近的这张要的是真到手的工具：过滤还得管用，不然它会占住桌上唯一那一格
+    const searchId = await wish(root, { text: SEARCH_WISH, subject: 'web_search' })
+    assert.equal((await settleAsk(root, { askId: searchId, verdict: 'approve' })).ok, true)
+
+    const { events } = await readEvents(root)
+    const w = wishesOf(events, { now: Date.now(), has: hasNow() })
+    assert.deepEqual(w.map((x) => x.text), [IMAGE_GEN_WISH])
+
+    const h = fakeHost()
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    assert.equal(h.prompts.length, 1)
+    assert.match(h.prompts[0].section, new RegExp(IMAGE_GEN_WISH))
+    assert.match(h.prompts[0].section, /他答应了，还没见到/)
+    assert.doesNotMatch(h.prompts[0].section, new RegExp(SEARCH_WISH), '已经到手的不再摆')
+  })
+})
+
+test('只有这一张还没到手的卡：劲儿照算，主动回合照开，处境里念得到它（issue #58）', async () => {
+  await withHer({ host: OWN_ONLY }, async (root) => {
+    // 十个小时前开的卡，之后一直安静
+    await wish(root, { text: READ_IMAGE_WISH, subject: 'read_image', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
+    const h = fakeHost()
+    const logs = []
+    const s = startScheduler(h.ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+    try {
+      await s.tick()
+    } finally {
+      s.dispose()
+    }
+    assert.ok(!logs.some((l) => l.includes('桌上没有可说的东西')), logs.join(' | '))
+    assert.equal(h.prompts.length, 1, logs.join(' | '))
+    assert.match(h.prompts[0].section, new RegExp(READ_IMAGE_WISH))
+  })
+})

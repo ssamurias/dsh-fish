@@ -173,15 +173,79 @@ test('关掉开关就一个都不动', () => {
   assert.equal(readRestrictState().why, 'disabled')
 })
 
-test('currentAllowTools：关着是「不知道」，开着是白名单（issue #58）', () => {
+test('currentAllowTools：关着是「不知道」；开着也要等她的 agent 建好才定（issue #58）', () => {
   const ctx = fakeCtx()
   registerToolRestrict(ctx, { herDir: 'C:\\h', enabled: false, log: () => {} })
   assert.equal(currentAllowTools(), null, '关着时她能看见全部工具，不能拿空清单去过滤')
   registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], log: () => {} })
+  assert.equal(currentAllowTools(), null, '她的 agent 还没建好：白名单里写了不等于手上有')
+  ctx.emit('agent/created', { agent: fakeAgent('C:\\h').agent })
   const allow = currentAllowTools()
-  assert.ok(Array.isArray(allow), '开着时要给得出这份清单')
+  assert.ok(Array.isArray(allow), '收窄下去了就要给得出这份清单')
   assert.ok(allow.includes('bili_look'))
   assert.ok(allow.includes('web_search'))
+})
+
+/** 带工具表的假 agent：`restrictable` 是宿主收得窄的那层，`own` 是 own 层（看得见、点不了名）。 */
+function hostAgent(cwd, { restrictable = [], own = [], restrict } = {}) {
+  const agent = {
+    session: { header: { cwd } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: (scope) => scope === agent
+          ? { restrictableNames: new Set(restrictable), visible: new Map([...restrictable, ...own].map((n) => [n, {}])) }
+          : { restrictableNames: new Set() },
+        restrict: restrict ?? (() => () => {}),
+        guard: () => () => {},
+      },
+    },
+  }
+  return agent
+}
+
+test('「已经到手」只算这台机器上真有的：白名单里写了、宿主上没有的不算（issue #58）', () => {
+  // 0.9.5：注册时就把配置里的 allow 当成「到手」。宿主上没有的 read_image、白名单里写了
+  // 却没装上的 image_gen 都算了进去——她要它们的那张卡一开就从桌上撤掉了。
+  const ctx = fakeCtx()
+  const host = HER_TOOLS.filter((n) => n !== 'read_image')
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['image_gen', 'ops_bash', 'web_search'], log: () => {} })
+  assert.equal(currentAllowTools(), null, '她的 agent 还没建好：不知道')
+
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { restrictable: [...host, 'web_search'], own: ['ops_bash'] }) })
+  const has = currentAllowTools()
+  assert.ok(has.includes('bili_look'))
+  assert.ok(has.includes('web_search'), '白名单里有、宿主上也有：到手了')
+  assert.ok(has.includes('ops_bash'), 'own 层看得见、守卫放行：也算到手')
+  assert.ok(!has.includes('read_image'), '宿主上没有 read_image：不算到手')
+  assert.ok(!has.includes('image_gen'), '白名单里写了、没装上：不算到手')
+
+  // 别人的会话不动她的账
+  ctx.emit('agent/created', { agent: hostAgent('C:\\other', { restrictable: [...HER_TOOLS, 'image_gen'] }) })
+  assert.deepEqual(currentAllowTools(), has)
+
+  // 换了一条会话，这回宿主有 read_image 和 image_gen 了：按新的这个现算，不沿用上一份
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { restrictable: [...HER_TOOLS, 'image_gen', 'web_search'] }) })
+  assert.ok(currentAllowTools().includes('read_image'))
+  assert.ok(currentAllowTools().includes('image_gen'))
+  assert.ok(!currentAllowTools().includes('ops_bash'), '这条会话上没有 ops_bash 了')
+})
+
+test('收窄一直没挂上（deferred）：到手的是宿主有、守卫放行的那部分（issue #58）', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  const host = HER_TOOLS.filter((n) => n !== 'read_image')
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['image_gen', 'web_search'], log: () => {}, onResult: (r) => seen.push(r), retryMs: 1, retryMax: 2 })
+  const restrict = () => { throw new Error('tools.restrict() names unknown global tool "growth_commit"') }
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { restrictable: [...host, 'web_search'], restrict }) })
+  assert.equal(currentAllowTools(), null, '还在重试：先不定')
+  for (let i = 0; i < 100 && seen.at(-1)?.why !== 'deferred'; i++) await new Promise((r) => setTimeout(r, 5))
+  assert.equal(seen.at(-1)?.why, 'deferred')
+  const has = currentAllowTools()
+  assert.ok(has.includes('web_search'), '没收窄，宿主有、白名单也放行：到手了')
+  assert.ok(has.includes('bili_look'))
+  assert.ok(!has.includes('read_image'), '宿主上没有：不算')
+  assert.ok(!has.includes('image_gen'), '宿主上没有：不算')
 })
 
 test('describeRestrict 的三种说法不能混', () => {
