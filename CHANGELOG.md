@@ -6,6 +6,13 @@
   - `ask_owner` 的 `subject` 说明补一句「要工具时把工具名写在最前面，后面可以再补一句做什么」：不改造已有数据，只让以后写的卡好认。
   - `test/wish.test.mjs` 新增 1 条（描述句命中、`her_notes` 不命中 `her_note`、4 字以下不参与、函数写法只认整句）。
 
+- **收窄之后「她手上到底有什么」，三处说法改成同一份真名单（PR #87，@BBleae；#61 #64 #69）。** 收窄名单是 DSH 启动那一刻算定的，改了设置要重启才换；0.9.5 里身份文档按盘上的配置写——从存完到重启这段时间，文档说那件工具在她手上，她一伸手却是「这件事我做不到」。
+  - `lib/selfdoc.js` 的「我手上有什么」改念这一局真放行的名单（`currentAllowExtra()`，梦、定时两段同走 `toolSectionsNow()`），收窄关着时照旧念配置；存完设置当场重写文档也不会再预告还没生效的东西。
+  - `/tools` 多给守卫真用的名单与「她自己的，这一局不在她手上」那组，设置页按它摆（`lib/client.js`），不再把配置当成她手上的。
+  - 自检不再拿配置的 allow 当「宿主认过」的证据：被剔出收窄名单的名字算没到手（`lib/selfcheck.js`），被挡记录把她自己的工具与别人的工具分开指路；只挡了别人的名字时也点名说清是哪个。
+  - 老宿主（`view` 不给 `visible`）不再把外部名字整份交给 `restrict()` 一直延后：先宽限几拍，等不到就剔掉、照常收窄（同 #61 的口径），不会整局 fail-open；`her_say` 在 `FISH_TOOLS` 基线里之后，新启动的第一拍它也真的在她手上。
+  - 新增 `test/restrict-runtime.test.mjs`、`test/tools-card.test.mjs`。
+
 - **启动那一拍她其实还没有 `her_say`（PR #84，@BBleae）。** 0.9.5 把她的工具清单改成注册期记账、运行时现算以后，`registerToolRestrict` 跑在工具注册之前，退回的基线 `FISH_TOOLS` 里漏了 `her_say`——下给宿主的 allow、提示词里的工具段、兜底守卫三处都少它，她一调就被挡回「这件事我做不到」，而身份文档照旧写着这件工具。
   - `lib/restrict.js` 的 `FISH_TOOLS` 补上 `her_say`；新增 `test/restrict-boot.test.mjs` 钉住「注册期算出的 allow 含她全部 12 件工具」。
 

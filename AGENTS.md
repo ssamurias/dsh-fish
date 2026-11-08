@@ -69,7 +69,7 @@
 node --test
 ```
 
-当前基线 **1869 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **1902 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
@@ -200,7 +200,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 三条约束：
 
 - **工具名必须对得上真实 registry**。桥升级改名、用户填错，她就会答「我没法在 QQ 上说话」——这不是插件坏了，是名字没对上。
-- **放行之后要念给她听**。身份文档「我手上有什么」由 `lib/persona.js` 的 `toolBrief(extra)` 生成、`lib/selfdoc.js` 把 `config.tools.allow` 作为 `extraTools` 传进去。看不见一只手，她就不会用。
+- **放行之后要念给她听**。身份文档「我手上有什么」由 `lib/persona.js` 的 `toolBrief(extra)` 生成、`lib/selfdoc.js` 把白名单作为 `extraTools` 传进去。看不见一只手，她就不会用。收窄开着时念的是这一局启动时的白名单（`currentAllowExtra()`），不是盘上的配置：守卫的名单启动时就算定了，存完新名单要重启才到她手上，这之前不能先念给她（梦、定时那两段同理，见 `toolSectionsNow`）。收窄关着时照旧念配置。白名单里她自己的名字（her_say、her_dream 这些）两种情况都不念：那几样身份文档另有段落，her_dream 跟着「允许她记梦」走、不走白名单，设置页和自检也不把白名单当成它的修法。
 - **白名单只做加法**。`config.tools.allow` 与 `HER_TOOLS` 取并集，不要用它去减工具；收窄只走 `lib/restrict.js` 那一套。
 
 `test/beliefs.test.mjs` 有一条「白名单里额外放行的工具要念给她听」盯着这段，改之前先跑它。
@@ -217,7 +217,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 三个依赖字段还是 `{}`
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `guard.js`
-- [ ] `node --test` 1869 全绿
+- [ ] `node --test` 1902 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节
