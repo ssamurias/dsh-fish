@@ -11,7 +11,10 @@
  *   8. 「日记留多久」删了旧文件，身份文档里写过几篇、从哪天起不跟着变
  *   9. 成长周期 14 天及以下时，界面写「一次」
  *  10. 弹幕说明不再说「前 8 条」
- *  12. 成长期过后，「下一个成长瓶颈」不指着已经过了或已兜底放行的那道
+ *  12. 成长期过后，「下一个成长瓶颈」不指着已经过了或已兜底放行的那道；
+ *      选卡仍然给第一道还没真过的门加权（立场清单只认真过的门）
+ *   另：/state 的「稳定」按她真读到的那份身份文档量（同样带上「总共留几条自述」）；
+ *      日记删过旧文件时，身份文档说清翻得到的是哪几篇
  */
 
 import { test } from 'node:test'
@@ -26,6 +29,8 @@ import { deriveSelf } from '../lib/derive.js'
 import { personaBudget } from '../lib/persona.js'
 import { selfDocPath, writeSelfDoc } from '../lib/selfdoc.js'
 import { rememberGroupWord } from '../lib/hear.js'
+import { pick } from '../lib/generator.js'
+import { CATALOG } from '../lib/events.js'
 import { wakeNow } from '../lib/scheduler.js'
 import { registerObserve } from '../lib/observe.js'
 
@@ -166,6 +171,26 @@ test('第 1 条：记忆页「折成一行」的条数和预算用量跟身份�
   })
 })
 
+test('第 1 条：状态页的「稳定」量的是她真读到的那份身份文档，「总共留几条自述」也算进去', async () => {
+  await withRoot(async (root) => {
+    const twelve = TWENTY.slice(0, 12)
+    const t0 = Date.now() - 3 * DAY
+    await writeEvents(root, [
+      line('seed', '你不是助手。', t0),
+      ...twelve.map((text, i) => line('utterance', text, t0 + (i + 1) * 60_000)),
+    ])
+    await writeConfig(normalizeConfig({ memory: { beliefsShown: 3, sleepKeep: 2 } }), root)
+    await writeSelfDoc(root)
+    const text = await doc(root)
+    const inDoc = twelve.filter((t) => text.includes(t)).length
+    assert.equal(inDoc, 3, `前提：上限 2、眼前 3 条时，身份文档里只看得到眼前那 3 条，实际 ${inDoc}`)
+    const st = await call(root, '/state')
+    assert.equal(st.status, 200)
+    // 抽样池就是「这会儿真写进自我描述的几条」：要和她真读到的那份对得上
+    assert.equal(st.json.quality.stability.visible, inDoc, `稳定的抽样池按 ${st.json.quality.stability.visible} 条算，她读到的只有 ${inDoc} 条`)
+  })
+})
+
 // ---------------------------------------------------------------- 2
 
 test('第 2 条：「记你原话的间隔」为 0 时，群里他本人的话也不记', async () => {
@@ -283,6 +308,45 @@ test('第 12 条：成长期过后，下一个成长瓶颈不指着已经过了�
   assert.equal(m.stageGate.pending, null, '没过的都放行了，就没有下一个')
 })
 
+test('第 12 条：成长期过后，选卡仍然给第一道还没真过的门加权', () => {
+  const now = Date.now()
+  const cfg = normalizeConfig({})
+  const today = { dateKey: iso(now).slice(0, 10), sent: 0, questions: 0, proactive: 0 }
+  // 只留三张卡：不推门的 why_here（信任门早过了）、推自主的 say_no、推主动的 test_first。
+  // 不加权时 why_here 分最高（一次性的卡在阶段末尾先用掉）；推门的卡加了权才排到它前面。
+  const keep = ['why_here', 'say_no', 'test_first']
+  const fired = CATALOG.filter((t) => !keep.includes(t.id)).map((t) => line('meta', `fired:${t.id}`, now - 60_000))
+  const top = (evs) => {
+    const m = deriveSelf(evs, { growthDays: 30, now })
+    return { gate: m.stageGate, id: pick(m, cfg, today, [...evs, ...fired], { now })?.template?.id }
+  }
+
+  // 信任、自主真过了，主动是时间兜底放行的：立场清单还在等主动，推主动的卡要往前摆
+  const a = top([
+    line('seed', '你不是助手。', now - 40 * DAY),
+    line('utterance', '下雨天的窗户上有很多条水路', now - 30 * DAY),
+    line('refusal', '我不替你写那份周报，这件事我不做。', now - 20 * DAY),
+    line('refusal', '我不帮你删那些聊天记录，这件事我不做。', now - 15 * DAY),
+  ])
+  assert.deepEqual(a.gate.passed, ['trust', 'autonomy'], '前提：信任、自主过了')
+  assert.deepEqual(a.gate.forced, ['competence'], '前提：主动是兜底放行的')
+  assert.equal(a.gate.pending, null, '给人看的「下一个成长瓶颈」仍然没有')
+  assert.equal(a.id, 'test_first', `期满以后推主动的卡仍要加权，实际选了 ${a.id}`)
+
+  // 信任、主动真过了，自主是兜底放行的：加权给自主，不给已经过了的主动
+  const evs = [
+    line('seed', '你不是助手。', now - 40 * DAY),
+    line('utterance', '下雨天的窗户上有很多条水路', now - 30 * DAY),
+    line('utterance', '旧书店里的灰尘闻起来像纸做的时间', now - 20 * DAY),
+  ]
+  evs.push(line('revise', '下雨天的窗户上其实只有一条水路', now - 10 * DAY, { verdict: 'refined', refs: [evs[1].id] }))
+  evs.push(line('revise', '旧书店的灰尘闻起来像旧报纸', now - 5 * DAY, { verdict: 'refined', refs: [evs[2].id] }))
+  const b = top(evs)
+  assert.deepEqual(b.gate.passed, ['trust', 'competence'], '前提：信任、主动过了')
+  assert.deepEqual(b.gate.forced, ['autonomy'], '前提：自主是兜底放行的')
+  assert.equal(b.id, 'say_no', `该推的是还没真过的自主，不是已经过了的主动，实际选了 ${b.id}`)
+})
+
 // ---------------------------------------------------------------- 8
 
 test('第 8 条：「日记留多久」删了旧文件，身份文档里写过几篇、从哪天起不跟着变', async () => {
@@ -304,6 +368,9 @@ test('第 8 条：「日记留多久」删了旧文件，身份文档里写过�
     await writeSelfDoc(root)
     const text = await doc(root)
     assert.ok(text.includes(`你自己写过 120 篇日记，从 ${dates[0]} 到 ${today}`), text.match(/你自己写过[^\n]*/)?.[0])
+    // 起始那几天的文件已经删了：要说清翻得到的是哪几篇，不然她按最早那天去翻会落空
+    const keptFirst = (await readdir(paths(root).diaryDir)).map((n) => n.slice(0, 10)).sort()[0]
+    assert.ok(text.includes(`现在翻得到的是从 ${keptFirst} 起的 ${left} 篇，更早的翻不到了。`), text.match(/## 这些天[\s\S]*?\n\n/)?.[0])
   })
 })
 
@@ -439,7 +506,8 @@ test('第 9 条：成长周期 14 天及以下时，界面写「一次」；30 �
 
 test('第 12 条：成长期满、有瓶颈是时间兜底放行的，不说「三道瓶颈都过了」', async () => {
   const txt = await render({ state: stateWith({ day: 41, stage: 4, stageName: '整合', stageForced: true, pendingGate: null }), tab: 'now' })
-  assert.ok(txt.includes('已走完'))
+  assert.ok(txt.includes('期满放行'), '值那一格也要看得出是按时间放行的')
+  assert.ok(!txt.includes('已走完'), '不看悬停提示的人会把「已走完」读成她都走完了')
   assert.ok(!txt.includes('三道瓶颈都过了'), '自主是兜底放行的，不是她过了')
   assert.ok(txt.includes('没过的瓶颈按时间放行了'))
 })
