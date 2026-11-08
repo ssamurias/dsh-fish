@@ -339,7 +339,72 @@ test('她同时住着好几条会话：按指定那条的工具表算，群房�
   assert.ok(currentAllowTools('s-home').includes('ops_bash'))
   assert.ok(!currentAllowTools('s-room').includes('web_search'))
   assert.ok(!currentAllowTools().includes('ops_bash'), '不指定就按最近建的那个')
-  assert.deepEqual(currentAllowTools('s-cold'), currentAllowTools('s-room'), '指定的那条还没见到：退回最近建的那个')
+  // 家里那条冷着、群房活着时，退回「最近建的那个」拿到的是群房的工具表
+  assert.equal(currentAllowTools('s-cold'), null, '指定的那条还没见到：不知道，不拿别的房顶')
+})
+
+test('会话 id 带不带 session- 前缀，认的是同一条（issue #58）', () => {
+  // 宿主两处给的 id 写法不一定一样（identity.js 的 wakeKey 同一个理由）。对不上的话每次都查不到家里那条。
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['image_gen'], log: () => {} })
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { sid: 'session-s1', restrictable: HER_TOOLS }).agent })
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { sid: 'session-g1', restrictable: HER_TOOLS, own: ['image_gen'] }).agent })
+  for (const sid of ['s1', 'session-s1']) {
+    const has = currentAllowTools(sid)
+    assert.ok(Array.isArray(has), `${sid} 要认得出`)
+    assert.ok(has.includes('bili_look'))
+    assert.ok(!has.includes('image_gen'), `${sid}：家里没有 image_gen，不能按群房算`)
+  }
+  assert.ok(currentAllowTools('g1').includes('image_gen'))
+  // 反过来：头里不带前缀，问的时候带
+  ctx.emit('agent/created', { agent: hostAgent('C:\\h', { sid: 's2', restrictable: HER_TOOLS, own: ['image_gen'] }).agent })
+  assert.ok(currentAllowTools('session-s2').includes('image_gen'))
+})
+
+test('群房一多：常问的那条不先被挤掉；真挤掉了是不知道；探活交回来的 agent 照样认（issue #58）', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search', 'image_gen'], log: () => {} })
+  const home = hostAgent('C:\\h', { sid: 's-home', restrictable: [...HER_TOOLS, 'web_search'] })
+  ctx.emit('agent/created', { agent: home.agent })
+  const rooms = [] // 留着引用：群房都还活着，淘汰只能按先后
+  const room = (i) => {
+    const r = hostAgent('C:\\h', { sid: `s-room${i}`, restrictable: HER_TOOLS, own: ['image_gen'] })
+    rooms.push(r)
+    ctx.emit('agent/created', { agent: r.agent })
+  }
+  for (let i = 0; i < 15; i++) room(i)
+  assert.ok(currentAllowTools('s-home').includes('web_search'))
+  for (let i = 15; i < 20; i++) room(i)
+  assert.ok(currentAllowTools('s-home')?.includes('web_search'), '家里那条刚问过，排在后面，不先被挤掉')
+  for (let i = 20; i < 40; i++) room(i)
+  assert.equal(rooms.length, 40)
+  assert.equal(currentAllowTools('s-home'), null, '真被挤掉了：不知道，不拿群房顶')
+  // 叫醒、主动回合探活时宿主把那条会话的 agent 交回来：是这一次见过的她，直接按它算
+  const has = currentAllowTools('s-home', { agent: home.agent })
+  assert.ok(has.includes('web_search'))
+  assert.ok(!has.includes('image_gen'))
+  // 不是这一次见过的（别人的会话）：不替它担保
+  const stranger = hostAgent('C:\\other', { sid: 's-x', restrictable: [...HER_TOOLS, 'image_gen'] })
+  ctx.emit('agent/created', { agent: stranger.agent })
+  assert.equal(currentAllowTools('s-x', { agent: stranger.agent }), null)
+  assert.equal(currentAllowTools('', { agent: stranger.agent }), null, '给了 agent 又不认得：不退回最近建的那个')
+})
+
+test('重新注册以后：之前的她探活交回来也不替她担保，等下一个她建出来（issue #58）', () => {
+  // 那个 agent 身上挂的是上一次注册下的守卫与收窄；这一份白名单新加的 own 层名字，旧守卫照样拦。
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], log: () => {} })
+  const old = hostAgent('C:\\h', { sid: 's1', restrictable: [...HER_TOOLS, 'web_search'], own: ['ops_bash'] })
+  ctx.emit('agent/created', { agent: old.agent })
+  assert.ok(currentAllowTools('s1', { agent: old.agent }).includes('web_search'))
+  assert.ok(!currentAllowTools('s1', { agent: old.agent }).includes('ops_bash'), '前提：上一份白名单没放 ops_bash')
+  const ctx2 = fakeCtx()
+  registerToolRestrict(ctx2, { herDir: 'C:\\h', extra: ['web_search', 'ops_bash'], log: () => {} })
+  assert.equal(currentAllowTools('s1', { agent: old.agent }), null, '旧守卫还拦着 ops_bash：说不准，宁可多摆')
+  assert.equal(currentAllowTools('s1'), null)
+  const fresh = hostAgent('C:\\h', { sid: 's1', restrictable: [...HER_TOOLS, 'web_search'], own: ['ops_bash'] })
+  ctx2.emit('agent/created', { agent: fresh.agent })
+  assert.ok(currentAllowTools('s1').includes('ops_bash'), '新的她归这一次的守卫管：答得上')
 })
 
 test('收窄一直没挂上（deferred）：到手的是宿主有、守卫放行的那部分（issue #58）', async () => {

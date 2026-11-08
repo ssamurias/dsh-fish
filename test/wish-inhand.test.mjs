@@ -9,6 +9,8 @@
  *
  * 这里照 `lib/index.js` 的调用注册收窄，假宿主只给它真有的工具，再真跑叫醒与主动回合。
  * 后半是重启后的冷会话：她的 agent 要到第一次被叫起来才建，在那之前「到手」核实不了。
+ * 最后是她同时住着好几条会话（群聊分房的 cwd 也是她的屋子）：「到手」只按家里那条算，
+ * 家里那条没见到时不拿群房的工具表顶；会话 id 两边写法不一样也认得出。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -39,16 +41,20 @@ function pluginCtx() {
   }
 }
 
-/** 宿主建好的她：`view(agent)` 报的是宿主此刻真有的工具。 */
-function herAgent(cwd, names) {
+/**
+ * 宿主建好的她：`view(agent)` 报的是宿主此刻真有的工具。
+ * `sid` 是会话头里的 id（缺省 `s1`，和 home.json 里那条一样；传空串就是头里没写 id）；
+ * `own` 是 own 层的（看得见、收不窄，别的插件按会话挂的那种）。
+ */
+function herAgent(cwd, names, { sid = 's1', own = [] } = {}) {
   const sent = []
   const agent = {
-    session: { header: { cwd } },
+    session: { header: { cwd, ...(sid ? { id: sid } : {}) } },
     ctx: {
       effect() {},
       tools: {
         view: (scope) => scope === agent
-          ? { restrictableNames: new Set(names), visible: new Map(names.map((n) => [n, {}])) }
+          ? { restrictableNames: new Set(names), visible: new Map([...names, ...own].map((n) => [n, {}])) }
           : { restrictableNames: new Set() },
         restrict: ({ allow }) => { sent.push(allow); return () => {} },
         guard: () => () => {},
@@ -61,8 +67,10 @@ function herAgent(cwd, names) {
 /**
  * 叫醒与主动回合用的宿主：投进去的那一刻把处境段一起记下来。
  * `onResolve`：冷会话用——宿主第一次被要这条会话的 agent 时才建它（发 agent/created）。
+ * `agentOf`：宿主交回来的就是 agent/created 发过的那个她（真宿主就是这样）；
+ * 不给时交回一个只会 followup 的替身，插件只能按会话 id 去找她。
  */
-function fakeHost({ onResolve } = {}) {
+function fakeHost({ onResolve, agentOf } = {}) {
   const prompts = []
   const registry = { get: () => ({ sessionIds: ['s1'] }), archivedSessionIds: [] }
   const ctx = {
@@ -73,7 +81,9 @@ function fakeHost({ onResolve } = {}) {
       prompt: async () => {},
       resolveAgent: async (sessionId) => {
         onResolve?.(sessionId)
-        return { agent: { followup: (message) => { prompts.push({ sessionId, section: getWakeSection() }) } } }
+        const agent = agentOf?.(sessionId) ?? {}
+        agent.followup = (message) => { prompts.push({ sessionId, section: getWakeSection() }) }
+        return { agent }
       },
     },
     logger: { info() {}, warn() {}, error() {} },
@@ -96,8 +106,10 @@ async function wish(root, { text, subject, ts }) {
  * 一间临时的家：按配置注册收窄，宿主只给 `host` 里的工具。
  * 叫醒的兜底定时器（2s / 30s / 90s）压成几毫秒，别让测试进程挂着等。
  * `cold`：重启后的冷会话——她的 agent 先不建，等 `warm()`（交给 fakeHost 的 onResolve）。
+ * `sid` / `own`：家里那个 agent 的会话头 id 与 own 层，见 herAgent。
+ * 交给 fn 的 `created` 能再发别的 agent（群房），`agent` 是家里那个。
  */
-async function withHer({ allow = [], host, cold = false }, fn) {
+async function withHer({ allow = [], host, cold = false, sid = 's1', own = [] }, fn) {
   const root = await mkdtemp(join(tmpdir(), 'fish-inhand-'))
   const oldHomes = process.env.DSH_FISH_HOMES
   process.env.DSH_FISH_HOMES = join(root, 'homes.json')
@@ -128,11 +140,11 @@ async function withHer({ allow = [], host, cold = false }, fn) {
       retryMs: 1,
       retryMax: 1,
     })
-    const her = herAgent(herDir, host)
+    const her = herAgent(herDir, host, { sid, own })
     let made = false
     const warm = () => { if (!made) { made = true; pctx.created(her.agent) } }
     if (!cold) warm()
-    return await fn(root, { sent: her.sent, logs, warm })
+    return await fn(root, { sent: her.sent, logs, warm, created: pctx.created, herDir, agent: her.agent })
   } finally {
     globalThis.setTimeout = realST
     clearWakeSection()
@@ -271,5 +283,80 @@ test('冷会话、宿主上没有 read_image：叫醒的桌上照摆；核实之
     assert.equal(h.prompts.length, 1)
     assert.match(h.prompts[0].section, new RegExp(READ_IMAGE_WISH))
     assert.match(h.prompts[0].section, /你问过，还没有答复/)
+  })
+})
+
+// ---- 主动回合的处境：会话接上之后再拼 ----
+
+test('冷会话：主动回合的处境等会话接上再拼，已经到手的那张不念（issue #58）', async () => {
+  await withHer({ allow: ['web_search'], host: [...HER_TOOLS, 'web_search'], cold: true }, async (root, { warm, sent }) => {
+    // 白名单里没有 image_gen：劲儿那一步核实不了也知道它没到手，是这张把她推起来
+    await wish(root, { text: IMAGE_GEN_WISH, subject: 'image_gen', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
+    // 这张要的东西家里已经有了，可要等会话接上才核实得了
+    await wish(root, { text: SEARCH_WISH, subject: 'web_search', ts: new Date(Date.now() - 9 * HOUR).toISOString() })
+    assert.equal(sent.length, 0, '前提：她的 agent 还没建，收窄还没下')
+    const h = fakeHost({ onResolve: warm })
+    const logs = []
+    const s = startScheduler(h.ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+    try {
+      await s.tick()
+    } finally {
+      s.dispose()
+    }
+    assert.equal(h.prompts.length, 1, logs.join(' | '))
+    assert.match(h.prompts[0].section, new RegExp(IMAGE_GEN_WISH))
+    assert.doesNotMatch(h.prompts[0].section, new RegExp(SEARCH_WISH), '会话接上了才拼处境：已经到手的不念')
+  })
+})
+
+// ---- 她同时住着好几条会话 ----
+// 群聊分房的 cwd 也是她的屋子，agent/created 照样认成她；可群房不带家里的 preset，
+// 工具表跟家里不一样。「到手」只按家里那条算。
+
+test('冷会话、群房先活着：劲儿不拿群房的工具表算，家里已经到手的卡不单独推她醒（issue #58）', async () => {
+  await withHer({ allow: ['web_search'], host: [...HER_TOOLS, 'web_search'], cold: true }, async (root, { warm, sent, created, herDir }) => {
+    // 群里有人说话，群房先建好了；它手上没有 web_search
+    const room = herAgent(herDir, HER_TOOLS, { sid: 'g1' })
+    created(room.agent)
+    assert.equal(room.sent.length, 1, '前提：群房也是她，照样收窄')
+    assert.equal(sent.length, 0, '前提：家里那条还冷着')
+    await wish(root, { text: SEARCH_WISH, subject: 'web_search', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
+    const h = fakeHost({ onResolve: warm })
+    const logs = []
+    const s = startScheduler(h.ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+    try {
+      await s.tick()
+    } finally {
+      s.dispose()
+    }
+    assert.equal(h.prompts.length, 0, (h.prompts[0]?.section ?? '').slice(0, 300))
+    assert.ok(logs.some((l) => l.includes('桌上没有可说的东西')), logs.join(' | '))
+  })
+})
+
+test('会话 id 两边写法不一样、还有一间群房：叫醒的桌子按家里那条算（issue #58）', async () => {
+  // 家里 agent 头里写的是 `session-s1`，home.json 里是 `s1`；后建的群房 own 层多一件 image_gen
+  await withHer({ allow: ['image_gen'], host: HER_TOOLS, sid: 'session-s1' }, async (root, { created, herDir }) => {
+    created(herAgent(herDir, HER_TOOLS, { sid: 'session-g1', own: ['image_gen'] }).agent)
+    const id = await wish(root, { text: IMAGE_GEN_WISH, subject: 'image_gen' })
+    assert.equal((await settleAsk(root, { askId: id, verdict: 'approve' })).ok, true)
+    const h = fakeHost()
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    assert.equal(h.prompts.length, 1)
+    assert.match(h.prompts[0].section, new RegExp(IMAGE_GEN_WISH), '家里没有 image_gen：不能按群房的算成到手')
+    assert.match(h.prompts[0].section, /他答应了，还没见到/)
+  })
+})
+
+test('宿主交回来的就是家里那个 agent：头里没写会话 id 也按它算，不拿群房顶（issue #58）', async () => {
+  await withHer({ allow: ['image_gen'], host: HER_TOOLS, sid: '' }, async (root, { created, herDir, agent }) => {
+    created(herAgent(herDir, HER_TOOLS, { sid: 'g1', own: ['image_gen'] }).agent)
+    const id = await wish(root, { text: IMAGE_GEN_WISH, subject: 'image_gen' })
+    assert.equal((await settleAsk(root, { askId: id, verdict: 'approve' })).ok, true)
+    const h = fakeHost({ agentOf: (sid) => (sid === 's1' ? agent : null) })
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    assert.equal(h.prompts.length, 1)
+    assert.match(h.prompts[0].section, new RegExp(IMAGE_GEN_WISH))
+    assert.match(h.prompts[0].section, /他答应了，还没见到/)
   })
 })
