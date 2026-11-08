@@ -200,7 +200,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 三条约束：
 
 - **工具名必须对得上真实 registry**。桥升级改名、用户填错，她就会答「我没法在 QQ 上说话」——这不是插件坏了，是名字没对上。
-- **放行之后要念给她听**。身份文档「我手上有什么」由 `lib/persona.js` 的 `toolBrief(extra)` 生成、`lib/selfdoc.js` 把 `config.tools.allow` 作为 `extraTools` 传进去。看不见一只手，她就不会用。
+- **放行之后要念给她听**。身份文档「我手上有什么」由 `lib/persona.js` 的 `toolBrief(extra)` 生成、`lib/selfdoc.js` 把白名单作为 `extraTools` 传进去。看不见一只手，她就不会用。收窄开着时念的是这一局启动时的白名单（`currentAllowExtra()`），不是盘上的配置：守卫的名单启动时就算定了，存完新名单要重启才到她手上，这之前不能先念给她（梦、定时那两段同理，见 `toolSectionsNow`）。收窄关着时照旧念配置。
 - **白名单只做加法**。`config.tools.allow` 与 `HER_TOOLS` 取并集，不要用它去减工具；收窄只走 `lib/restrict.js` 那一套。
 
 `test/beliefs.test.mjs` 有一条「白名单里额外放行的工具要念给她听」盯着这段，改之前先跑它。

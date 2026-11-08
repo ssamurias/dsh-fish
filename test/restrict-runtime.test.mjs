@@ -18,7 +18,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { HER_TOOLS, registerToolRestrict, readRestrictState, currentAllowTools, forgetBlockedTools } from '../lib/restrict.js'
+import { HER_TOOLS, FISH_TOOLS, registerToolRestrict, readRestrictState, currentAllowTools, forgetBlockedTools, rememberKnownTools } from '../lib/restrict.js'
+import { forgetRegisteredTools, noteRegisteredTool } from '../lib/toolreg.js'
 import { writeSelfDoc, selfDocPath } from '../lib/selfdoc.js'
 import { writeConfig } from '../lib/store.js'
 import { normalizeConfig } from '../lib/settings.js'
@@ -48,8 +49,9 @@ function busCtx() {
 /**
  * 一个像真宿主的 agent：restrict 遇到不认识的名字就抛错（宿主原文的报错形状），
  * view 给 restrictableNames，`visible: false` 时模仿老宿主不给 visible。
+ * `own` 是她自己那一层的名字：view 的 visible 里有、restrictableNames 里没有，restrict 点不了名。
  */
-function hostAgent(cwd, names, { visible = true } = {}) {
+function hostAgent(cwd, names, { visible = true, own = [] } = {}) {
   const sent = []
   const guards = []
   const agent = {
@@ -58,7 +60,7 @@ function hostAgent(cwd, names, { visible = true } = {}) {
       effect() {},
       tools: {
         view: () => (visible
-          ? { restrictableNames: new Set(names()), visible: new Map(names().map((n) => [n, {}])) }
+          ? { restrictableNames: new Set(names()), visible: new Map([...names(), ...own].map((n) => [n, {}])) }
           : { restrictableNames: new Set(names()) }),
         guard: (fn) => { guards.push(fn); return () => {} },
         restrict: ({ allow }) => {
@@ -111,12 +113,21 @@ async function hit(routes, path, method = 'GET', body) {
   return { status, payload }
 }
 
+/** restrict.js / toolreg.js 的进程内记账复位：同一进程连着跑别的测试文件时，别让上一条的注册、快照、被挡记录串进来。 */
+function resetModuleState() {
+  forgetRegisteredTools()
+  rememberKnownTools([])
+  forgetBlockedTools()
+}
+
 async function withRoot(fn) {
+  resetModuleState()
   const root = await mkdtemp(join(tmpdir(), 'fish-restrict-runtime-'))
   const herDir = join(root, 'home')
   try {
     return await fn(root, herDir)
   } finally {
+    resetModuleState()
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 }
@@ -176,6 +187,22 @@ test('启动时放行了、之后从配置里删掉：重启前她手上还有�
     const doc = await docOf(root)
     assert.ok(doc.includes(`${EXTRA_HEAD}bash、schedule_create。`), `运行中的白名单要念给她：\n${doc}`)
     assert.ok(doc.includes(SCHEDULE_LINE), '守卫放行着 schedule_create，定时那一段就该在')
+  })
+})
+
+test('白名单里填了 her_say：工具注册前后，「还放行了这几样」那句不改口', async () => {
+  await withRoot(async (root, herDir) => {
+    // index.js 的顺序：先注册收窄、写身份文档，之后才注册工具（toolreg 的记账这时才有）。
+    await writeConfig(normalizeConfig({ tools: { restrict: true, allow: ['her_say', 'bash'] } }), root)
+    registerToolRestrict(busCtx(), { herDir, extra: ['her_say', 'bash'], dream: true, log: () => {} })
+    await writeSelfDoc(root)
+    const before = (await docOf(root)).split('\n').find((l) => l.includes(EXTRA_HEAD)) ?? ''
+    assert.ok(before.includes('bash'), `前提：启动时那句念了白名单：${before}`)
+
+    for (const n of [...FISH_TOOLS, 'her_say', 'bring_back']) noteRegisteredTool(n)
+    await writeSelfDoc(root)
+    const after = (await docOf(root)).split('\n').find((l) => l.includes(EXTRA_HEAD)) ?? ''
+    assert.equal(after, before, '同一个进程、同一份守卫名单，那句话不能注册前一个说法、注册后另一个说法')
   })
 })
 
@@ -326,6 +353,58 @@ test('read_image 真下过：「看画面」照旧报绿（宿主认过这个名
     const img = res.items.find((i) => i.id === 'read-image')
     assert.equal(img.ok, true, img.detail)
     assert.match(img.detail, /宿主认了 read_image/)
+  })
+})
+
+test('read_image 在她自己那一层（看得见、restrict 点不了名）：「看画面」和「手上的工具」说的是同一件事', async () => {
+  await withRoot(async (root, herDir) => {
+    const bus = busCtx()
+    registerToolRestrict(bus, { herDir, dream: true, log: () => {} })
+    const names = HER_TOOLS.filter((n) => n !== 'read_image')
+    const host = hostAgent(herDir, () => names, { own: ['read_image'] })
+    bus.emit('agent/created', { agent: host.agent })
+    const R = readRestrictState()
+    assert.ok(R.applied > 0 && !R.effective.includes('read_image') && !R.skipped.includes('read_image'), '前提：它在 own 层，没下给 restrict，也不算宿主没有')
+
+    const res = await runChecks({
+      root,
+      config: normalizeConfig({}),
+      host: {},
+      tools: { get: (n) => (names.includes(n) ? { name: n } : undefined) },
+      restrict: R,
+      attachments: true,
+      net: false,
+    })
+    const tools = res.items.find((i) => i.id === 'tools')
+    assert.match(tools.detail, /read_image 在她自己那一层/, tools.detail)
+    const img = res.items.find((i) => i.id === 'read-image')
+    assert.equal(img.ok, true, img.detail)
+    assert.ok(!img.detail.includes('查不准'), `「手上的工具」说她照样看得见 read_image，这里不能说查不准：${img.detail}`)
+    assert.match(img.detail, /她自己那一层/, img.detail)
+  })
+})
+
+test('她自己的工具被挡过（关着梦启动时的 her_dream）：自检的修法指到设置页能点的那一组', async () => {
+  await withRoot(async (root, herDir) => {
+    const bus = busCtx()
+    registerToolRestrict(bus, { herDir, dream: false, log: () => {} })
+    const host = hostAgent(herDir, () => [...HER_TOOLS])
+    bus.emit('agent/created', { agent: host.agent })
+    assert.match(host.guards[0]({ name: 'her_dream' }), /^这件事我做不到。/, '前提：守卫拦了 her_dream')
+
+    const res = await runChecks({
+      root,
+      config: normalizeConfig({ dream: { enabled: false } }),
+      host: {},
+      tools: { get: (n) => ({ name: n }) },
+      restrict: readRestrictState(),
+      net: false,
+    })
+    const blk = res.items.find((i) => i.id === 'tools-blocked')
+    assert.ok(blk, '被挡过就要有这一项')
+    assert.match(blk.fix, /her_dream 是她自己的工具/, blk.fix)
+    assert.match(blk.fix, /她自己的，这一局不在她手上/, `设置页把它摆在那一组，修法要指过去：${blk.fix}`)
+    assert.match(blk.fix, /允许她记梦/, blk.fix)
   })
 })
 

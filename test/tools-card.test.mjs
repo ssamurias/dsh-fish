@@ -170,7 +170,7 @@ function stateWith(tools) {
 
 const HER = ['growth_commit', 'her_recall', 'her_diary', 'her_leave', 'her_note', 'ask_owner', 'her_dream', 'her_say', 'read_image']
 
-function routesFor({ restrict = true, allow = [], tools = null, toolsFail = false } = {}) {
+function routesFor({ restrict = true, allow = [], tools = null, toolsFail = false, beliefsFail = false } = {}) {
   const st = stateWith({ restrict, allow })
   return {
     'GET /state': { body: st },
@@ -180,7 +180,7 @@ function routesFor({ restrict = true, allow = [], tools = null, toolsFail = fals
       : { body: tools ?? { ok: true, known: [...HER, 'web_search'], ownLayer: [], blocked: [], herTools: HER, herSceneTools: [] } },
     'POST /config': ({ body }) => ({ body: { ok: true, config: { ...st.config, ...body } } }),
     // load() 用 Promise.all 等这三个：缺一个后面（含 /tools）就都不跑了。
-    'GET /beliefs': { body: {} },
+    'GET /beliefs': beliefsFail ? { status: 500, body: { error: 'boom' } } : { body: {} },
     'GET /diary': { body: {} },
     'GET /browse': { body: {} },
   }
@@ -316,9 +316,53 @@ test('关着梦启动、宿主没有 read_image：这两件不摆进「不用放
   assert.deepEqual(chips('away').sort(), ['her_dream', 'read_image'], '不在手上的单列一组')
   assert.match(H.textOf(card), /这一局不在她手上/)
   assert.deepEqual(chips('blk'), ['web_search'], 'her_dream 已经单列，不在被挡那组再摆一次')
-  const away = H.find((n) => n.props?.key === 'away:her_dream', card)[0]
-  assert.equal(away.props.disabled, true, '她自己的工具点不进白名单')
+  // read_image 守卫放行、只是宿主没给：白名单帮不上，只读。
+  const img = H.find((n) => n.props?.key === 'away:read_image', card)[0]
+  assert.equal(img.props.disabled, true, '宿主没给的，点进白名单也没用')
+  // her_dream 是守卫没放行的：白名单里填上它，重启后守卫就放行（main 上点「被挡下来过」那组的同一条路）。
+  const dream = H.find((n) => n.props?.key === 'away:her_dream', card)[0]
+  assert.ok(!dream.props.disabled && typeof dream.props.onClick === 'function', '守卫没放行的那几件要能点进白名单')
+  await H.click('her_dream', toolsCard(H))
+  const input = H.find((n) => n.type === 'input' && String(n.props.placeholder || '').startsWith('例如：web_search'))[0]
+  assert.match(String(input.props.value), /\bher_dream\b/, '点一下就填进白名单输入框')
   noRenderErrors(H)
+})
+
+test('her_say 不在这一局的名单里（新启动时的 her_say 那条）：摆在「这一局不在她手上」，能点进白名单', async () => {
+  const allowNow = HER.filter((n) => n !== 'her_say')
+  const H = mount(routesFor({
+    restrict: true,
+    tools: {
+      ok: true,
+      known: [...HER, 'web_search'],
+      ownLayer: [],
+      blocked: [{ name: 'her_say', count: 3 }],
+      herTools: HER,
+      herSceneTools: [],
+      allowNow,
+      effective: allowNow,
+      skipped: [],
+    },
+  }))
+  await H.settle()
+  await H.click('插件')
+  const card = toolsCard(H)
+  const chip = H.find((n) => n.props?.key === 'away:her_say', card)[0]
+  assert.ok(chip, '守卫拦着 her_say，它不在「不用放行」那组')
+  assert.ok(!chip.props.disabled, '白名单里填 her_say 守卫就放行，这条路不能堵上')
+  assert.match(String(chip.props.title), /伸手被挡过 3 次/, chip.props.title)
+  assert.match(String(chip.props.title), /点一下填进白名单/, chip.props.title)
+  noRenderErrors(H)
+})
+
+test('前面的请求失败时，工具卡不停在「读取中」：/tools 自己单独发', async () => {
+  const H = mount(routesFor({ restrict: true, beliefsFail: true }))
+  await H.settle()
+  await H.click('插件')
+  assert.ok(H.calls.some((c) => c.method === 'GET' && c.path === '/tools'), '/beliefs 失败了 /tools 也要发')
+  const card = H.textOf(toolsCard(H))
+  assert.ok(!card.includes('读取中'), `不能一直挂着「读取中」：${card}`)
+  assert.match(card, /她自己本来就有的/, '名单读到了就照常摆出来')
 })
 
 test('服务端不给 allowNow（收窄这一局没在管）时，她自己的照旧全摆在「不用放行」', async () => {
@@ -347,13 +391,33 @@ test('白名单输入框旁写明存好之后要重启才对她生效（名单�
 // 梦的开关：打开要重启才交到她手上（#64 的取舍带出来的时差，写在开关上）
 // ---------------------------------------------------------------------------
 
-test('「允许她记梦」的提示写明：关掉马上生效，打开要重启 DSH', async () => {
-  const H = mount(routesFor({ restrict: true }))
+const dreamHint = async (H) => {
   await H.settle()
   await H.click('成长')
   const fld = H.find((n) => n.props?.className === 'fld' && H.textOf(n).includes('允许她记梦'))[0]
   assert.ok(fld, '成长页要有梦的开关')
-  const hint = H.textOf(H.find((n) => n.props?.className === 'fhint', fld)[0])
-  assert.match(hint, /重启/, `打开梦要重启才对她生效，提示里得写：${hint}`)
+  return H.textOf(H.find((n) => n.props?.className === 'fhint', fld)[0])
+}
+
+test('关着梦启动的这一局：「允许她记梦」的提示写明关掉马上生效、打开要重启 DSH', async () => {
+  const allowNow = HER.filter((n) => n !== 'her_dream')
+  const H = mount(routesFor({
+    restrict: true,
+    tools: { ok: true, known: HER, ownLayer: [], blocked: [], herTools: HER, herSceneTools: [], allowNow, effective: allowNow, skipped: [] },
+  }))
+  const hint = await dreamHint(H)
+  assert.match(hint, /打开之后要重启 DSH/, `打开梦要重启才对她生效，提示里得写：${hint}`)
   noRenderErrors(H)
+})
+
+test('开着梦启动、或收窄这一局没在管：「允许她记梦」不说要重启（her_dream 本来就在她手上）', async () => {
+  const on = mount(routesFor({
+    restrict: true,
+    tools: { ok: true, known: HER, ownLayer: [], blocked: [], herTools: HER, herSceneTools: [], allowNow: HER, effective: HER, skipped: [] },
+  }))
+  const h1 = await dreamHint(on)
+  assert.ok(!h1.includes('重启'), `开着梦启动，开关当场生效：${h1}`)
+  const off = mount(routesFor({ restrict: false }))
+  const h2 = await dreamHint(off)
+  assert.ok(!h2.includes('重启'), `收窄关着时没有守卫，开关当场生效：${h2}`)
 })
