@@ -6,6 +6,20 @@
   - `ask_owner` 的 `subject` 说明补一句「要工具时把工具名写在最前面，后面可以再补一句做什么」：不改造已有数据，只让以后写的卡好认。
   - `test/wish.test.mjs` 新增 1 条（描述句命中、`her_notes` 不命中 `her_note`、4 字以下不参与、函数写法只认整句）。
 
+- **启动那一拍她其实还没有 `her_say`（PR #84，@BBleae）。** 0.9.5 把她的工具清单改成注册期记账、运行时现算以后，`registerToolRestrict` 跑在工具注册之前，退回的基线 `FISH_TOOLS` 里漏了 `her_say`——下给宿主的 allow、提示词里的工具段、兜底守卫三处都少它，她一调就被挡回「这件事我做不到」，而身份文档照旧写着这件工具。
+  - `lib/restrict.js` 的 `FISH_TOOLS` 补上 `her_say`；新增 `test/restrict-boot.test.mjs` 钉住「注册期算出的 allow 含她全部 12 件工具」。
+
+- **断网时安静刷和醒来便条都不再往外走（PR #85，@BBleae）。** 安静刷只判 `browse.enabled`（默认开着），没判 `bili.enabled` 这颗「彻底断网」——关掉上网以后定时 tick 与 `POST /browse`（含 `force`）照样取 buvid、热门、分区排行，写 `browse:` / `looked:`，挑中热评还记一条 `voice`；醒来那句「今天你自己又翻到了 N 条」也照念，并记 `digest:`。
+  - `lib/scheduler.js` 的 `quietBrowse` 开头先判 `biliOn(config)`，不通过直接返回；便条条件改成 `browse.enabled && biliOn(config)`，断网时整行不念也不记 `digest:`。`bili.enabled` 开着时两处行为不变。新增 `test/quiet-browse-offline.test.mjs` 7 条（fetch 一律抛错的假函数，不碰真网络）。
+
+- **回评论认清「她自己」是谁（PR #90，@BBleae）。** 四个漏口：① `subReplies` 回包时把 `data.root` 丢了，「登录号不知道就看楼主」这条兜底在真客户端上永远走不到（测试用的是带顶层 `root` 的假 client，所以一直绿）；② 0.5.10 之前把登录号写进 `owner.mid` 的老数据下 `loginMid` 回 0，`ownerMids` 却含 `owner.mid`——她自己的话被标成主人说的、摆进「他在你下面说话了」、回它不占额度，`replyPerDay=0` 也拦不住，能一直自己回自己；③ `rootRpid` 填错时不找楼，静默落到她最近那条评论，回复挂到别的楼下；④ 每个候选楼都 `view` 一次，额度满也要把这串请求打完才拒。
+  - `lib/bili.js` 的 `subReplies` 带出 `root: { rpid, mid }`；`lib/comment.js` 新增 `selfIn()`（登录号 → 楼主），`scanReplies` / `readMyReplies` / `postReply` 的自回检查与 `isOwnerReply` 都改用它；额度判断挪到请求之前。新增 `test/comment-self.test.mjs` 10 条。
+
+- **数据页：导入判定同一份、备份只要装得下就整份装得下、回执说清没带什么（PR #92，@BBleae）。** ① GET 与 POST `/import` 两套判定（`events.some(type==='seed')` vs `onlyDefaultSeed`）→ 重开一局再重启后设置页不给导、接口却能导；抽成 `lib/import.js` 的 `hasOwnStart(events)` 两边共用。② 事件流挤占 64MB 总额度，一大就把 `owner.json` / `state.json` 挤出包，恢复还报成功；现在事件流无条件进包且排最前、不占别的文件额度，整份包按「从备份恢复」的样子（JSON、二进制 base64）量恢复上限——装得下就整份装得下，放不下的文件逐个在 `skipped` 里写原因，写不下时只计数放 `skippedUnlisted`。③ 回执把「不搬的目录（node_modules）」与「太大没打进包」分开说。④ 人设写进去以后配置读不出来不再 500（按默认成长周期算，照样回执）；交接单的白名单合并回 `toolsAdded` / `toolsError`，回执直说新加几个、失败时直说没写进去。⑤ 迁移说明与 `lib/move.js` 的实际拒绝原因对上，删掉 `move.js` 的死分支。新增 36 条测试。
+
+- **设置页前端六处（PR #94，@BBleae）。** ① 首读 `/state` 失败后仍有 13 个 `useState`（出门 7、请神 6）→ React 抛「Rendered fewer hooks than expected」，连「读不到状态。」都出不来；② `atOwner` 只在 `GET /owner` 成功时才设，整表自动保存却提交它——只打开页面、`/owner` 又失败时，盘上关着的开关会被写回 true；③ 「安静多久才搭话」每按一个键写一次盘（6 改成 12 依次写 `0, 1, 12, 12`）；④ 「查多久的记录」不校验天数，晚到的旧回包会把列表换回去，失败还被吞掉；⑤ 0.8.0–0.8.7 的 `look:` 行只有 BV 号，却排在 `browse:` 前面占住去重，列表只剩裸编号；⑥ 两张卡的说明与一句回执跟行为对不上。
+  - 改动都在 `lib/client.js` 与 `lib/history.js`：hooks 提前 return 前收齐、`atOwner` 只从 `/config` 读、逐键改到离开输入框再写、`/history` 回包带天数并校验、去重时 `look:` 不带标题就让给 `browse:`。两处行为变化：`/beliefs` `/diary` `/browse` 任一失败时整表保存被挡住（提示重新打开这一页）、旧配置没有 `atOwner` 键时仍按 true（与 `GET /owner` 判据一致）。新增 `test/client-render.test.mjs` 13 条 + `test/whatseen.test.mjs` 2 条。
+
 ## 0.9.5 — 2026-11-08
 
 > 这一版把原计划分在 0.9.4–0.9.7 的未发布改动合并成一次发布，统一按 0.9.5 编号。0.9.4–0.9.7 从未发布过，以下条目就是这批改动的全部。

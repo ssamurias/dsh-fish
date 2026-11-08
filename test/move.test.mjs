@@ -13,7 +13,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, relative } from 'node:path'
+// 第二道保护的测试要在复制前往目标里塞一个同名文件：move.js 用的就是这个 promises 对象。
+import { promises as fsp } from 'node:fs'
 
 import { planMove, moveRoot, moveStatus } from '../lib/move.js'
 import { readLocationSync, invalidateLocation, locationFile, defaultRoot } from '../lib/locate.js'
@@ -169,4 +171,86 @@ test('moveStatus：没迁过时 moved=false，迁过之后 moved=true', async ()
 test('defaultRoot 是本机的 ~/.dsh-fish', () => {
   assert.match(defaultRoot(), /\.dsh-fish$/)
   assert.match(locationFile(), /\.dsh-fish-location\.json$/)
+})
+
+// ---- 0.9.5 余项（接 #65）：迁移的两道保护各有一条测试守着 ----
+
+test('选中的文件夹里已经放着一份档：拒绝，那份档原样在原位', async () => {
+  // 第一道保护（planMove 里的 existingArchive）。去掉它，那份档会被当成新根往里复制，
+  // 复制撞上同名文件后整个文件夹还会被改名成 .partial-…，人家的档就不在原位了。
+  await withEnv(async ({ box, src, loc }) => {
+    const other = join(box, 'other')
+    await mkdir(join(other, 'diary'), { recursive: true })
+    await writeFile(join(other, 'events.jsonl'), '{"id":"ev_other"}\n')
+    await writeFile(join(other, 'diary', '2026-10-01.md'), '别人的日记\n')
+
+    const plan = await planMove(src, other)
+    assert.equal(plan.ok, false, '放着一份档的文件夹不能当目标')
+    // 原因的措辞不在这里钉：这条守的是行为（拒绝、那份档原样在原位、她没动、指针没写）。
+    assert.match(plan.why, /已经有一份她的档/)
+
+    const r = await moveRoot(null, { root: src, target: other })
+    assert.equal(r.ok, false)
+    assert.deepEqual((await readdir(other)).sort(), ['diary', 'events.jsonl'], '那边不多不少')
+    assert.equal(await readFile(join(other, 'events.jsonl'), 'utf8'), '{"id":"ev_other"}\n')
+    assert.equal(await readFile(join(other, 'diary', '2026-10-01.md'), 'utf8'), '别人的日记\n')
+    assert.ok(!(await readdir(box)).some((n) => n.startsWith('other.partial-')), '那份档没被改名挪开')
+    // 她自己也没动：还在原处，指针没写
+    assert.equal(await readFile(join(src, 'events.jsonl'), 'utf8'), '{"id":"ev_1"}\n')
+    await assert.rejects(stat(loc))
+  })
+})
+
+test('复制时目标里冒出同名文件：不覆盖、整趟作废、指针不写（第二道保护 COPYFILE_EXCL）', async () => {
+  // planMove 只给空的或还不存在的 dsh-fish，正常走不到这里；这条守的是「判断之后、复制之前
+  // 那边多了东西」。办法是包一层 copyFile：第一次复制前先在目标位置放一个同名文件。
+  // 去掉 COPYFILE_EXCL，这个文件会被盖掉、迁移照报成功。
+  await withEnv(async ({ box, src, loc }) => {
+    const dst = join(box, 'dst')
+    await mkdir(dst, { recursive: true })
+    const realCopy = fsp.copyFile
+    let planted = ''
+    fsp.copyFile = async (from, to, mode) => {
+      if (!planted) {
+        planted = String(to)
+        await mkdir(dirname(planted), { recursive: true })
+        await writeFile(planted, '别人刚放进来的\n')
+      }
+      return realCopy.call(fsp, from, to, mode)
+    }
+    let r
+    try {
+      r = await moveRoot(null, { root: src, target: dst })
+    } finally {
+      fsp.copyFile = realCopy
+    }
+    assert.ok(planted, '包的那一层要真的被走到')
+    assert.equal(r.ok, false, '撞上同名文件必须失败')
+    assert.match(r.why, /复制到一半失败/)
+    // 那个文件没被盖：半成品目录整个改名挪开了，它在里面，内容原样
+    const halves = (await readdir(dst)).filter((n) => n.startsWith('dsh-fish.partial-'))
+    assert.equal(halves.length, 1, '半成品要改名挪开')
+    const rel = relative(join(dst, 'dsh-fish'), planted)
+    assert.equal(await readFile(join(dst, halves[0], rel), 'utf8'), '别人刚放进来的\n')
+    // 等于没迁过：指针没写，她还在原处
+    await assert.rejects(stat(loc))
+    assert.equal(await readFile(join(src, 'events.jsonl'), 'utf8'), '{"id":"ev_1"}\n')
+  })
+})
+
+test('选的是她现在那个 dsh-fish 的上级：说「她本来就在这个位置」，不说成别人的 dsh-fish', async () => {
+  // 她住在 P/dsh-fish、选 P：拼回来就是她自己。0.9.5 说的是「这个文件夹里已经有一个
+  // dsh-fish 且不是空的」，那个 dsh-fish 就是她；给这种情况写的那句是死分支。
+  await withEnv(async ({ box }) => {
+    const here = join(box, 'dsh-fish')
+    await mkdir(join(here, 'home'), { recursive: true })
+    await writeFile(join(here, 'events.jsonl'), '{"id":"ev_1"}\n')
+    const r = await planMove(here, box)
+    assert.equal(r.ok, false)
+    assert.match(r.why, /本来就在这个位置/)
+    // 直接选她现在住的文件夹也一样
+    const self = await planMove(here, here)
+    assert.equal(self.ok, false)
+    assert.match(self.why, /本来就在这个位置/)
+  })
 })

@@ -90,7 +90,7 @@ test('注册了什么就出现什么——加工具不用再去改一张表', ()
   const live = fishToolsNow()
   for (const n of ALL_TOOLS) assert.ok(live.includes(n), `注册了 ${n}，清单里就该有`)
   assert.equal(live.length, ALL_TOOLS.length, '不多不少，正好是注册过的那几个')
-  // 旧基线那 11 个仍然在（新清单是超集，不是替换）
+  // 基线 FISH_TOOLS 里的仍然都在（新清单是超集，不是替换）
   for (const n of FISH_TOOLS) assert.ok(live.includes(n), `老工具 ${n} 不能因为改成现算就丢了`)
 })
 
@@ -119,28 +119,34 @@ test('her_say 不再看主动搭话的开关——只要注册了就在手边', 
   forgetRegisteredTools()
   registerAll()
   const ctx = fakeCtx()
-  // proactive 关着（默认 false），allow 里仍然要有 her_say：
-  // 那个开关管的是「系统替她开一轮」，不是这个工具本身。
+  // registerToolRestrict 不收主动搭话的开关（原来那个 proactive 参数没人读，已经删了），
+  // allow 里照样要有 her_say：那个开关管的是「系统替她开一轮」，不是这个工具本身。
   registerToolRestrict(ctx, { herDir: 'C:\\her-home', log: () => {} })
   const hers = fakeAgent('C:\\her-home')
   ctx.emit('agent/created', { agent: hers.agent })
 
   assert.equal(hers.calls.length, 1, '她这条应该被收窄一次')
   const allow = hers.calls[0].allow
-  assert.ok(allow.includes('her_say'), 'proactive 关着时她也得能开口（设置页文案就是这么写的）')
+  assert.ok(allow.includes('her_say'), '不管主动搭话开没开，她都得能开口（设置页文案就是这么写的）')
   assert.ok(!allow.includes('bring_back'), '出门工具不许进家里的 allow')
   for (const n of FISH_TOOLS.filter((x) => x !== 'her_dream')) {
     assert.ok(allow.includes(n), `${n} 是家里随时能用的，得在 allow 里`)
   }
 })
 
-test('没有注册记录时的 allow 与改之前一模一样（老断言与老行为都不破）', () => {
+// 没有注册记录不是边角情况，是生产上的常态：index.js 先收窄、后注册工具，
+// 收窄算 allow 的那一刻记录一定是空的（真实启动顺序见 test/restrict-boot.test.mjs）。
+// 0.9.5 这里断言的是「不含 her_say 的 HER_TOOLS」——把每次重启都够不着 her_say 当成了正确答案。
+test('没有注册记录时（收窄先于工具注册）allow 照基线算，her_say 也在里面', () => {
   forgetRegisteredTools()
   const ctx = fakeCtx()
   registerToolRestrict(ctx, { herDir: 'C:\\h', log: () => {} })
   const hers = fakeAgent('C:\\h')
   ctx.emit('agent/created', { agent: hers.agent })
-  assert.deepEqual(hers.calls[0].allow, HER_TOOLS.filter((n) => n !== 'her_dream'))
+  const allow = hers.calls[0].allow
+  assert.ok(allow.includes('her_say'), `重启后第一拍她就得够得着 her_say：${allow.join(',')}`)
+  assert.ok(!allow.includes('bring_back'), '出门工具不许进家里的 allow')
+  assert.deepEqual(allow, HER_TOOLS.filter((n) => n !== 'her_dream'))
 })
 
 test('注册期记账由 withUseDuringRegistration 顺手做掉，注册失败的不记', () => {
