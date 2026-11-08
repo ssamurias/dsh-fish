@@ -11,7 +11,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, appendFileSync, truncateSync, statSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, appendFileSync, truncateSync, statSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -578,6 +578,198 @@ test('GET 带回去的台账只有条数，没有整份 id 名单（issue #68）
         assert.equal(rec.held, 2)
       }
       assert.equal(got.json.pendingReview.checkable, true, '有基线的那趟核对得了')
+    } finally { done() }
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 第二轮：标记没写进去、0.9.5 留下的台账、复核认准卡上那一趟
+// ---------------------------------------------------------------------------
+
+/**
+ * 让事件流写不进去：设成只读，再空追加一次试试。
+ * 以 root 身份跑时只读拦不住，返回 false，那条测试跳过（不是假装过了）。
+ */
+function lockEvents(file) {
+  chmodSync(file, 0o444)
+  try { appendFileSync(file, '') } catch { return true }
+  chmodSync(file, 0o644)
+  return false
+}
+const unlockEvents = (file) => chmodSync(file, 0o644)
+
+const tripsOf = async (root, path) =>
+  path === 'outing' ? (await readOutings(root)).outings : (await readPossessions(root)).possessions
+
+test('对不上、回家时「不算」的标记没写进去：复核时照人的选择补标，划掉的真的不算（issue #68）', async (t) => {
+  for (const path of ['outing', 'possession']) {
+    for (const pick of ['整趟不算', '划掉一条']) {
+      const { root, file, done } = setup()
+      try {
+        const h = harness(root)
+        if (path === 'outing') await goOut(root, file)
+        else await possess(root, file)
+        writeTrip(file, { homeToo: false })
+        tamper(file)
+        if (!lockEvents(file)) { t.skip('只读拦不住写入（以 root 身份跑？）'); return }
+        const body = pick === '整趟不算' ? { kept: false, rejectedIds: [] } : { kept: true, rejectedIds: ['ev_out2'] }
+        let ended
+        try { ended = await h.call(path, 'POST', { action: 'end', ...body }) } finally { unlockEvents(file) }
+        assert.equal(ended.status, 200, JSON.stringify(ended.json))
+        assert.equal(ended.json.marked, false, `${path} ${pick}：标记确实没写进去`)
+        assert.equal(ended.json.held, 0, `${path} ${pick}：一条也没先标掉，回执不能说「先全部跳过」`)
+        const mid = await counted(root)
+        assert.ok(mid.has('ev_out1') && mid.has('ev_out2'), `${path} ${pick}：标记没写进去，眼下就是照算（回执也这么说）`)
+        const card = (await h.call(path, 'GET')).json.pendingReview
+        assert.equal(card.unmarked, true, `${path} ${pick}：卡上要知道标记没写进去`)
+        assert.equal(card.held, 0, `${path} ${pick}：卡上也不能说先标掉了几条`)
+
+        restore(file)
+        await takeNotes(root)
+        const reviewed = await h.call(path, 'POST', { action: 'review' })
+        assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+        const after = await counted(root)
+        const rec = (await tripsOf(root, path)).at(-1)
+        if (pick === '整趟不算') {
+          assert.equal(rec.status, 'rejected')
+          assert.ok(!after.has('ev_out1') && !after.has('ev_out2'), `${path}：台账说整趟不算，派生里就得一条不算`)
+        } else {
+          assert.equal(rec.status, 'done')
+          assert.equal(reviewed.json.rejected, 1)
+          assert.ok(after.has('ev_out1'), `${path}：没划掉的照算`)
+          assert.ok(!after.has('ev_out2'), `${path}：划掉的那条复核后真的不算`)
+          assert.equal((await rejectNotes(root)).length, 1, `${path}：补上标记时把驳回的话讲给她听`)
+        }
+        assert.equal(rec.marked, true, `${path}：结完以后标记写全了`)
+      } finally { unlockEvents(file); done() }
+    }
+  }
+})
+
+test('没对不上、回家时标记没写进去：这趟不落成算 / 不算，留在等复核，补写之后才结（issue #68）', async (t) => {
+  for (const path of ['outing', 'possession']) {
+    const { root, file, done } = setup()
+    try {
+      const h = harness(root)
+      if (path === 'outing') await goOut(root, file)
+      else await possess(root, file)
+      writeTrip(file, { homeToo: false })
+      await takeNotes(root)
+      if (!lockEvents(file)) { t.skip('只读拦不住写入（以 root 身份跑？）'); return }
+      let ended
+      try { ended = await h.call(path, 'POST', { action: 'end', kept: false }) } finally { unlockEvents(file) }
+      assert.equal(ended.status, 200, JSON.stringify(ended.json))
+      assert.equal(ended.json.tampered, false)
+      assert.equal(ended.json.marked, false)
+      const rec = (await tripsOf(root, path)).at(-1)
+      assert.equal(rec.status, 'pending', `${path}：标记没写进去，不能落成「这趟不算」——派生里照算，往后也没地方补`)
+      assert.equal(rec.kept, null)
+      assert.equal(rec.marked, false)
+      assert.equal((await rejectNotes(root)).length, 0, `${path}：眼下还算着，不能跟她说「不算」`)
+
+      // 卡上说清：记录对得上，只是标记没写进去；核对一次就补写。
+      const got = await h.call(path, 'GET')
+      const card = got.json.pendingReview
+      assert.ok(card, `${path}：要有一张卡`)
+      assert.equal(card.okNow, true)
+      assert.equal(card.unmarked, true)
+      assert.equal(card.held, 0)
+      assert.equal(card.dropped, 2)
+      assert.equal(card.autoRejected, true)
+      assert.match(card.reason, /标记没写进去/)
+
+      const reviewed = await h.call(path, 'POST', { action: 'review', sessionId: card.sessionId, startedAt: card.startedAt })
+      assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+      const done2 = (await tripsOf(root, path)).at(-1)
+      assert.equal(done2.status, 'rejected')
+      assert.equal(done2.kept, false)
+      const after = await counted(root)
+      assert.ok(!after.has('ev_out1') && !after.has('ev_out2'), `${path}：补写之后整趟不算`)
+      const said = (await takeNotes(root)).map((n) => String(n.text ?? '')).filter((x) => x.includes('一条都不收'))
+      assert.equal(said.length, 1, `${path}：补上标记时才跟她说这趟不收，只说一遍`)
+    } finally { unlockEvents(file); done() }
+  }
+})
+
+test('0.9.5 留下的出门 pending：划掉的名单先跟当年先标掉的取交集，从没标过的不算进条数（issue #68）', async () => {
+  const { root, file, done } = setup()
+  try {
+    const h = harness(root)
+    const snap = snapshotEvents(file)
+    appendFileSync(file, line('ev_o1', iso(T0 + 60_000), 'refusal', '外面说的第 1 句：我不干这个', { sessionId: 's-out' }), 'utf8')
+    appendFileSync(file, line('ev_o2', iso(T0 + 61_000), 'refusal', '外面说的第 2 句：我不干这个', { sessionId: 's-out' }), 'utf8')
+    appendFileSync(file, line('ev_home', iso(T0 + 62_000), 'refusal', '家里说的一句：我不想洗碗', { sessionId: 's-home' }), 'utf8')
+    appendFileSync(file, line('ev_m', iso(T0 + 70_000), 'meta', 'outing-reject:ev_o1 ev_o2', { source: 'system' }), 'utf8')
+    // 0.9.5 的台账：没有 autoRejected、没有 marked；划掉的是在按时间取的清单上挑的，混着家里那条。
+    writeFileSync(join(root, 'outings.json'), JSON.stringify({ version: OUTING_SCHEMA, outings: [{
+      sessionId: 's-out', workspaceId: 'w1', workspaceName: '素材', cwd: join(root, 'ws'),
+      startedAt: T0, endedAt: T0 + 80_000, status: 'pending', baseline: snap, kept: null, identity: '',
+      rejectedIds: ['ev_o2', 'ev_home'], pendingRejectedIds: ['ev_o1', 'ev_o2'],
+    }] }), 'utf8')
+
+    const got = await h.call('outing', 'GET')
+    assert.equal(got.json.pendingReview.held, 2)
+    assert.equal(got.json.pendingReview.dropped, 1, '家里那条从没被标过，不能算进「你划掉的 N 条」')
+    assert.equal(got.json.outings.at(-1).dropped, 1, '最近几趟里也按同一个口径数')
+
+    await takeNotes(root)
+    const reviewed = await h.call('outing', 'POST', { action: 'review' })
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+    assert.equal(reviewed.json.rejected, 1)
+    const said = (await rejectNotes(root)).join('\n')
+    assert.match(said, /外面说的第 2 句/)
+    assert.doesNotMatch(said, /一共/, '只划掉了一条，不能说「一共 2 条，挑出这几条说」')
+    const after = await counted(root)
+    assert.ok(after.has('ev_o1'), '没划掉的捞回来')
+    assert.ok(!after.has('ev_o2'), '划掉的不算')
+    assert.ok(after.has('ev_home'), '家里那条不是这趟的，这时也不替人标上')
+    assert.deepEqual((await readOutings(root)).outings[0].rejectedIds, ['ev_o2'], '台账记下真正照办的那份')
+  } finally { done() }
+})
+
+test('0.9.5 留下的请神 pending：一条标记都没写过，卡上照实说先标掉 0 条，核对后照常结（issue #68）', async () => {
+  const { root, file, done } = setup()
+  try {
+    const h = harness(root)
+    const snap = snapshotEvents(file)
+    appendFileSync(file, line('ev_p1', iso(T0 + 60_000), 'refusal', '请神时说的一句', { sessionId: 's-p' }), 'utf8')
+    writeFileSync(join(root, 'possessions.json'), JSON.stringify({ version: OUTING_SCHEMA, possessions: [{
+      sessionId: 's-p', title: '一个对话', cwd: join(root, 'ws'),
+      startedAt: T0, endedAt: T0 + 80_000, status: 'pending', baseline: snap, kept: null, identity: '',
+    }] }), 'utf8')
+    const got = await h.call('possession', 'GET')
+    assert.equal(got.json.pendingReview.held, 0, '这趟一条也没先标掉')
+    assert.equal(got.json.pendingReview.dropped, 0)
+    assert.equal(got.json.pendingReview.unmarked, false, '老台账不知道写没写，不说成「没写进去」')
+    assert.ok((await counted(root)).has('ev_p1'), '这趟写的一直算着')
+    const reviewed = await h.call('possession', 'POST', { action: 'review' })
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.json))
+    assert.equal(reviewed.json.possession.status, 'done')
+    assert.ok((await counted(root)).has('ev_p1'))
+  } finally { done() }
+})
+
+test('复核认准卡上那一趟：两趟都在等、两个复核带着同一张卡同时到，晚到的回 409，不把另一趟结掉（issue #68）', async () => {
+  for (const path of ['outing', 'possession']) {
+    const { root, done } = setup()
+    try {
+      const h = harness(root)
+      // 「接着上次那条」：A、B 两趟指向同一条会话，都核对得过（没有基线）。卡上显示的是 B。
+      const rec = (startedAt) => ({
+        sessionId: 's-same', workspaceId: 'w1', workspaceName: '素材', title: '一个对话', cwd: join(root, 'ws'),
+        startedAt, endedAt: startedAt + 60_000, status: 'pending', baseline: null, kept: null, identity: '',
+        rejectedIds: [], pendingRejectedIds: [],
+      })
+      const key = path === 'outing' ? 'outings' : 'possessions'
+      writeFileSync(join(root, `${key}.json`), JSON.stringify({ version: OUTING_SCHEMA, [key]: [rec(T0), rec(T0 + 3600_000)] }), 'utf8')
+      const card = (await h.call(path, 'GET')).json.pendingReview
+      assert.equal(card.startedAt, T0 + 3600_000, `${path}：卡上是最后那趟`)
+      const body = { action: 'review', sessionId: card.sessionId, startedAt: card.startedAt }
+      const both = await Promise.all([h.call(path, 'POST', body), h.call(path, 'POST', body)])
+      assert.deepEqual(both.map((r) => r.status).sort(), [200, 409], `${path}：${JSON.stringify(both.map((r) => r.json))}`)
+      const trips = await tripsOf(root, path)
+      assert.equal(trips[0].status, 'pending', `${path}：A 的卡人还没看过，不能被晚到的那个结掉`)
+      assert.equal(trips[1].status, 'done')
     } finally { done() }
   }
 })
