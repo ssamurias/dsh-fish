@@ -21,6 +21,7 @@ import { registerObserve } from '../lib/observe.js'
 import { apply } from '../lib/index.js'
 import { normalizeConfig, updateConfig } from '../lib/settings.js'
 import { paths, writeConfig } from '../lib/store.js'
+import { selfDocPath } from '../lib/selfdoc.js'
 
 const CLIENT = fileURLToPath(new URL('../lib/client.js', import.meta.url))
 
@@ -128,7 +129,7 @@ test('启动时就断网、评论开着：bili_speak 一注册就是关着的那
   })
 })
 
-test('启动之后才关掉上网：真启动注册出来的 bili_speak，说明也跟着变', async () => {
+test('启动之后才关掉上网：真启动注册出来的 bili_speak，她调一次之后说明也跟着变', async () => {
   await withRoot(async (root) => {
     await writeConfig(normalizeConfig({ bili: { enabled: true }, comment: { enabled: true } }), root)
     const { ctx, tools } = fakeHost()
@@ -144,6 +145,53 @@ test('启动之后才关掉上网：真启动注册出来的 bili_speak，说明
       // 宿主拿到的是注册时那一份定义；说明得是活的，不能在注册那一刻定格
       assert.doesNotMatch(def.description, SPEAK_ON, `关掉上网之后说明还是旧的：${def.description}`)
       assert.match(def.description, SPEAK_OFF)
+    } finally {
+      h.dispose?.()
+    }
+  })
+})
+
+/** 照设置页的样子往 /config 存一份改动（自动保存走的就是这条路） */
+async function postConfig(routes, patch) {
+  const route = routes.find((r) => r.path === '/dsh-fish/config')
+  assert.ok(route, '必须有 /config 路由')
+  const body = JSON.stringify(patch)
+  const req = {
+    method: 'POST',
+    url: '/dsh-fish/config',
+    headers: { 'content-type': 'application/json' },
+    on: (ev, fn) => { if (ev === 'data') fn(Buffer.from(body, 'utf8')); if (ev === 'end') fn() },
+  }
+  let status = 0
+  let out = null
+  await route.handler(req, { writeHead: (s) => { status = s }, end: (s) => { out = JSON.parse(s || '{}') }, setHeader: () => {} })
+  assert.equal(status, 200, `保存没成功：${JSON.stringify(out)}`)
+  return out
+}
+
+test('在设置页关掉上网、她还没调过 bili_speak：说明当场换成关着的那一版，和身份文档一起', async () => {
+  await withRoot(async (root, asked) => {
+    await writeConfig(normalizeConfig({ bili: { enabled: true }, comment: { enabled: true } }), root)
+    const { ctx, tools, routes } = fakeHost()
+    const h = apply(ctx, { root })
+    try {
+      const def = await waitFor(() => tools.get('bili_speak'))
+      assert.ok(def, '启动没走完：bili_speak 没注册上')
+      assert.ok(await waitFor(() => routes.find((r) => r.path === '/dsh-fish/config')), '启动没走完：/config 没登记')
+      assert.match(def.description, SPEAK_ON, '前提：启动时两颗都开着')
+
+      // 不调 execute：保存完、她下一轮开口之前，宿主序列化工具表读到的就该是新的那一版
+      await postConfig(routes, { bili: { enabled: false } })
+      assert.doesNotMatch(def.description, SPEAK_ON, `设置页关掉上网之后，说明还在许诺能留评论：${def.description}`)
+      assert.match(def.description, SPEAK_OFF)
+      // 身份文档那边同一刻已经是「说不出去」，两边要对得上
+      const doc = await readFile(selfDocPath(root), 'utf8')
+      assert.match(doc, SPEAK_OFF, '前提：身份文档保存后已经重写成说不出去')
+
+      // 再打开，也当场换回来
+      await postConfig(routes, { bili: { enabled: true } })
+      assert.match(def.description, SPEAK_ON)
+      assert.deepEqual(asked, [], '不该联网')
     } finally {
       h.dispose?.()
     }
