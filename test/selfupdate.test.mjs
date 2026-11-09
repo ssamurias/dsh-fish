@@ -32,6 +32,8 @@ import {
   runtimeBins,
   profileDirOf,
   createSelfUpdater,
+  vbsFor,
+  vbsBytes,
 } from '../lib/selfupdate.js'
 import { registerObserve } from '../lib/observe.js'
 
@@ -543,14 +545,103 @@ test('安装：写好脚本、起在子进程里、状态切到 installing', asy
     assert.equal(spawned[0].cmd, 'wscript.exe')
     assert.equal(spawned[0].opts.detached, true, '宿主被杀不能带走安装脚本')
     const vbsPath = spawned[0].args[spawned[0].args.length - 1]
-    const vbs = await readFile(vbsPath, 'utf8')
+    // issue #97：`.vbs` 必须是 UTF-16LE + BOM。wscript 按系统 ANSI 代码页读脚本，
+    // 数据目录带中文时 UTF-8 的路径会被念成乱码，`cmd` 找不到脚本、//B 又把错误吞了。
+    const bytes = await readFile(vbsPath)
+    assert.equal(bytes[0], 0xff, 'VBS 头一个字节是 UTF-16LE BOM')
+    assert.equal(bytes[1], 0xfe, 'VBS 头两个字节是 UTF-16LE BOM')
+    const vbs = bytes.subarray(2).toString('utf16le')
     assert.ok(vbs.includes(', 0, False'), '窗口样式 0 = 完全不显示')
     assert.ok(vbs.includes('WScript.Shell'), '用 WScript.Shell 起进程')
     const hit = vbs.match(/cmd \/c ""(.+?)""/)
     assert.ok(hit, 'vbs 里要能找到那个 .cmd 的路径')
-    const script = await readFile(hit[1], 'utf8')
+    // `.cmd` 相反：必须 UTF-8 无 BOM（cmd 会把 BOM 念成 `ï»¿@echo`）
+    const cmdBytes = await readFile(hit[1])
+    assert.notEqual(cmdBytes[0], 0xef, '.cmd 不能带 UTF-8 BOM')
+    const script = cmdBytes.toString('utf8')
     assert.ok(script.includes('v0.6.14'))
     assert.ok(script.includes('taskkill'))
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test('VBS 用 UTF-16LE + BOM 写：数据目录带中文时路径不会被 wscript 念成乱码（issue #97）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'fish-vbs-'))
+  try {
+    const root = join(dir, '大肥鱼', 'dsh-fish')
+    const up = createSelfUpdater({
+      root,
+      current: '0.6.13',
+      moduleUrl: '',
+      exe: 'C:\\App\\DeepSeek Harness.exe',
+      platform: 'win32',
+      downloadImpl: async () => ({ ok: true, bytes: 1, source: '源' }),
+      spawnImpl: () => ({ unref() {} }),
+    })
+    // 没有 profileDir 时 install 会直接拒（开发版），所以这里直接验写盘那一段的编码约定。
+    assert.equal(up.status().phase, 'idle')
+    const vbs = vbsFor(join(root, 'updates', 'install-v0.6.14.cmd'))
+    const bytes = vbsBytes(vbs)
+    assert.equal(bytes[0], 0xff)
+    assert.equal(bytes[1], 0xfe)
+    const back = bytes.subarray(2).toString('utf16le')
+    assert.equal(back, vbs, 'UTF-16LE 往返一个字符都不差')
+    assert.ok(back.includes('大肥鱼'), '中文路径原样在里面')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('安装脚本起不来时不再永远停在「正在安装」：12 秒没等到 last.log 就报失败（issue #97）', async () => {
+  const { base, moduleUrl } = await fakeProfile()
+  try {
+    const root = join(base, 'data')
+    const up = createSelfUpdater({
+      root,
+      current: '0.6.13',
+      moduleUrl,
+      exe: 'C:\\App\\DeepSeek Harness.exe',
+      platform: 'win32',
+      installCheckMs: 30,
+      downloadImpl: async () => ({ ok: true, bytes: 1, source: '源' }),
+      spawnImpl: () => ({ unref() {} }),
+    })
+    await up.start('0.6.14')
+    for (let i = 0; i < 50 && up.status().phase === 'downloading'; i += 1) await new Promise((r) => setTimeout(r, 10))
+    const r = await up.install('0.6.14')
+    assert.equal(r.ok, true, r.error)
+    assert.equal(up.status().phase, 'installing')
+    await new Promise((r2) => setTimeout(r2, 120))
+    assert.equal(up.status().phase, 'failed', '启动器没跑起来就该报失败，别让人干等')
+    assert.match(up.status().error, /没跑起来/)
+    assert.match(up.status().error, /install-v0\.6\.14\.cmd/, '要告诉他手动装哪一个')
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test('安装脚本真的跑起来了（last.log 出现）就保持「正在安装」（issue #97）', async () => {
+  const { base, moduleUrl } = await fakeProfile()
+  try {
+    const root = join(base, 'data')
+    const up = createSelfUpdater({
+      root,
+      current: '0.6.13',
+      moduleUrl,
+      exe: 'C:\\App\\DeepSeek Harness.exe',
+      platform: 'win32',
+      installCheckMs: 30,
+      downloadImpl: async () => ({ ok: true, bytes: 1, source: '源' }),
+      spawnImpl: () => ({ unref() {} }),
+    })
+    await up.start('0.6.14')
+    for (let i = 0; i < 50 && up.status().phase === 'downloading'; i += 1) await new Promise((r) => setTimeout(r, 10))
+    await up.install('0.6.14')
+    await mkdir(join(root, 'updates'), { recursive: true })
+    await writeFile(join(root, 'updates', 'last.log'), '开始装 v0.6.14\n', 'utf8')
+    await new Promise((r2) => setTimeout(r2, 120))
+    assert.equal(up.status().phase, 'installing')
   } finally {
     await rm(base, { recursive: true, force: true })
   }
