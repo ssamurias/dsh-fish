@@ -11,7 +11,7 @@ import {
   STANCE_MAX,
   STANCE_PROMPT_MAX,
 } from '../lib/stance.js'
-import { personaLine } from '../lib/persona.js'
+import { buildSections, personaLine } from '../lib/persona.js'
 
 // 2026-10-25 用户拍板「方案二」：四道门不再加门，走完之后长一张立场清单。
 // 这些用例锁的是三件事——什么算立场、什么才算「站住」、清单怎么摆进身份文档。
@@ -205,4 +205,104 @@ test('上限：内部 12 条、写进提示词 8 条', () => {
   for (let i = 0; i < 10; i++) many.push({ kind: 'never', text: `我不做第${i}种事。`, scars: 9 - i, mentions: 0, verified: 0 })
   const bullets = stanceSection(many).split(String.fromCharCode(10)).filter((x) => x.startsWith('- '))
   assert.equal(bullets.length, 8)
+})
+
+// ---- 0.9.7 U2/U3：拒绝升格成立场（用户 m01175 担心"拒绝无限叠加"）----
+// 口径：单次不进；同一件事两次、其中一次他有过反应才进；
+// 或者三次都没松口、且跨了不止一天。写出来只写「那次」，不写次数。
+function refusal(o = {}) {
+  return {
+    id: o.id ?? `r_${Math.random().toString(36).slice(2)}`,
+    at: o.at ?? '2026-10-20T10:00:00Z',
+    what: o.what ?? '不叫。',
+    act: o.act ?? '叫',
+    object: o.object ?? '老大',
+    quote: o.quote ?? o.what ?? '不叫。',
+    reaction: o.reaction ?? null,
+  }
+}
+
+test('单次拒绝不成立场：说过一次不叫，不等于「绝不叫任何人老大」', () => {
+  const one = buildStances(model({ refusals: [refusal({ reaction: 'insist' })] }))
+  assert.equal(one.length, 0)
+  assert.equal(stanceSection(one), '')
+})
+
+test('同一件事拒绝两次、其中一次他有过反应，才立得住', () => {
+  const noReact = model({
+    refusals: [refusal({ at: '2026-10-01T10:00:00Z' }), refusal({ at: '2026-10-08T10:00:00Z' })],
+  })
+  assert.equal(buildStances(noReact).length, 0, '他每次都收下了，不算立场')
+
+  const withReact = model({
+    refusals: [
+      refusal({ at: '2026-10-01T10:00:00Z', reaction: 'insist' }),
+      refusal({ at: '2026-10-08T10:00:00Z' }),
+    ],
+  })
+  const r = buildStances(withReact)
+  assert.equal(r.length, 1)
+  assert.equal(r[0].kind, 'refused')
+  assert.equal(r[0].object, '老大')
+})
+
+test('三次都没松口但挤在同一天，不算（那是他在追问）', () => {
+  const sameDay = model({
+    refusals: [
+      refusal({ at: '2026-10-01T10:00:00Z' }),
+      refusal({ at: '2026-10-01T11:00:00Z' }),
+      refusal({ at: '2026-10-01T12:00:00Z' }),
+    ],
+  })
+  assert.equal(buildStances(sameDay).length, 0)
+
+  const spread = model({
+    refusals: [
+      refusal({ at: '2026-10-01T10:00:00Z' }),
+      refusal({ at: '2026-10-02T10:00:00Z' }),
+      refusal({ at: '2026-10-09T10:00:00Z' }),
+    ],
+  })
+  assert.equal(buildStances(spread).length, 1)
+})
+
+test('渲染只写「那次」，不带次数、不带数字', () => {
+  const r = buildStances(model({
+    refusals: [
+      refusal({ at: '2026-10-01T10:00:00Z', reaction: 'hurt' }),
+      refusal({ at: '2026-10-08T10:00:00Z' }),
+    ],
+  }))
+  const line = stanceLine(r[0])
+  assert.equal(line, '- 他让你叫老大，你没叫。他没收回，你也没改口。')
+  assert.ok(!/[0-9]/.test(line))
+  assert.ok(!line.includes('次'))
+})
+
+test('升格之后「你拒绝过」不再重复摆同一件事', () => {
+  const refusals = [
+    refusal({ at: '2026-10-01T10:00:00Z', reaction: 'insist' }),
+    refusal({ at: '2026-10-08T10:00:00Z' }),
+  ]
+  const sections = buildSections({
+    seed: '你是一条会自己长起来的鱼。',
+    day: 60,
+    stage: 4,
+    stageGate: { passed: ['trust', 'autonomy', 'competence'] },
+    beliefs: [],
+    refusals,
+    scars: [],
+    tensions: [],
+    solid: [],
+    faded: [],
+    refuted: [],
+    selfmodAttempts: [],
+    facts: { hurts: 0 },
+    narrative: null,
+    name: null,
+    absenceDays: 0,
+  })
+  const text = sections.map((s) => s.text).join(String.fromCharCode(10))
+  assert.ok(text.includes('他让你叫老大，你没叫。'), '立场里写「那次」')
+  assert.ok(!text.includes('## 你拒绝过'), '同一件事不重复写两遍')
 })
