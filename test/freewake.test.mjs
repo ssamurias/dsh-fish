@@ -120,7 +120,8 @@ test('「兴趣」关掉之后不再摆旧句子：否则每 6 小时还会因�
   const src = readFileSync(join(here, '..', 'lib', 'scheduler.js'), 'utf8')
   // 判据必须挂在 interest.enabled 上：旧句子属于「桌上那几样东西」里的一样。
   assert.match(src, /const staleOn = config\?\.interest\?\.enabled !== false/)
-  assert.match(src, /if \(staleOn && !dreamOn\(evs, model\.day\)\.length\)/)
+  // 另外还要让开「每 N 天的想一想」那一天（issue #101）：摆料不许把提示吃掉。
+  assert.match(src, /if \(staleOn && !sleepDue && !dreamOn\(evs, model\.day\)\.length\)/)
 
   // 纯函数这一层也钉住：tableText 为空就不再判成 table。
   assert.equal(freeWakeFor({ tableText: '', events: [old(QUIET_DAYS + 1)], dk: '2026-11-05', now: NOW }).kind, 'think')
