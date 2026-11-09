@@ -1,5 +1,11 @@
 ## 0.9.7 — 未发布
 
+- **宿主把 `ctx.tools` 包成只读 proxy 时，插件整个起不来（外部真机 0.9.6，2026-11-10）。** 启动日志停在 `TypeError: 'set' on proxy: trap returned falsish for property 'register'`（`lib/use.js` 的 `withUseDuringRegistration`），`boot()` 随之中断：工具注册循环、观测台路由、调度器都没跑到，`/dsh-fish/state`、`/dsh-fish/faq` 全 404，`/` 仍 401——服务是活的，只是这条插件没挂上。
+  - 根因是「注册期临时把 `ctx.tools.register` 换成包装版」直接给宿主服务赋值；宿主把它包成只读 proxy 时这个赋值就抛，而它不在任何 try 里，所以不是偶发抖动，是那类宿主上**必现**。
+  - 现在换不上就不硬闯：赋值失败时改走 `lib/tool.js` 的 `setToolUseWrap`，在 `defineTool` 这一层包 execute（同样只记 `use:` 账），ctx 一个字节不动；注册那段同步代码一结束立刻摘掉，`defineTool` 平时仍是恒等。
+  - 回填也加了 try：只读 proxy 下再抛一次不该成为新的启动故障点。
+  - `test/use.test.mjs` 一条：只读 proxy 下不抛、工具照注册、执行后 `use:` 账照记、出来之后 `defineTool` 回到恒等。全量 **2102 pass / 0 fail**（约 32 秒）。
+
 - **换满 40 轮之后，隔一阵回旧窗口说一句，屋子又被搬回去了（用户反馈，2026-11-10）。** 轮换本身每次都调宿主新建会话，不会去挑旧的；问题出在「认回」没有时限：`home.json` 的 `rotatedFrom` 会一直留到下一次轮换，`lib/turns.js` 的 `onHuman` 只要见到「说话的那条正是换下来那条」就 `adoptTalkSession`，而认回不动 `turns`——那条已经满 40 轮的会话从 0 重新计数，又拿到一整段预算，读起来就是「旧会话没被用满」。
   - 认回加窗口（`ADOPT_WINDOW_MS = 10 分钟`）：只有「新会话一轮都没跑过」（叫醒没落地，他只能还在旧窗口里说话）或「换房不到 10 分钟」（人正卡在那一刻）才搬回去。
   - 其余情况不搬屋子，只落一行「他回到换下来那条会话里说话，但屋子已经搬走了」，`seen:` 照记，轮数不动。

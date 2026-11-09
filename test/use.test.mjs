@@ -30,6 +30,7 @@ import {
 } from '../lib/use.js'
 import { searchEvents, renderRecall, USE_PREFIX } from '../lib/recall.js'
 import { readEvents } from '../lib/store.js'
+import { defineTool } from '../lib/tool.js'
 
 async function withRoot(fn) {
   const root = await mkdtemp(join(tmpdir(), 'fish-use-'))
@@ -187,6 +188,59 @@ test('withUseDuringRegistration：没有 register 时照常跑，不炸', () => 
   })
   assert.equal(r, 'ok')
   assert.equal(ran, 1)
+})
+
+// 2026-11-10（外部真机 0.9.6）：宿主把 `ctx.tools` 包成只读 proxy，
+// 给 `register` 赋值抛 "TypeError: 'set' on proxy: trap returned falsish"，
+// 而它发生在注册循环之前 → boot 中断、/dsh-fish/* 全 404。
+// 换不上就先别换：改在 defineTool 这一层包 execute，注册与记账都照旧。
+test('宿主把 ctx.tools 包成只读 proxy：不抛，注册照走、记账照记', async () => {
+  await withRoot(async (root) => {
+    const defs = []
+    const register = (d) => {
+      defs.push(d)
+      return () => {}
+    }
+    const tools = new Proxy(
+      {},
+      {
+        get: (t, k) => (k === 'register' ? register : t[k]),
+        set: () => false,
+        defineProperty: () => false,
+      },
+    )
+    // 先确认这确实是「写不进去」的那种对象
+    assert.throws(() => {
+      tools.register = register
+    }, TypeError)
+
+    const ctx = { tools }
+    let ran = 0
+    withUseDuringRegistration(ctx, root, () => {
+      ran += 1
+      ctx.tools.register(
+        defineTool({
+          name: 'her_probe',
+          description: '随便一个工具',
+          parameters: { type: 'object', properties: {} },
+          execute: async () => ({ ok: true }),
+        }),
+      )
+    })
+
+    assert.equal(ran, 1, '注册那段照常跑完')
+    assert.equal(defs.length, 1)
+    assert.equal(defs[0].name, 'her_probe')
+
+    await defs[0].execute({}, {})
+    const { events } = await readEvents(root)
+    assert.equal(events.length, 1, '只读宿主也照样记 use: 账')
+    assert.ok(events[0].text.startsWith('use:her_probe'))
+
+    // 出来之后 defineTool 回到恒等，不把注册期的钩子漏到外面
+    const spec = { name: 'later' }
+    assert.equal(defineTool(spec), spec)
+  })
 })
 
 test('回忆：use: 行翻得到，读出来是一句人话', () => {
