@@ -1,5 +1,11 @@
 ## 0.9.7 — 未发布
 
+- **一条工具结果里的半个 emoji，能把整段对话打成 400（外部真机 0.9.6，2026-11-10）。** 那台机器上 `bili_look` 的评论按 200 个 UTF-16 单元硬截，把一个 emoji 从中间切开，留下半个高位代理项（`\ud83d`）；这条工具结果进了上下文以后，之后每个请求都带着这个非法字符发给服务端，连续 13 次 400，那条会话再也发不出消息。
+  - 新增 `lib/clip.js`：`clipText()` 按 UTF-16 单元截断但不切开代理对（切点落在高位上就退一格），`cleanText()` 把已经混进来的孤立代理项换成 U+FFFD、成对的字符原样保留。
+  - 评论、素材渲染、以及从 B 站拿来的自由文本（标题/UP/简介/标签/弹幕）都走这两件；`lib/desk.js`、`lib/hook.js`、`lib/persona.js`、`lib/selfdoc.js`、`lib/ask.js`、`lib/askinchat.js`、`lib/appoint.js` 里原来裸 `slice()` 的截断一并换掉。`lib/anchor.js`、`lib/recall.js` 早就有同样的保护，没动。
+  - `lib/store.js` 写入前与读回时各洗一遍：旧文件里已经有的半个字符不会在下次打开时“复活”进上下文。事件流仍然只追加，不改写。
+  - `test/clip.test.mjs` 五条：任意切点都不留孤立代理项且是合法 UTF-8、成对字符原样、`cleanText()` 只换孤立的、`renderItem()` 输出干净、事件流写读都干净。全量 **2107 pass / 0 fail**（约 29 秒）。
+
 - **宿主把 `ctx.tools` 包成只读 proxy 时，插件整个起不来（外部真机 0.9.6，2026-11-10）。** 启动日志停在 `TypeError: 'set' on proxy: trap returned falsish for property 'register'`（`lib/use.js` 的 `withUseDuringRegistration`），`boot()` 随之中断：工具注册循环、观测台路由、调度器都没跑到，`/dsh-fish/state`、`/dsh-fish/faq` 全 404，`/` 仍 401——服务是活的，只是这条插件没挂上。
   - 根因是「注册期临时把 `ctx.tools.register` 换成包装版」直接给宿主服务赋值；宿主把它包成只读 proxy 时这个赋值就抛，而它不在任何 try 里，所以不是偶发抖动，是那类宿主上**必现**。
   - 现在换不上就不硬闯：赋值失败时改走 `lib/tool.js` 的 `setToolUseWrap`，在 `defineTool` 这一层包 execute（同样只记 `use:` 账），ctx 一个字节不动；注册那段同步代码一结束立刻摘掉，`defineTool` 平时仍是恒等。
