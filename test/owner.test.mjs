@@ -18,6 +18,7 @@ import { Readable } from 'node:stream'
 
 import { looksLikeLeak, screenOutgoing } from '../lib/guard.js'
 import { parseCookieInput, mentionPrefix, publicOwner, saveOwner, saveAccount } from '../lib/owner.js'
+import { normalizeCookie } from '../lib/bili.js'
 import { readOwner } from '../lib/store.js'
 import { registerObserve } from '../lib/observe.js'
 import { loginMid } from '../lib/comment.js'
@@ -78,9 +79,14 @@ test('parseCookieInput 认得三种粘贴形态，且只留 B 站要的键', () 
   assert.equal(b.cookie, 'SESSDATA=s2; bili_jct=j2')
 
   const c = parseCookieInput(
-    ['# Netscape HTTP Cookie File', '.bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\ts3', '.bilibili.com\tTRUE\t/\tTRUE\t0\tbili_jct\tj3'].join('\n'),
+    ['# Netscape HTTP Cookie File', '#HttpOnly_.bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\ts3', '.bilibili.com\tTRUE\t/\tTRUE\t0\tbili_jct\tj3'].join('\n'),
   )
   assert.equal(c.cookie, 'SESSDATA=s3; bili_jct=j3')
+
+  const direct = normalizeCookie(
+    ['# Netscape HTTP Cookie File', '#HttpOnly_.bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\ts4', '.bilibili.com\tTRUE\t/\tTRUE\t0\tbili_jct\tj4'].join('\n'),
+  )
+  assert.equal(direct, 'SESSDATA=s4; bili_jct=j4', '直接给 B 站客户端的 cookies.txt 也不能丢 HttpOnly 行')
 })
 
 test('缺了 bili_jct 要说出来——少了它就看不了也发不了', () => {
