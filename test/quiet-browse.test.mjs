@@ -154,7 +154,8 @@ test('browseDigestLine：空的不带；最多三条，其余只说「等」；�
   assert.match(line, /《三号》/)
   assert.match(line, /等/)
   assert.doesNotMatch(line, /《四号》/)
-  assert.match(line, /自己点开/)
+  assert.match(line, /bili_watch/)
+  assert.doesNotMatch(line, /自己点开/, '她手上没有界面，别用「点开」指代她的动作')
 })
 
 // 2026-11-07（用户 m00758）：今天还没醒过才说「今天」；醒过一次就只说这段。

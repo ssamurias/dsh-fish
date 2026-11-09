@@ -342,3 +342,39 @@ test('判断计数按原话去重：同一句话说三遍只算一条（issue #8
   assert.equal(m.solidTotal, 1, '三遍那句够格固化，但还是一句话')
   assert.equal(m.solid.length, 1, '摆出来的列表里也只有一条')
 })
+
+// issue #98（2026-11-09，0.9.6 真机）：状态栏显示成「的称呼」「上切下来的一块」。
+// 她在解释「怎么称呼你」这件事时，句子里本来就有「称呼你 / 他名字」，
+// {1,8} 把后半句当成称呼；而状态栏取**最近一次**，于是她越解释，称呼越离谱。
+test('她解释称呼这件事时，半句话不会被当成称呼（issue #98）', () => {
+  assert.equal(pickName('我称呼你的称呼是从他名字上切下来的'), null)
+  assert.equal(pickName('这不是称呼，是我从他名字上切下来的一块'), null)
+  // 裸的「他名字」是讨论，不是给名字；「他给的」才算
+  assert.equal(pickName('从他名字上切下来的一块'), null)
+  assert.equal(pickName('他给的名字是阿岸'), '阿岸')
+  // 真称呼在前、解释在后：解释不能盖掉它
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '以后叫他折帆。'),
+    ev('ev_b', 'utterance', 3, '我称呼你的称呼是从他名字上切下来的'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '折帆')
+})
+
+// issue #100（2026-11-09，0.9.6 真机）：「他的名字叫出去」——动词补语被当成名字。
+// 裸「他名字」已在 issue #98 挡掉；这里补 NAME_SAY_RE 那一侧：
+// 「叫他走开」「叫他闭嘴」是祈使句，不是起名。
+test('祈使句里的动词补语不会被当成称呼（issue #100）', () => {
+  assert.equal(pickName('我把他叫错了，自己的名字，我换成他的名字叫出去。'), null)
+  assert.equal(pickName('他的名字叫出去。'), null)
+  for (const s of ['叫他出去', '叫他走开', '叫他闭嘴', '叫他坐下']) assert.equal(pickName(s), null)
+  assert.equal(pickName('我叫他老张。'), '老张')
+  // 真称呼在前、误抽在后：后一条不能盖掉它
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我叫他老张。'),
+    ev('ev_b', 'utterance', 3, '我把他叫错了，自己的名字，我换成他的名字叫出去。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '老张')
+})
+
