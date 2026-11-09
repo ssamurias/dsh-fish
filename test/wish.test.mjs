@@ -14,7 +14,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { wishesOf, wishLine, wishTail, WISH_SHOW_MAX, WISH_TEXT_MAX } from '../lib/wish.js'
+import { wishesOf, wishLine, wishTail, toolArrived, WISH_SHOW_MAX, WISH_TEXT_MAX } from '../lib/wish.js'
 import { deskFor } from '../lib/desk.js'
 import { driveOf, deskHasMaterial, DRIVE } from '../lib/drive.js'
 import { blockedTalk } from '../lib/restrict.js'
@@ -114,6 +114,49 @@ test('subject 里带着工具名也算到手——「her_note 的读取：…」
   assert.equal(wishesOf(events, { now: NOW + 10 * DAY, has: (n) => n === 'her_note' }).length, 1)
   // 他答了、东西也到了，桌子与劲儿都该空
   assert.equal(deskHasMaterial({ wish: wishesOf(events, { now: NOW + 10 * DAY, has }).length }), false)
+})
+
+// 收窄关着时 has 是她这一局看得见的全部工具，里面有宿主的 read / edit / bash 这类 4 个字的短名。
+// 她要一样还没有的东西时，常拿手上已经有的作比较；点到的是比较对象，不是她要的那件。
+test('subject 中间拿手上的工具作比较，不算到手——只认开头的工具名（issue #83 的后续）', () => {
+  const has = new Set(['read', 'edit', 'write', 'grep', 'glob', 'bash', 'im_send', 'her_note', 'bili_look', 'ask_owner'])
+  const subjects = [
+    '能看 PDF 里图片的工具（read 只给我文字）',
+    '像 bash 那样能跑 python 的东西',
+    '能 edit 图片的工具',
+    '能看整条视频的（bili_look 只给几张截图）',
+  ]
+  for (const subject of subjects) {
+    const events = [ask({ id: 'a1', text: `想要：${subject}`, subject })]
+    assert.equal(wishesOf(events, { now: NOW, has }).length, 1, `「${subject}」要的东西还没有，卡得摆着`)
+    assert.equal(toolArrived(events[0], has), false, `「${subject}」：悬着的事（looseEnds）也不能撤`)
+  }
+  // 劲儿那一处同样只看这张卡在不在：撤掉了就不会因为它推她醒。
+  const one = [ask({ id: 'a1', text: '想要能看图的', subject: '能看 PDF 里图片的工具（read 只给我文字）' })]
+  assert.equal(deskHasMaterial({ wish: wishesOf(one, { now: NOW, has }).length }), true)
+})
+
+test('开头写着工具名照旧算到手：空白、引号、括号先跳过；4 个字以下的名字在开头也不认', () => {
+  const has = ['her_note', 'bili_look', 'bili_look_at', 'read']
+  const arrived = [
+    'her_note：列出还没划掉的那些',
+    'her_note的读取',
+    '  `her_note` 的读取',
+    '「her_note」能列出来',
+    '（bili_look_at）看某一秒',
+    'read',
+    'read 的翻页',
+  ]
+  for (const subject of arrived) {
+    const e = ask({ id: 'a1', text: '想要', subject })
+    assert.equal(toolArrived(e, has), true, `「${subject}」开头就是她手上的工具`)
+    assert.equal(wishesOf([e], { now: NOW, has }).length, 0, `「${subject}」到手了就不摆`)
+  }
+  // 开头的名字后面紧贴着字母/数字/下划线：是另一个名字，不算
+  assert.equal(toolArrived(ask({ id: 'a1', text: '想要', subject: 'her_notes 的整理' }), has), false)
+  assert.equal(toolArrived(ask({ id: 'a1', text: '想要', subject: 'reader 那种' }), has), false)
+  // 短名哪怕在开头也不参与这种比对
+  assert.equal(toolArrived(ask({ id: 'a1', text: '想要', subject: 'her 那种东西' }), ['her']), false)
 })
 
 test('超时那种也一样：后来在别处给了，就别再摆「你问过，还没有答复」（issue #58）', () => {
