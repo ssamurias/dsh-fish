@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { watchedToday, registerWatch } from '../lib/watch.js'
+import { watchedToday, registerWatch, pasteLine } from '../lib/watch.js'
 import { logFile } from '../lib/log.js'
 import { appendEvent } from '../lib/store.js'
 import { updateConfig } from '../lib/settings.js'
@@ -188,4 +188,12 @@ test('bili_watch：不在这个家里的会话调不动它', async () => {
     assert.equal(out.ok, false)
     assert.match(out.note, /另一个家|没有落盘/)
   })
+})
+
+test('贴图那一行是成品 markdown，不会带上会被当成绝对路径的前导斜杠（issue #99）', () => {
+  // 0.9.6 的提示只给裸路径、让她自己拼 markdown，她有一次拼成了 `](/G:/…)`：
+  // 客户端把 `/G:/…` 当绝对路径，拼成 `G:\G:\…`，图就 404。
+  assert.equal(pasteLine('G:/大肥鱼/画面.png'), '![画面](G:/大肥鱼/画面.png)')
+  assert.equal(pasteLine('/G:/大肥鱼/画面.png'), '![画面](G:/大肥鱼/画面.png)', '真传了前导斜杠也去掉')
+  assert.equal(pasteLine(''), '')
 })

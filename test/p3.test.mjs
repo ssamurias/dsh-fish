@@ -349,3 +349,9 @@ test('对话不改写日记、不生成报告文件（说话就是说话）', as
     assert.equal(events.some((e) => String(e.text).startsWith('wake:')), false, '对话不是唤醒，不记 wake 配额')
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
+
+test('发图时提示的那一行是成品 markdown，并且写着别加斜杠（issue #99）', async () => {
+  const src = await readFile(new URL('../lib/say.js', import.meta.url), 'utf8')
+  assert.match(src, /前面别加斜杠/, '提示里要写明别在前面加斜杠')
+  assert.match(src, /!\[图\]\(\$\{imagePath\}\)/, '提示直接给成品，别让她自己拼')
+})

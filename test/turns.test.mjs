@@ -25,6 +25,7 @@ import {
   registerTurns,
   declareSource,
   clearDeclaredSources,
+  TURN_TEXT_MAX,
 } from '../lib/turns.js'
 import { homeStatus } from '../lib/home.js'
 import { appendEvent, readEvents, writeAtomic, paths } from '../lib/store.js'
@@ -1280,6 +1281,74 @@ test('群聊里他本人说的一句（owner:true）：进记忆，但不算他�
       const after = (await readEvents(root)).events.filter((e) => e.type === 'heard')
       assert.equal(after.length, 1, '群友的话不进记忆——这是产品边界，不是遗漏')
       assert.ok(!after.some((e) => String(e.text).includes('插了句嘴')))
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('一条带小标题和列表的回答只落一条事件，不按空行拆（issue #98）', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      const said = [
+        '**运行状态**',
+        '- 启动行：`===== 启动 0.9.3`',
+        '- 两组新东西还没开始动',
+        '---',
+        '**接下来做什么**',
+        '先把这一轮结完，再看别的。',
+      ].join('\n\n')
+      ctx.emit('session/event', session(), humanMsg('你现在什么状态'))
+      await settled()
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: said }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+
+      const { events } = await readEvents(root)
+      const rows = events.filter((e) => e.type === 'utterance')
+      assert.equal(rows.length, 1, '一条回答就是一条事件，不按段落拆')
+      assert.equal(rows[0].text, said, '整段原样留着，小标题和列表都在这条里')
+      assert.deepEqual(rows[0].flags, ['uncommitted'])
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('真的超过一条事件的上限时才切开，每段都不超（issue #98）', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      const para = (n) => `${n}、`.repeat(300) // 每段 600 字
+      const first = [para(1), para(2)].join('\n\n')
+      const second = [para(3), para(4)].join('\n\n')
+      const said = [first, second].join('\n\n')
+      assert.ok(said.length > TURN_TEXT_MAX)
+      ctx.emit('session/event', session(), humanMsg('说长一点'))
+      await settled()
+      // 两条消息各自不超过上限，合起来超过：这才是「一条事件装不下」的真实场景
+      // （单条消息在收集时已经被 cut() 截到 TURN_TEXT_MAX）。
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: first }]))
+      ctx.emit('session/event', session(), herMsg([{ type: 'text', text: second }]))
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+
+      const { events } = await readEvents(root)
+      const rows = events.filter((e) => e.type === 'utterance')
+      assert.ok(rows.length > 1, '一条事件装不下，才切成几条')
+      for (const r of rows) assert.ok(String(r.text).length <= TURN_TEXT_MAX, '每条都不超过上限')
+      assert.equal(rows.map((r) => r.text).join('\n\n'), said, '切开之后拼回去还是原来那段')
     } finally {
       off()
     }
