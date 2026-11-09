@@ -395,3 +395,21 @@ test('祈使句里的动词补语不会被当成称呼（issue #100）', () => {
   assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '老张')
 })
 
+// 用户真机（2026-11-09，0.9.x）：11-08 她说「我叫他的名字，他应了。」
+// ——「叫他」后面紧跟「的名字」，老版本截出「的名字」，把 11-01 定下的「岸」盖掉。
+// issue #98 的 looksLikeName 已能挡（以「的」开头），这里用真机原句锁住，
+// 顺带锁全角冒号那种「什么了：岸」（也含功能词「了」）。
+test('「叫他」后面接「的名字」时不会截出半句（用户真机）', () => {
+  assert.equal(pickName('我叫他的名字，他应了。'), null)
+  assert.equal(pickName('我想让你叫什么了：岸'), null)
+  assert.equal(pickName('我叫他什么了：岸'), null)
+  assert.equal(pickName('以后叫你岸。'), '岸')
+  // 真称呼在前、误抽在后：后一条不能盖掉它
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '以后叫你岸。'),
+    ev('ev_b', 'utterance', 3, '我叫他的名字，他应了。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '岸')
+})
+
