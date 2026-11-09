@@ -1136,6 +1136,133 @@ test('认回只认换下来那条，别的会话照样不记', async () => {
   }
 })
 
+// 2026-11-10（用户反馈：满 40 轮换会话，有时候又落回旧的老会话，像「旧会话没被用满」）。
+// `rotatedFrom` 会一直留到下一次轮换；不设窗口的话，他几天后翻回侧栏那条「…之前」
+// 说一句，屋子就搬回去，而 `turns` 还是新会话的 0——那条满 40 轮的会话又拿一整段预算。
+test('换房过去一阵、新会话也聊过了，他回旧窗口说话不再搬屋子', async () => {
+  const root = await tmpRoot({ rotatedFrom: HER_SESSION })
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    await writeAtomic(
+      join(paths(root).root, 'home.json'),
+      JSON.stringify(
+        {
+          wsId: 'ws-1',
+          sessionId: 's-new-1',
+          createdAt: '2026-10-31T00:50:27.000Z',
+          turns: 3,
+          rotatedFrom: HER_SESSION,
+          rotatedAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+        },
+        null,
+        2,
+      ),
+    )
+    const { ctx } = fakeCtx()
+    const logs = []
+    const off = registerTurns(ctx, { root, log: (m) => logs.push(String(m)) })
+    try {
+      ctx.emit('session/event', session(HER_SESSION), humanMsg('过了几个钟头，我又翻回这条说一句'))
+      ctx.emit('session/event', session(HER_SESSION), TURN_END)
+      await settled()
+
+      const h = await homeStatus(root)
+      assert.equal(h.sessionId, 's-new-1', '屋子不该被搬回旧会话')
+      assert.equal(h.turns, 3, '不属于这间屋子的话不结算，轮数不该动')
+      const raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+      assert.equal(raw.rotatedFrom, HER_SESSION, 'rotatedFrom 留着，等下一次轮换自然替换')
+      assert.ok(
+        logs.some((l) => /屋子已经搬走了/.test(l)),
+        `要有能查的日志：${logs.join(' | ').slice(0, 200)}`,
+      )
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 叫醒没落地时，新会话一轮都没跑过（turns 还是 0）。那种情况他只能还在旧窗口里说话，
+// 隔多久都得认回——不然这一整段话全丢。
+test('新会话一轮都没跑过时，隔了几个钟头回旧窗口说话仍然认回', async () => {
+  const root = await tmpRoot({ rotatedFrom: HER_SESSION })
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    await writeAtomic(
+      join(paths(root).root, 'home.json'),
+      JSON.stringify(
+        {
+          wsId: 'ws-1',
+          sessionId: 's-new-1',
+          createdAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+          turns: 0,
+          rotatedFrom: HER_SESSION,
+          rotatedAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+        },
+        null,
+        2,
+      ),
+    )
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(HER_SESSION), humanMsg('新窗口一直没醒，我还在旧窗口'))
+      ctx.emit('session/event', session(HER_SESSION), TURN_END)
+
+      const h = await waitFor(async () => {
+        const st = await homeStatus(root)
+        return st.turns > 0 ? st : null
+      })
+      assert.equal(h.sessionId, HER_SESSION, '叫醒没落地，屋子该认回他实际在说话的那条')
+      assert.equal(h.turns, 1)
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 换房那一刻人正卡在旧窗口里接着打：10 分钟内即使新会话已经跑过一轮，也认回。
+test('换房 10 分钟以内，新会话用过轮也照样认回', async () => {
+  const root = await tmpRoot({ rotatedFrom: HER_SESSION })
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    await writeAtomic(
+      join(paths(root).root, 'home.json'),
+      JSON.stringify(
+        {
+          wsId: 'ws-1',
+          sessionId: 's-new-1',
+          createdAt: new Date(Date.now() - 60_000).toISOString(),
+          turns: 5,
+          rotatedFrom: HER_SESSION,
+          rotatedAt: new Date(Date.now() - 60_000).toISOString(),
+        },
+        null,
+        2,
+      ),
+    )
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(HER_SESSION), humanMsg('刚换完，我手还在旧窗口上'))
+      ctx.emit('session/event', session(HER_SESSION), TURN_END)
+
+      const h = await waitFor(async () => {
+        const st = await homeStatus(root)
+        return st.sessionId === HER_SESSION && st.turns > 5 ? st : null
+      })
+      assert.equal(h.turns, 6, '轮数接着数（5 之后再 +1），不白送一段、也不清零重来')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
 test('注销之后就不再记了', async () => {
   const root = await tmpRoot()
   try {
