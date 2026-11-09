@@ -190,6 +190,23 @@ test('卡太久后时间兜底推进，并标记 forced', () => {
   assert.ok(m.stageGate.forced.length > 0)
 })
 
+// 2026-11-09（用户 m00925）：把成长周期从 7 天改成 30 天，阶段会按新周期重算、
+// 退回到天数对应的那一档；但「到过第几阶段」是事件里真发生过的，不能跟着退。
+test('改长成长周期，阶段会退回，stagePeak 不回退', () => {
+  const now = T0 + 13 * DAY_MS // 第 14 天
+  const seed = ev('ev_seed', 'seed', 1, '种', { source: 'system' })
+  const thought = ev('ev_a', 'utterance', 2, '我觉得安静更好。')
+  // 7 天周期：第 8 天起期满放行，阶段 4
+  const short = deriveSelf([seed, thought], { now, growthDays: 7 })
+  assert.equal(short.stage, 4, '前提：7 天周期下第 14 天已经期满放行到阶段 4')
+  assert.equal(short.stagePeak, 4, '没改过周期时，peak 就等于当前阶段')
+  // 那几天写下的卡，事件里记的 stage 是 4（和真机上一样）
+  const staged = [{ ...seed, stage: 1 }, { ...thought, stage: 4 }]
+  const long = deriveSelf(staged, { now, growthDays: 30 })
+  assert.equal(long.stage, 2, '改成 30 天后阶段按新周期重算，退回 2')
+  assert.equal(long.stagePeak, 4, '「曾到过第 4 阶段」要留着，界面靠它说明不是退步')
+})
+
 test('stability：抽掉 3 条判断后，她的自我描述变化有限（承重度）', () => {
   const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' })]
   for (let d = 1; d <= 12; d++) evs.push(ev(`ev_b${d}`, 'utterance', d, `第 ${d} 天我注意到一件事，编号 ${d}。`))
