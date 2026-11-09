@@ -17,7 +17,15 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { classifyMessage, messageText, assistantText, stripChannelNote, registerTurns } from '../lib/turns.js'
+import {
+  classifyMessage,
+  messageText,
+  assistantText,
+  stripChannelNote,
+  registerTurns,
+  declareSource,
+  clearDeclaredSources,
+} from '../lib/turns.js'
 import { homeStatus } from '../lib/home.js'
 import { appendEvent, readEvents, writeAtomic, paths } from '../lib/store.js'
 import { recentExchanges } from '../lib/talkmem.js'
@@ -208,6 +216,35 @@ test('来源判据：真人 / 插件 / 上下文 / 外渠道 分得清', () => {
   assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'group', owner: 1 } }), 'group')
   // owner 只对 group 有意义：私聊本来就是人
   assert.equal(classifyMessage({ source: { kind: 'qq', scene: 'private', owner: true } }), 'human')
+})
+
+test('来源判据：桥先登记过的那一轮，按登记走（issue #96）', () => {
+  // 2026-11-09（issue #96）：0.9.5 让「kind:user + rpcId」一律算人，可桥走
+  // sessionController.prompt() 时 source 是宿主拼的，桥只能定 requestId。
+  // 结果群里几百句、桥自己的定时提醒，全被算成他本人：涨轮数、换会话、
+  // 记「他来过」、撤掉这一轮的叫醒。所以桥可以先把这一轮是什么登记进来。
+  clearDeclaredSources()
+  try {
+    declareSource({ rpcId: 'bridge-g1', scene: 'group' })
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'bridge-g1' } }), 'group')
+    declareSource({ rpcId: 'bridge-g2', scene: 'group', owner: true })
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'bridge-g2' } }), 'group-owner')
+    declareSource({ rpcId: 'bridge-p1', scene: 'private' })
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'bridge-p1' } }), 'human')
+    // 桥自己发起的轮次（定时提醒、转发）：不是人说的话
+    declareSource({ rpcId: 'bridge-t1', machine: true })
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'bridge-t1' } }), 'plugin')
+    // 没登记的桥保持 0.9.5 的判法：带 rpcId 就是有人代他递话
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'bridge-unknown' } }), 'human')
+    // 外客不必写在群聊里：私聊里的群友也不能算他
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'b-guest', guest: true } }), 'group')
+    assert.equal(
+      classifyMessage({ source: { kind: 'user', rpcId: 'b-pg', scene: 'private', guest: true } }),
+      'group',
+    )
+  } finally {
+    clearDeclaredSources()
+  }
 })
 
 test('来源判据：宿主拼的上下文和通知都不算人（2026-11-05）', () => {
@@ -701,6 +738,39 @@ test('插件自己 prompt 进去的消息不涨轮数（没有 clientTimeZone）
       assert.deepEqual(await recentExchanges(root), [])
     } finally {
       off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('桥登记成群聊之后，那几轮不涨轮数、不记「他来过」（issue #96）', async () => {
+  const root = await tmpRoot({ chat: { rotateAfter: 3 }, memory: { hearEvery: 1 } })
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      clearDeclaredSources()
+      // 桥这一轮要发什么，先说一声；然后照常走宿主的 prompt
+      ctx.emit('dsh-fish/source', { rpcId: 'bridge-g1', scene: 'group' })
+      ctx.emit('session/event', session(), {
+        type: 'user/message',
+        data: {
+          id: 'm-bridge-1',
+          role: 'user',
+          content: [{ type: 'text', text: '（群聊 · 示例群 · im:group:10001）\n他说这句话挺有意思的' }],
+          source: { kind: 'user', rpcId: 'bridge-g1' },
+        },
+      })
+      ctx.emit('session/event', session(), TURN_END)
+      await settled()
+      assert.equal((await homeStatus(root)).turns, 0, '群聊不算他来找过她')
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 0, '不写「他来过」，冷落检测才不会被群消息冲掉')
+    } finally {
+      off()
+      clearDeclaredSources()
     }
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
