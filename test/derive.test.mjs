@@ -118,6 +118,17 @@ test('称呼不会跨过破折号截成半句话（issue #81）', () => {
   assert.equal(deriveSelf(evs, { now: T0 + 2 * DAY_MS }).name, '老大')
 })
 
+// issue #97（2026-11-09，外部用户真机）：她说「我想好了怎么叫你——叫「某名字」」。
+// 破折号挡在「叫你」和名字中间，0.9.5 的壳吃不下，整句认不出来（name 变成 null）。
+test('破折号后面带引号的称呼能认出来（issue #97）', () => {
+  assert.equal(pickName('我想好了怎么叫你——叫「小岸」'), '小岸')
+  assert.equal(pickName('我想好了怎么叫你——「小岸」'), '小岸')
+  // 反过来的保护：破折号后面没带引号时，不能把半句话当名字。
+  assert.equal(pickName('我叫你——可这句不是我从你嘴里听见的'), null)
+  // issue #81 的截断保护不能因此回退
+  assert.equal(pickName('说你让我叫你老大——可这句不是我从你嘴里听见的'), '老大')
+})
+
 test('needs 只有三个键，且绝不出现好感度类字段', () => {
   const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' }), ev('ev_a', 'utterance', 2, '我不喜欢被催。')]
   const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })

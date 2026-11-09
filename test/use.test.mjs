@@ -229,4 +229,40 @@ test('回忆：别的 meta 照旧跳过——放开的是 use:，不是整个 me
   assert.equal(searchEvents(events, '评论', { now, days: 30 }).rows.length, 0)
 })
 
+test('withUse：别的家的会话调用不写账，返回值照旧（2026-11-09 外部用户报告）', async () => {
+  await withRoot(async (root) => {
+    const def = { name: 'her_note', execute: async () => ({ ok: false, note: '这条调用来自另一个家（default-workspace），不是这里。' }) }
+    const wrapped = withUse(def, { root, tool: 'her_note' })
+    const out = await wrapped.execute({}, { sessionId: 'other', session: { id: 'other', cwd: join(tmpdir(), 'fish-someone-else') } })
+    assert.equal(out.ok, false, '工具自己的返回不能改')
+    const { events } = await readEvents(root)
+    assert.equal(events.length, 0, '别人的误操作不该进她的成长账')
+  })
+})
+
+test('withUse：她家的会话照记，没有 cwd 的会话也照记', async () => {
+  await withRoot(async (root) => {
+    const def = { name: 'her_note', execute: async (args) => ({ ok: true, echo: args.echo }) }
+    const wrapped = withUse(def, { root, tool: 'her_note' })
+    // 两条账的文不一样，避免撞上「十分钟内说同一件事只记一次」的节流
+    await wrapped.execute({ echo: '记下了：买灯泡' }, { sessionId: 'own', session: { id: 'own', cwd: root } })
+    await wrapped.execute({ echo: '翻到日记了。' }, { sessionId: 'nobody' })
+    const { events } = await readEvents(root)
+    assert.equal(events.length, 2, '家里的和来路不明的照旧各记一条')
+  })
+})
+
+test('withUse：别的家的会话即使工具抛错也不写账，错误照旧往上抛', async () => {
+  await withRoot(async (root) => {
+    const def = { name: 'x', execute: async () => { throw new Error('炸了') } }
+    const wrapped = withUse(def, { root, tool: 'x' })
+    await assert.rejects(
+      () => wrapped.execute({}, { sessionId: 'other', session: { id: 'other', cwd: join(tmpdir(), 'fish-someone-else') } }),
+      /炸了/,
+    )
+    const { events } = await readEvents(root)
+    assert.equal(events.length, 0)
+  })
+})
+
 const DAY = 86_400_000

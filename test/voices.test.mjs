@@ -190,7 +190,10 @@ test('someone_said：只有读到还没认下的评论时才出，问的是「�
   const m = deriveSelf([ev('ev_seed', 'seed', 1, '种'), ev('ev_v', 'voice', 2, '这游戏根本不值得买')], { now: T0 + 2 * DAY_MS })
   assert.equal(tpl.cond(m), true)
   assert.match(tpl.prompt(m), /这游戏根本不值得买/)
-  assert.match(tpl.prompt(m), /别只复述他的/)
+  // 2026-11-09（0.9.6 S6）：从「你怎么看」改成「你认哪一半、不认哪一半」——
+  // 要的是分层（哪部分是他说的、哪部分是自己加的），不是一句笼统的表态。
+  assert.match(tpl.prompt(m), /认哪一半/)
+  assert.match(tpl.prompt(m), /不认哪一半/)
 
   const none = deriveSelf([ev('ev_seed', 'seed', 1, '种')], { now: T0 + 2 * DAY_MS })
   assert.equal(tpl.cond(none), false)

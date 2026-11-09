@@ -12,19 +12,29 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import {
   toolBrief,
   TOOL_BRIEF,
   RECALL_BRIEF,
   LETTER_BRIEF,
   NOTE_BRIEF,
+  APPOINT_BRIEF,
   ASK_BRIEF,
   DREAM_BRIEF,
+  PROACTIVE_BRIEF,
   SCHEDULE_BRIEF,
   SPEAK_BRIEF,
   DIARY_BRIEF,
   SLEEP_BRIEF,
 } from '../lib/persona.js'
+import { LOOK_BRIEF } from '../lib/browse.js'
+import { SCENE_TOOLS } from '../lib/toolreg.js'
+import { renderSelfDoc } from '../lib/selfdoc.js'
+import { deriveSelf } from '../lib/derive.js'
 
 test('第一层：手上有什么，名字要念出来', () => {
   // 用户 m00840：「大肥鱼初始应该知道自己能够干什么才对」。
@@ -43,8 +53,8 @@ test('第二层：从处境想起工具，不从名字往下数', () => {
   // 具体工具的说明书里，也要先给处境、再给动作。
   assert.match(RECALL_BRIEF, /我记得有一次/, '回忆：先给她那句会浮上来的话')
   assert.match(RECALL_BRIEF, /先去翻/, '再给动作')
-  assert.match(NOTE_BRIEF, /老在同一个地方绕/, '桌子：绕不出去的时候想起它')
-  assert.match(NOTE_BRIEF, /翻翻桌上/, '再给动作')
+  assert.match(NOTE_BRIEF, /老在同一个地方绕/, '便条：绕不出去的时候想起它')
+  assert.match(NOTE_BRIEF, /翻翻便条/, '再给动作')
   assert.match(ASK_BRIEF, /什么时候想起它/, '请求：明写处境入口')
   assert.match(LETTER_BRIEF, /想留就留/, '留话不能被写成任务')
 })
@@ -74,4 +84,92 @@ test('划掉和放下仍然只靠她看得见的那句话', () => {
   assert.match(NOTE_BRIEF, /原样/)
   assert.match(NOTE_BRIEF, /为什么放下/)
   assert.doesNotMatch(NOTE_BRIEF, /\bid\b/i)
+})
+
+// ---------------------------------------------------------------- 每个原生工具都要有一张地图
+//
+// 2026-11-09（用户 m00002）：他问「原生带的工具是不是每一件都有能力地图」。
+// 查下来 her_appoint 一个字都没有，growth_commit / bili_watch / bili_look / her_diary
+// 只有一句用途、没有「什么时候想起它」。所以下面这张表不是记录现状，是**新工具的必填项**：
+// 源码里多出一个 defineTool、这里没登记，本文件就红。
+//
+// 「我做过的事」不在这张表里：它不是手写段，由 lib/use.js 的 use: 账反推，
+// 没记过就整节不写。那条链路由 capability.test.mjs 守着，不要在这里复制一份。
+
+const LIB = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib')
+
+/** 源码里真正注册的工具名：以 lib/*.js 的 defineTool 为准，不信任何手抄清单。 */
+function definedTools() {
+  const names = new Set()
+  for (const file of readdirSync(LIB).filter((n) => n.endsWith('.js'))) {
+    const src = readFileSync(join(LIB, file), 'utf8')
+    for (const m of src.matchAll(/defineTool\(\{\s*name:\s*'([a-z_]+)'/g)) names.add(m[1])
+  }
+  return [...names].sort()
+}
+
+/**
+ * 一件家里能用的工具一行：[工具名, 说明书所在的那一段, 处境句的正则]。
+ *
+ * 顺序就是能力地图的顺序：先处境、再动作；参数不在这里（第三层测试守着）。
+ * 新工具必须在这里加一行——不是「建议」，`definedTools()` 会对账。
+ */
+const MAP = [
+  ['growth_commit', TOOL_BRIEF, /有一句话想留下/],
+  ['bili_watch', TOOL_BRIEF, /画面里到底是什么/],
+  ['her_recall', RECALL_BRIEF, /我记得有一次/],
+  ['her_leave', LETTER_BRIEF, /什么时候想起它/],
+  ['her_note', NOTE_BRIEF, /老在同一个地方绕/],
+  ['her_appoint', APPOINT_BRIEF, /什么时候想起它/],
+  ['ask_owner', ASK_BRIEF, /什么时候想起它/],
+  ['her_dream', DREAM_BRIEF, /什么时候想起它/],
+  ['her_say', PROACTIVE_BRIEF, /什么时候想起它/],
+  ['bili_speak', SPEAK_BRIEF, /什么时候想起它/],
+  ['her_diary', DIARY_BRIEF, /什么时候想起它/],
+  ['bili_look', LOOK_BRIEF, /什么时候想起它/],
+]
+
+test('能力地图的登记表：原生工具一个不漏，场景工具单独登记', () => {
+  const names = definedTools()
+  const home = new Set(MAP.map(([name]) => name))
+  const scene = new Set(Object.keys(SCENE_TOOLS))
+  for (const name of names) {
+    assert.ok(
+      home.has(name) || scene.has(name),
+      `工具 ${name} 没有能力地图：在 MAP 或 SCENE_TOOLS 里给它一行，别让它悄悄长出来`,
+    )
+  }
+  assert.equal(
+    new Set([...home, ...scene]).size,
+    names.length,
+    '登记表里的名字必须和源码里的 defineTool 一模一样（改名了也要跟着改）',
+  )
+  assert.ok(scene.has('bring_back'), 'bring_back 只在出门时给，不能混进家里的身份文档')
+})
+
+test('能力地图：每件工具都先讲处境，再讲怎么用', () => {
+  for (const [tool, brief, cue] of MAP) {
+    assert.match(brief, cue, `${tool} 的说明里找不到「什么处境想起它」这一句`)
+    assert.ok(brief.includes(tool), `${tool} 的说明书里连名字都没提`)
+  }
+})
+
+test('身份文档：家里能用的一个不少，场景工具一个不提', () => {
+  // 开关全开，取「她能拿到的最大那一份」。少一个名字，她就有一只自己不知道的手。
+  const doc = renderSelfDoc(deriveSelf([]), {
+    budget: 8000,
+    browse: true,
+    speak: true,
+    diary: true,
+    dream: true,
+    proactive: true,
+    schedule: true,
+    restricted: false,
+  })
+  for (const [tool] of MAP) {
+    assert.ok(doc.includes(tool), `身份文档里少了 ${tool}：她手里有、文档却不说，伸手就会以为工具坏了`)
+  }
+  for (const tool of Object.keys(SCENE_TOOLS)) {
+    assert.ok(!doc.includes(tool), `${tool} 只在出门时给；家里写进文档等于告诉她有、伸手却没有`)
+  }
 })

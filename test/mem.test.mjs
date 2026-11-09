@@ -346,6 +346,11 @@ test('pickLastWords：取第一行、去列表符号与引号、「不用」算�
   assert.equal(pickLastWords('不想留'), '')
   // 不是拒绝的长句要照收（别把"不用"当子串误杀）
   assert.equal(pickLastWords('不用等我吃饭，我先睡了。'), '不用等我吃饭，我先睡了。')
+  // issue #97（2026-11-09，外部用户真机）：她先写「留一句：」，真话在下一行。
+  assert.equal(pickLastWords('留一句：\n「窗关好了，下次别淋雨。」'), '窗关好了，下次别淋雨。')
+  assert.equal(pickLastWords('留一句：\n\n先睡吧。'), '先睡吧。')
+  // 只剩一行引导语时，等于没留
+  assert.equal(pickLastWords('留一句：'), '')
 })
 
 test('轮换时会问她，回的那句写进 home.json，新房间读得到', async () => {

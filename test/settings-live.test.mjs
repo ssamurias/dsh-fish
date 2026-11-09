@@ -112,5 +112,5 @@ test('总共留几条自述：设得比眼前条数还小时，眼前这几条�
 
 test('foldOlderBeliefs：一条都不剩时也要说清还有多少', () => {
   assert.equal(foldOlderBeliefs([], 3, 3, 0), '')
-  assert.equal(foldOlderBeliefs([], 3, 3, 7), '还有 7 条更早的，你记不清原话了')
+  assert.equal(foldOlderBeliefs([], 3, 3, 7), '还有 7 条更早的，没摆出来')
 })

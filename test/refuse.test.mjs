@@ -122,3 +122,17 @@ test('没人回过她的拒绝时，不出现后果那句（不许提前吓她�
   assert.match(text, /## 你拒绝过/)
   assert.doesNotMatch(text, /有几次他还是坚持了/)
 })
+
+// issue #97（2026-11-09，外部用户真机）：object 是从原话里切出来的前缀，
+// 原话已经整句摆在前面；再附一次就是 80 字截断副本，还会断在字中间。
+test('身份文档不再重复附一段截断副本（issue #97）', () => {
+  const long =
+    '我不想接受「被人照顾」这种说法，' +
+    '你说的那些我都记得，'.repeat(6) +
+    '但我不想接受被说成那样的人。'
+  const m = deriveSelf([ev('ev_R', 'refusal', 1, long)], { growthDays: 30 })
+  const text = personaLine(m, { budget: 4000 })
+  const section = text.slice(text.indexOf('## 你拒绝过'))
+  assert.doesNotMatch(section, /（你不想接受：/, '截断副本不该再出现')
+  assert.ok(section.includes(long), '原话要完整留着')
+})

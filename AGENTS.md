@@ -59,7 +59,7 @@
 `~/.dsh-fish/events.jsonl` 不能删除记录，是唯一可信源，一行一条。**任何改写/删除/重排都是篡改她的记忆。**
 
 - 状态（`state.json`）是派生品，随时可由 `rebuild()` 重算；改它没意义，会被覆盖。
-- 「让她忘」不是删行，是**降低召回**（`lib/persona.js` 的 `foldOlderBeliefs`：更早的判断折成一行「记不清原话了」，疤那类永不折叠），事件原文始终还在 `events.jsonl` 里，她也能用 `her_recall` 翻回去。
+- 「让她忘」不是删行，是**降低召回**（`lib/persona.js` 的 `foldOlderBeliefs`：更早的判断折成一行「还有 N 条更早的，没摆出来」，疤那类永不折叠），事件原文始终还在 `events.jsonl` 里，她也能用 `her_recall` 翻回去。
 - 重置与恢复都不删数据：`reset.js` 改名前缀封存，`backup.js` 恢复前把旧档搬去 `dsh-fish-backups/pre-restore-*`。
 - 新增事件类型**不必**改 `lib/schema.js` 的 `EVENT_SCHEMA_VERSION`：旧读者读不认识的 `type` 会跳过（`readEvents` 对未知类型宽容），0.7.6 / 0.8.0 的 `ask`、`answer`、`heard` 都是这样加进去的。但**改字段语义、把可选字段变必填、删字段**必须升 `v` 并写迁移（旧版本遇到新 `v` 要拒，否则静默丢字段）。
 
@@ -69,11 +69,11 @@
 node --test
 ```
 
-当前基线 **2034 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **2065 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
-- **正常环境**：上面这条命令（不带参数，Node 自己递归找 `test/*.test.mjs`），约 17–18 秒。
+- **正常环境**：上面这条命令（不带参数，Node 自己递归找 `test/*.test.mjs`），约 31 秒。
 - **别写成 `node --test "test/*.test.mjs"`**：Node 20 不展开 glob，会直接报 `Could not find '.../test/*.test.mjs'`；引号里的通配符只有 Node 22+ 认。CI 就是被这条拖红的。
 - **也别写成 `node --test test/`**（目录形式）：Node 26 + Windows 下报 `MODULE_NOT_FOUND`，沙箱里还会 `spawn EPERM`。
 - **沙箱 / 受限环境**：用 `node --test --test-isolation=none`，或逐文件跑。
@@ -146,6 +146,13 @@ GET /dsh-fish/whoami
 3. **外来场次必须带说话人前缀**。`lib/say.js` 对 `group` 与 `guest` 都用 `speaker` 拼 `某某在群里说：…` / `某某说：…`。不拼的话，群里三个人的话在她看来跟一个人连说三句一模一样，她会把三个人的观点拼成一个"他"。外来文本统一过 `lib/guard.js` 的 `sanitizeForeign`。
 4. **桥不要用宿主的 `source.form`**。`snapshot`、`notice`、`catalog`、`instructions`、`recall` 是宿主前端的保留词表，`classifyMessage` 见到就当上下文，不算人（`MACHINE_FORMS`）。转述人说的话，要么不带 `form`，要么用 `relay`。
 5. **走宿主 prompt 的桥，`rpcId` 就是记号**。`sessionController.prompt()` 把 `kind` 写死成 `user`，把调用方的 `requestId` 写进 `source.rpcId`，桥传不进自己的 `source`；`clientTimeZone` 是可选字段，忘了不会报错。2026-11-08 起 `classifyMessage` 把「带 rpcId 的 user 消息」也认作人：我们自己的 prompt 用 `PLUGIN_RPC` 前缀先挡掉，`possess.js` / `sessionnote.js` 的 append 没有 rpcId，仍留 unknown。桥仍应带 `clientTimeZone`——`dsh-time-context` 只认「kind user + rpcId + 时区」三者齐全的 source。正文末尾的 `[渠道：…]` / `[Channel: …]` 独立段落只影响记账（`lib/turns.js` 的 `stripChannelNote` 会裁掉），会话原文不动；只有提示的那条不算他来过。
+6. **走 `prompt()` 的桥，发之前先登记这一轮是什么**（2026-11-09，issue #96）。上一条的「带 rpcId 就算人」把群聊、群友私聊、桥自己的定时提醒也一起算成了他本人：涨轮数、换会话、写 `seen:`、记「他说」、撤掉叫醒。桥在调 `sessionController.prompt()` 之前发一条即可：
+
+   ```js
+   ctx.emit('dsh-fish/source', { rpcId, scene: 'group', owner: true })
+   ```
+
+   字段：`rpcId`（必须与接下来那条 `source.rpcId` 一致）、`scene`（`group` / `private` / `desk`）、`owner`（群里他本人说的那句）、`guest`（外客，群友私聊这类）、`machine`（桥自己发起的轮次，不是人）。`classifyMessage()` 先查登记表：`machine` → `plugin`、`guest` → `group`、`group` + `owner` → `group-owner`、其余 → `human`。表按 rpcId 存 **5 分钟、最多 200 条**；不发就退回上一条的老判法（带 rpcId 当人），所以是加法，不改老桥。旁听记「他说」前会先裁掉正文**开头**那种「（群聊 · 示例群 · im:group:10001）」抬头（`lib/hear.js` 的 `stripLeadingHeader()`），只裁整行被括号包住且带群/渠道/频道字样的行。
 
 ### 7.3 对话靠工具发出去的部署
 
@@ -209,6 +216,22 @@ qq_send_message, qq_get_unread_messages, qq_reply
 
 **永远不给人格/人称旋钮**（§2）：多间房不是多个人格，`scene` 只描述"这句话在哪儿说的"，不改变她是谁。
 
+## 8. 每样工具都要有一张能力地图
+
+**新增、改名、删除工具时，`test/toolmap.test.mjs` 是第一道门：它按源码里的 `defineTool` 名字对账，少登记一行就红。**
+
+一件工具要进她的身份文档，必须按这个顺序写三层：
+
+1. **处境**：先写「什么时候想起它」——她是从眼前这件事走进工具的，不是从名字清单往下数。
+2. **动作**：再写它替她做什么、做完留下什么。
+3. **参数**：不写在这里。枚举、默认值、分页、编号只留在工具自己的 `description` 里；身份文档复述一遍，她就会在两份说法之间挑错。
+
+另外两条：
+
+- **「我做过的事」不是手写的。** 由 `lib/use.js` 的 `withUse` 记账、`resumeLines` 反推；没有 `use:` 账就整节不写。加工具时不用、也不许手工往文档里塞这一节。
+- **场景工具不进家里的身份文档。** `lib/toolreg.js` 的 `SCENE_TOOLS`（如 `bring_back`）只在出门那趟才给：家里写着她有、伸手却答「现在没在外面」，等于每轮提醒她一件事做不了。它们的处境句写在工具 `description` 的第一句，并在 `SCENE_TOOLS` 里登记 `why`。
+
+落地位置：家里能用的工具进 `test/toolmap.test.mjs` 的 `MAP`（工具名、所在说明书段、处境句正则）；场景工具进 `SCENE_TOOLS`。两处都没有的新工具，测试不放行。
 
 ---
 
@@ -217,7 +240,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 三个依赖字段还是 `{}`
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `guard.js`
-- [ ] `node --test` 2034 全绿
+- [ ] `node --test` 2065 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节

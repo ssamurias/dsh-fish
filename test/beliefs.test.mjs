@@ -63,7 +63,7 @@ test('调成 1 条时只剩一条，其余折进「更早以前」', () => {
   assert.equal((seg.match(/^- 判断编号/gm) || []).length, 1)
   const old = text.slice(text.indexOf('## 更早以前'))
   assert.ok(old.includes('判断编号1'), '折行从第 2 条开始')
-  assert.ok(old.includes('记不清原话了'), `折叠行要交代还有多少条：${old.slice(0, 80)}`)
+  assert.ok(old.includes('没摆出来'), `折叠行要交代还有多少条：${old.slice(0, 80)}`)
 })
 
 test('foldOlderBeliefs 的起点跟着 shown 走', () => {
