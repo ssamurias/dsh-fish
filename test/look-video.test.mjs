@@ -71,7 +71,8 @@ test('what=video：按 BV 号看指定的那一条，详情只取一次', async 
     // 看过要落两笔账：looked（去重）+ look（带日期，评论闸门认这个）
     const { events } = await readEvents(root)
     const texts = events.filter((e) => e.type === 'meta').map((e) => String(e.text ?? ''))
-    assert.ok(texts.includes(`looked:${v().bvid}`))
+    // 0.9.7 T2：行尾会带上标题（`looked:BV… 标题`），用前缀认。
+    assert.ok(texts.some((t) => t.startsWith(`looked:${v().bvid}`)))
     // 2026-11-04（用户 m02464）：look: 现在要把展示信息一起落下来，
     // 否则日报「翻到过什么」里由 look: 来的条目全是「(无标题)」。
     const look = texts.find((t) => t.startsWith(`look:${dateKey()} ${v().bvid}`))
