@@ -1,5 +1,18 @@
 ## 0.9.7 — 未发布
 
+- **心事卡只认 subject 开头的工具名，句子中间拿手上的工具作比较的不算到手（PR #102，@BBleae）。** `lib/wish.js` 的 `toolNamedIn()` 在整句里按 `indexOf` 找完整工具名，于是「能看 PDF 里图片的工具（read 只给我文字）」「像 bash 那样能跑 python 的东西」这种**拿手上的工具举例**的话，会被判成她已经到手那样东西；卡一开就被撤掉，「桌子、劲儿、悬着的事」三处同时少一条。
+  - 改成只认开头那个名字（跳过开头的空白与左引号/左括号，允许「用 / 像 / 就」这类前缀），名字后面不能紧跟字母、数字或下划线；仍只认 4 个字以上，命中多个取最长。整句正好是工具名、函数写法的 `has` 行为不变。
+  - **这是有意的行为变更**：0.9.6 的发布说明写的是「句子里有完整工具名也算到手」，现在收窄为只认开头——`bili_look` 不会再误认 `bili_look_at`。
+  - `test/wish.test.mjs` 续两条：四个拿手上工具作比较的 subject 在 `wishesOf` 与 `toolArrived` 里都不算到手（未打补丁的 main 上这条红）；开头写着名字的七种写法照旧算到手。
+
+- **叫醒便条念到的几条，递进去了才记「提过」（PR #103，@BBleae）。** `lib/scheduler.js` 的 `wake()` 在拼正文时就把 `digest:<dk> <bvid…>` 写进事件流，投递失败（离线、或调度器已经收摊）的那一轮也照记，那几条从此被当成「提过了」，下次醒来不再念——正好反了 0.9.5 定的「递进去了才算提过」。
+  - 记录挪到投递成功之后，状态没变就不写。
+  - `test/quiet-browse-offline.test.mjs` 续两条：投递失败的那一轮不记、下一次醒来照念；投递前调度器收摊同样不记（未打补丁的 main 上两条都红）。
+
+- **导入浏览器导出的 cookies 时，`#HttpOnly_` 那几行不再被当成注释丢掉（PR #104，@Pierce-Ma）。** Netscape 格式里 `#HttpOnly_` 前缀的行是正常 cookie，B 站的 SESSDATA 就是 HttpOnly；`lib/bili.js` 的 `normalizeCookie()` 与 `lib/owner.js` 的 `parseCookieInput()` 原先见到 `#` 就 `continue`，于是导入后没有登录态。
+  - 只对 `#HttpOnly_` 破例（剥掉前缀后照常解析），其余 `#` 开头仍当注释跳过。
+  - `test/owner.test.mjs` 那条「三种粘贴形态」补了 HttpOnly 断言。
+
 - **一条工具结果里的半个 emoji，能把整段对话打成 400（外部真机 0.9.6，2026-11-10）。** 那台机器上 `bili_look` 的评论按 200 个 UTF-16 单元硬截，把一个 emoji 从中间切开，留下半个高位代理项（`\ud83d`）；这条工具结果进了上下文以后，之后每个请求都带着这个非法字符发给服务端，连续 13 次 400，那条会话再也发不出消息。
   - 新增 `lib/clip.js`：`clipText()` 按 UTF-16 单元截断但不切开代理对（切点落在高位上就退一格），`cleanText()` 把已经混进来的孤立代理项换成 U+FFFD、成对的字符原样保留。
   - 评论、素材渲染、以及从 B 站拿来的自由文本（标题/UP/简介/标签/弹幕）都走这两件；`lib/desk.js`、`lib/hook.js`、`lib/persona.js`、`lib/selfdoc.js`、`lib/ask.js`、`lib/askinchat.js`、`lib/appoint.js` 里原来裸 `slice()` 的截断一并换掉。`lib/anchor.js`、`lib/recall.js` 早就有同样的保护，没动。
