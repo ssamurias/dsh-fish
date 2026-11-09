@@ -279,3 +279,50 @@ test('醒来便条：开着时照旧念（对照组，行为不变）', async ()
     assert.equal(said[0], `digest:${dateKey()} ${BV1} ${BV2}`)
   })
 })
+
+// 0.9.6：`digest:` 在取屋子会话之前就记了。后面取不到会话、收摊、处境被清空、投递失败，
+// 这一轮都没开口，那几条却已经算「提过」，以后的醒来再也不念。
+// 现在只在递进去以后记；没递进去的，下一次醒来照念。
+
+/** 假宿主：屋子能认、会话能建，但 agent 身上没有 followup —— 投递一定失败。 */
+function brokenWakeCtx() {
+  const w = wakeCtx()
+  w.ctx.sessionController.resolveAgent = async () => ({ agent: {} })
+  return w
+}
+
+const wakefailLines = (events) => events.filter((e) => e?.type === 'meta' && String(e.text ?? '').startsWith('wakefail:'))
+
+test('醒来便条：投递失败的那一轮不记「提过」，下一次醒来照念那两条', async () => {
+  await withRoot(async (root) => {
+    await writeConfig(cfgOf({ bili: true }), root)
+    await seedBrowsed(root)
+
+    const broken = brokenWakeCtx()
+    await wakeNow(broken.ctx, { root, force: true })
+    let { events } = await readEvents(root)
+    assert.equal(wakefailLines(events).length, 1, '前提：这一轮确实没递进去')
+    assert.equal(broken.prompts.length, 0)
+    assert.deepEqual(digestLines(events).map((e) => e.text), [], '没开口就不该记 digest:')
+
+    const { ctx, prompts } = wakeCtx()
+    const r = await wakeNow(ctx, { root, force: true })
+    assert.equal(r.ok, true, JSON.stringify(r))
+    assert.equal(prompts.length, 1)
+    assert.match(getWakeSection(r.sessionId), /今天你自己又翻到了 2 条：《热门一》、《热门二》/, '上一轮没念出去的，这一轮要念')
+    ;({ events } = await readEvents(root))
+    assert.deepEqual(digestLines(events).map((e) => e.text), [`digest:${dateKey()} ${BV1} ${BV2}`])
+  })
+})
+
+test('醒来便条：投递之前调度器已经收摊，同样不记「提过」', async () => {
+  await withRoot(async (root) => {
+    await writeConfig(cfgOf({ bili: true }), root)
+    await seedBrowsed(root)
+    const { ctx, prompts } = wakeCtx()
+    await wakeNow(ctx, { root, force: true, isDisposed: () => true })
+    assert.equal(prompts.length, 0, '前提：收摊之后不投递')
+    const { events } = await readEvents(root)
+    assert.deepEqual(digestLines(events).map((e) => e.text), [], '没开口就不该记 digest:')
+  })
+})
