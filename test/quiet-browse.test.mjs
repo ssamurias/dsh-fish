@@ -5,7 +5,7 @@
  *   1. 两扇门：配置里的自动刷开关、每天几次，关着就一步都不走
  *   2. 节奏：一天几次要摊开，不能一进时段就一口气刷完
  *   3. 记账：只取、只记 `browse:`，不动会话、不叫醒
- *   4. 便条：醒来只带一行「今天又翻到了什么」，多了不带
+ *   4. 便条：醒来只带一行「最近又翻到了什么」，多了不带
  *
  * 全部用假 client，不联网。
  */
@@ -18,7 +18,7 @@ import { join } from 'node:path'
 
 import { quietBrowse, browseDigestLine, countPhrase } from '../lib/scheduler.js'
 import { browseGapMs, lastBrowseAt, itemsFromEvents } from '../lib/browse.js'
-import { glancedItems } from '../lib/whatseen.js'
+import { pendingGlances } from '../lib/whatseen.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
 import { readEvents, appendEvent } from '../lib/store.js'
 
@@ -158,17 +158,16 @@ test('browseDigestLine：空的不带；最多三条，其余只说「等」；�
   assert.doesNotMatch(line, /自己点开/, '她手上没有界面，别用「点开」指代她的动作')
 })
 
-// 2026-11-07（用户 m00758）：今天还没醒过才说「今天」；醒过一次就只说这段。
+// 2026-11-11（用户反馈）：便条改成跨天的队列，就不好再说「今天」——前一晚刷到的也算在里面。
+// 也不再按「上次醒来之后」切时间段：同一个口径两套说法，难念准。
 
-test('browseDigestLine：给了 since 就说「上次醒来之后」，条数一多只说大概', () => {
+test('browseDigestLine：只说「最近」，条数一多只说大概', () => {
   const items = Array.from({ length: 24 }, (_, i) => ({ bvid: `BV${i}`, title: `第${i}条` }))
-  const fresh = browseDigestLine(items, { since: Date.parse('2026-11-07T09:00:00+08:00') })
-  assert.match(fresh, /^上次醒来之后，你自己又翻到了/)
-  assert.match(fresh, /二十多条/)
-  assert.doesNotMatch(fresh, /24 条/)
-
-  const first = browseDigestLine(items)
-  assert.match(first, /^今天你自己又翻到了/)
+  const line = browseDigestLine(items)
+  assert.match(line, /^最近你自己又翻到了/)
+  assert.match(line, /二十多条/)
+  assert.doesNotMatch(line, /24 条/)
+  assert.doesNotMatch(line, /今天/, '跨天攒的，说「今天」会撒谎')
 
   assert.equal(countPhrase(0), '0 条')
   assert.equal(countPhrase(4), '4 条')
@@ -180,20 +179,45 @@ test('browseDigestLine：给了 since 就说「上次醒来之后」，条数一
   assert.equal(countPhrase(80), '八十多条')
 })
 
-// ---------------------------------------------------------------- 便条只带「上次醒来之后」
+// ---------------------------------------------------------------- 便条是个队列，不是一段窗口
 
-test('glancedItems：给了 since 就只算这之后翻的；她自己的 look: 也一样（不让同一行每次都重念）', async () => {
-  const early = '2026-11-07T01:00:00+08:00'
-  const late = '2026-11-07T09:00:00+08:00'
-  const since = Date.parse('2026-11-07T06:00:00+08:00')
+test('pendingGlances：跨天的照样排着；念过的划掉；看过的画面不再当「只是翻到过」', () => {
+  const now = Date.parse('2026-11-11T09:00:00+08:00')
+  const at = (h) => new Date(now - h * 3600_000).toISOString()
   const events = [
-    { type: 'meta', ts: early, text: `browse:${DK} [{"bvid":"BVold","title":"早先翻的"}]` },
-    { type: 'meta', ts: late, text: `browse:${DK} [{"bvid":"BVnew","title":"刚翻的"}]` },
-    { type: 'meta', ts: early, text: `look:${DK} BVown {"title":"她早先点开的"}` },
+    // 前天晚上刷到的：旧口径按「今天」算会整个丢掉，现在要留着
+    { type: 'meta', ts: at(36), text: `browse:2026-11-09 [{"bvid":"BV1aaaaaaaaa","title":"前天翻的"}]` },
+    // 昨夜刷到的第二批，其中一条昨天已经念过了
+    { type: 'meta', ts: at(12), text: `browse:2026-11-10 [{"bvid":"BV2bbbbbbbbb","title":"念过的"},{"bvid":"BV3ccccccccc","title":"没念过的"}]` },
+    { type: 'meta', ts: at(6), text: `digest:2026-11-10 BV2bbbbbbbbb` },
+    // 她自己点名点开的那条也算
+    { type: 'meta', ts: at(3), text: `look:2026-11-11 BV4ddddddddd {"title":"她点开的"}` },
+    // 已经看过画面的，不该再当「只是翻到过」
+    { type: 'meta', ts: at(2), text: `watched:2026-11-11 BV3ccccccccc` },
   ]
-  const all = glancedItems(events, DK).map((x) => x.bvid)
-  assert.deepEqual(all.sort(), ['BVnew', 'BVold', 'BVown'])
+  const got = pendingGlances(events, { now }).map((x) => x.bvid)
+  assert.deepEqual(got, ['BV1aaaaaaaaa', 'BV4ddddddddd'])
 
-  const fresh = glancedItems(events, DK, { since }).map((x) => x.bvid)
-  assert.deepEqual(fresh, ['BVnew'])
+  // 七天之内的都在，七年前的不要
+  const old = [{ type: 'meta', ts: new Date(now - 8 * 86_400_000).toISOString(), text: 'browse:2026-11-03 [{"bvid":"BV5eeeeeeeee"}]' }]
+  assert.deepEqual(pendingGlances(old, { now }).map((x) => x.bvid), [])
+})
+
+test('pendingGlances：念不完的留着，下一次醒来接着排（不因为「上次醒来太早」被滤掉）', () => {
+  const now = Date.parse('2026-11-11T21:00:00+08:00')
+  const at = (h) => new Date(now - h * 3600_000).toISOString()
+  const batch = JSON.stringify([
+    { bvid: 'BVaaaaaaaaaa', title: '一号' },
+    { bvid: 'BVbbbbbbbbbb', title: '二号' },
+    { bvid: 'BVcccccccccc', title: '三号' },
+    { bvid: 'BVdddddddddd', title: '四号' },
+    { bvid: 'BVeeeeeeeeee', title: '五号' },
+  ])
+  const events = [
+    { type: 'meta', ts: at(5), text: `browse:2026-11-11 ${batch}` },
+    // 上一次醒来念了前三条
+    { type: 'meta', ts: at(4), text: 'digest:2026-11-11 BVaaaaaaaaaa BVbbbbbbbbbb BVcccccccccc' },
+  ]
+  const got = pendingGlances(events, { now }).map((x) => [x.bvid, x.title])
+  assert.deepEqual(got, [['BVdddddddddd', '四号'], ['BVeeeeeeeeee', '五号']], '剩下两条还在队列里')
 })
