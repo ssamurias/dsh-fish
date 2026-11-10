@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   stageBounds, stageOf, deriveSelf, consistency, novelty,
   similarity, pickName, pickNameHit, DAY_MS, isProofOnly,
+  detectTensions, envelopeOf,
 } from '../lib/derive.js'
 // 2026-10-26：stability 从 derive.js 搬到 quality.js（它要用到 persona 的渲染，
 // 留在 derive 里会绕出 quality → persona → derive → quality 的环）。
@@ -486,4 +487,72 @@ test('引号与「以后」是高置信，裸句子是低置信（issue #102）'
   assert.equal(pickNameHit('以后叫他老张。').confident, true)
   assert.equal(pickNameHit('我叫他老张。').confident, false)
   assert.equal(pickNameHit('哥哥只能叫他一个人'), null)
+})
+
+// ---- 0.9.8 提速（issue #105 第 1 条）：三处小改的等价性 ----
+
+// 信封（只算第几天/第几阶段）必须与全量派生给出同一个数。
+// 这条一旦漂了，症状是「新事件的信封天数」和「身份文件按天数写的那句」对不上，
+// 而且要过很久才会有人发现——所以钉在口径上，不钉在实现上。
+test('envelopeOf 与 deriveSelf 的天数/阶段一致（含梦与被拒收的行）', () => {
+  const dream = ev('ev_dream', 'dream', 40, '我把那天重新拼了一遍。')
+  const rejected = ev('ev_x', 'utterance', 50, '这一条后来被划掉了。')
+  const rejectMeta = ev('ev_reject', 'meta', 50, 'outing-reject: ev_x', { source: 'system' })
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我不太喜欢人多的地方。'),
+    dream,
+    rejected,
+    rejectMeta,
+  ]
+  for (const now of [T0, T0 + 3 * DAY_MS, T0 + 40 * DAY_MS]) {
+    for (const growthDays of [7, 30, 90]) {
+      const model = deriveSelf(evs, { now, growthDays })
+      const env = envelopeOf(evs, { now, growthDays })
+      assert.equal(env.day, model.day, `day @${growthDays}/${now}`)
+      assert.equal(env.stage, model.elapsedStage, `stage @${growthDays}/${now}`)
+    }
+  }
+  // 空事件流也不能炸：两者都给 1。
+  assert.deepEqual(envelopeOf([]), { day: 1, stage: 1 })
+})
+
+test('envelopeOf 不派生判断（只有两个字段）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我不太喜欢人多的地方。'),
+  ]
+  assert.deepEqual(Object.keys(envelopeOf(evs, { now: T0 + 2 * DAY_MS })).sort(), ['day', 'stage'])
+})
+
+// 提速前：deriveSelf 为「摆出来的 3 条 + 总数」调了两次 detectTensions。
+// 现在是算一次 500 条、再切前三。要钉住的是「前三条逐字相同、总数不变」。
+test('tensions 一次调用与以前两次调用结果相同（前三条 + 总数）', () => {
+  const pairs = [
+    ['我不喜欢人多的地方。', '我喜欢人多的地方。'],
+    ['我不想学画画。', '我想学画画。'],
+    ['我不需要别人帮忙。', '我需要别人帮忙。'],
+    ['我不敢一个人出门。', '我敢一个人出门。'],
+    ['我不讨厌下雨天。', '我讨厌下雨天。'],
+  ]
+  // 同一个输入数组上比较：等价性本身与 deriveSelf 内部传的是哪一份子集无关
+  // （同分时的先后取决于下标，换一份子集本来就会换序）。
+  const beliefs = pairs.flatMap(([neg, pos], i) => ([
+    { id: `ev_n${i}`, text: neg, since: '2026-10-02T00:00:00.000Z' },
+    { id: `ev_p${i}`, text: pos, since: '2026-10-02T00:00:00.000Z' },
+  ]))
+  const all = detectTensions(beliefs, { limit: 500 })
+  assert.ok(all.length > 3, '这一组要真的超过 3 处，否则下面两条测不出东西')
+  assert.deepEqual(detectTensions(beliefs), all.slice(0, 3), '前三条要逐字相同')
+  assert.deepEqual(detectTensions(beliefs, { limit: 3 }), all.slice(0, 3))
+
+  // 再接一遍 deriveSelf：摆出来的还是 3 条，总数用截断前的口径。
+  const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' })]
+  pairs.forEach(([neg, pos], i) => {
+    evs.push(ev(`ev_n${i}`, 'utterance', 2, neg))
+    evs.push(ev(`ev_p${i}`, 'utterance', 2, pos))
+  })
+  const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
+  assert.equal(m.tensions.length, 3, '摆出来的仍然是 3 条')
+  assert.ok(m.tensionsTotal > 3, '总数要超过摆出来的 3 条')
 })
