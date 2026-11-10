@@ -18,7 +18,7 @@ import { join } from 'node:path'
 
 import { quietBrowse, browseDigestLine, countPhrase } from '../lib/scheduler.js'
 import { browseGapMs, lastBrowseAt, itemsFromEvents } from '../lib/browse.js'
-import { pendingGlances } from '../lib/whatseen.js'
+import { pendingGlances, staleGlances } from '../lib/whatseen.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
 import { readEvents, appendEvent } from '../lib/store.js'
 
@@ -138,24 +138,30 @@ test('quietBrowse：tick 传进来的是毫秒数，也要认（别把时钟悄�
 
 // ---------------------------------------------------------------- 便条
 
-test('browseDigestLine：空的不带；最多三条，其余只说「等」；没标题用号', () => {
+test('browseDigestLine：空的不带；最多六条，其余只说「等」；没标题用号', () => {
   assert.equal(browseDigestLine([]), '')
   assert.equal(browseDigestLine([{ title: '' }]), '')
 
-  const line = browseDigestLine([
+  const many = Array.from({ length: 7 }, (_, i) => ({ bvid: `BV${i}`, title: `${i}号` }))
+  const line = browseDigestLine(many)
+  assert.match(line, /翻到了 7 条/)
+  assert.match(line, /《0号》/)
+  assert.match(line, /《5号》/)
+  assert.match(line, /等/)
+  assert.doesNotMatch(line, /《6号》/, '第七个不该被念出来')
+  assert.match(line, /bili_watch/)
+  assert.doesNotMatch(line, /自己点开/, '她手上没有界面，别用「点开」指代她的动作')
+
+  // 没标题就用号，不然这一条在她眼里等于不存在
+  const four = browseDigestLine([
     { bvid: 'BV1', title: '一号' },
     { bvid: 'BV2', title: '' },
     { bvid: 'BV3', title: '三号' },
     { bvid: 'BV4', title: '四号' },
   ])
-  assert.match(line, /翻到了 4 条/)
-  assert.match(line, /《一号》/)
-  assert.match(line, /BV2/)
-  assert.match(line, /《三号》/)
-  assert.match(line, /等/)
-  assert.doesNotMatch(line, /《四号》/)
-  assert.match(line, /bili_watch/)
-  assert.doesNotMatch(line, /自己点开/, '她手上没有界面，别用「点开」指代她的动作')
+  assert.match(four, /翻到了 4 条/)
+  assert.match(four, /BV2/)
+  assert.doesNotMatch(four, /等/, '四条装得下，不该说「等」')
 })
 
 // 2026-11-11（用户反馈）：便条改成跨天的队列，就不好再说「今天」——前一晚刷到的也算在里面。
@@ -220,4 +226,41 @@ test('pendingGlances：念不完的留着，下一次醒来接着排（不因为
   ]
   const got = pendingGlances(events, { now }).map((x) => [x.bvid, x.title])
   assert.deepEqual(got, [['BVdddddddddd', '四号'], ['BVeeeeeeeeee', '五号']], '剩下两条还在队列里')
+})
+
+// ---------------------------------------------------------------- 窗外那批：不念，但也别装作没有
+
+test('staleGlances：掉出 7 天窗的才数；念过的、看过的、还在窗内的都不算', () => {
+  const now = Date.parse('2026-11-11T21:00:00+08:00')
+  const at = (d) => new Date(now - d * 86_400_000).toISOString()
+  const events = [
+    // 窗外：三条没念过 → 3
+    { type: 'meta', ts: at(10), text: 'browse:2026-11-01 [{"bvid":"BVaaaaaaaaaa","title":"旧一"},{"bvid":"BVbbbbbbbbbb","title":"旧二"},{"bvid":"BVcccccccccc","title":"旧三"}]' },
+    // 窗外但念过 → 不算
+    { type: 'meta', ts: at(9), text: 'browse:2026-11-02 [{"bvid":"BVdddddddddd","title":"旧四"}]' },
+    { type: 'meta', ts: at(9), text: 'digest:2026-11-02 BVdddddddddd' },
+    // 窗外但看过画面 → 也不算「没摆出来」
+    { type: 'meta', ts: at(8), text: 'browse:2026-11-03 [{"bvid":"BVeeeeeeeeee","title":"旧五"}]' },
+    { type: 'meta', ts: at(8), text: 'watched:2026-11-03 BVeeeeeeeeee' },
+    // 窗外、没念过，但同一条昨天又在窗内刷到了 → 不重复数
+    { type: 'meta', ts: at(7.5), text: 'browse:2026-11-03 [{"bvid":"BVffffffffff","title":"旧六"}]' },
+    { type: 'meta', ts: at(1), text: 'browse:2026-11-10 [{"bvid":"BVffffffffff","title":"旧六"}]' },
+    // 窗内的不数
+    { type: 'meta', ts: at(0.5), text: 'browse:2026-11-11 [{"bvid":"BVgggggggggg","title":"新"}]' },
+  ]
+  assert.equal(staleGlances(events, { now }), 3)
+  // 队列里是窗内那两条：BVffffffffff（昨天又刷到了）与 BVgggggggggg
+  assert.equal(pendingGlances(events, { now }).length, 2)
+})
+
+test('browseDigestLine：窗外那批只报个数，不念标题；队列空但窗外有也得说一句', () => {
+  const line = browseDigestLine([{ bvid: 'BVaaaaaaaaaa', title: '一号' }], { stale: 12 })
+  assert.match(line, /（还有 12 条更早的，没摆出来）/)
+  assert.doesNotMatch(line, /12 条：/, '个数不是这一次念到的条数')
+
+  // 队列空了、窗外还剩——她至少知道这阵子翻到过东西
+  const empty = browseDigestLine([], { stale: 5 })
+  assert.match(empty, /还有 5 条更早的，没摆出来/)
+  // 两边都空就不该冒出一行空的
+  assert.equal(browseDigestLine([], { stale: 0 }), '')
 })

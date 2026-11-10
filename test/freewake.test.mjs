@@ -97,11 +97,14 @@ test('叫醒拼装处：不再整段摆世界，只留一行「今天又翻到�
   // 但走另开的一趟（quietBrowse），也不往正文里塞十几条标题简介热评。
   assert.doesNotMatch(src, /const showWorld = false/, '唤醒里不该再有「摆不摆世界」这颗开关')
   assert.doesNotMatch(src, /parts\.push\('', look\.intro/, '唤醒里不该再整段塞素材')
-  assert.match(src, /browseDigestLine\(pending, \{ max: DIGEST_NAMES_MAX \}\)/, '只留一行便条')
+  assert.match(src, /browseDigestLine\(pending, \{ max: DIGEST_NAMES_MAX, stale \}\)/, '只留一行便条')
   // 2026-11-11（用户反馈）：便条不再问「上次醒来是什么时候」——那个口径只认当天那一行，
   // 跨零点就把前一晚刷到的全作废，而且念不完的几条永远轮不到。改成一个跨天的队列。
   assert.doesNotMatch(src, /const since = lastWakeAt\(evs, dk\)/, '便条不该再按「上次醒来」切时间段')
   assert.match(src, /const pending = pendingGlances\(evs, \{ now: now\.getTime\(\) \}\)/, '便条要的是「还没念过的」，跨天接着排')
+  // 2026-11-11（用户 m00690 第 2 条）：掉出 7 天窗的那批不再无声消失，数出来补一句「还有 N 条更早的」。
+  assert.match(src, /const stale = staleGlances\(evs, \{ now: now\.getTime\(\) \}\)/, '窗外的也得数出来')
+  assert.match(src, /import \{[^}]*staleGlances[^}]*\} from '\.\/whatseen\.js'/, 'staleGlances 要从 whatseen 引进来')
   // 2026-11-08（用户 m00187 第 4 条）：提过的不再提，这一层挪进了 pendingGlances。
   assert.match(src, /pending\.slice\(0, DIGEST_NAMES_MAX\)/, '念出去的才划掉，没念的留着')
   const desk = src.indexOf('const desk = deskFor({')
