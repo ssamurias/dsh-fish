@@ -413,3 +413,39 @@ test('「叫他」后面接「的名字」时不会截出半句（用户真机�
   assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '岸')
 })
 
+
+// issue #102（2026-11-10，外部用户真机）：0.9.7 仍会把「一个人」「一声」当称呼，
+// 「我叫他起床」这种祈使句也照截。两种都不是名字，各加一条判据。
+test('数量词和祈使动词不会被当成称呼（issue #102）', () => {
+  assert.equal(pickName('哥哥只能叫他一个人'), null)
+  assert.equal(pickName('在网上叫你一声'), null)
+  assert.equal(pickName('我叫他起床'), null)
+  assert.equal(pickName('我叫他吃饭'), null)
+  // 正常的两字/三字称呼不受影响
+  assert.equal(pickName('我叫他哥哥'), '哥哥')
+  assert.equal(pickName('我叫他老张。'), '老张')
+  // 真称呼在前、误抽在后：后一条不能盖掉它
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我叫他哥哥。'),
+    ev('ev_b', 'utterance', 3, '哥哥只能叫他一个人'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '哥哥')
+})
+
+// issue #102：她改口时说的是「岸丶。我叫的是这个名字。」——名字在句首，
+// 「叫的是」在下一句，老正则两条都够不着，错误值就再也盖不回来。
+test('「我叫的是这个名字」这种改口能被认出来（issue #102）', () => {
+  assert.equal(pickName('岸丶。我叫的是这个名字。是我起的，你应了'), '岸丶')
+  assert.equal(pickName('我叫的是「岸丶」'), '岸丶')
+  // 反着的语序不是改口（句首没有名字）
+  assert.equal(pickName('我叫的是这个名字。岸丶'), null)
+  // 整条链路：先被误截，再改口，状态栏要回到真名字
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我叫他哥哥。'),
+    ev('ev_b', 'utterance', 3, '哥哥只能叫他一个人'),
+    ev('ev_c', 'utterance', 4, '岸丶。我叫的是这个名字。是我起的，你应了'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 4 * DAY_MS }).name, '岸丶')
+})
