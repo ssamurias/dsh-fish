@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   stageBounds, stageOf, deriveSelf, consistency, novelty,
-  similarity, pickName, DAY_MS, isProofOnly,
+  similarity, pickName, pickNameHit, DAY_MS, isProofOnly,
 } from '../lib/derive.js'
 // 2026-10-26：stability 从 derive.js 搬到 quality.js（它要用到 persona 的渲染，
 // 留在 derive 里会绕出 quality → persona → derive → quality 的环）。
@@ -78,9 +78,11 @@ test('称呼从她的话里提出，后来的盖掉先前的', () => {
   const evs = [
     ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
     ev('ev_a', 'utterance', 2, '我以后称呼你叫阿岸。'),
-    ev('ev_b', 'utterance', 3, '我叫你老张好了。'),
+    ev('ev_b', 'utterance', 3, '以后就叫你老张。'),
   ]
   // 2026-10-26：原来只认第一次，她后来接受了他给的名字也改不上，状态栏一直停在旧称呼。
+  // 2026-11-10（issue #102）：只有明确在起名的壳（「以后就叫」）才能覆盖；
+  // 裸的「我叫你老张好了」是低置信，只在还没有名字时采用一次。
   assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '老张')
 })
 
@@ -448,4 +450,40 @@ test('「我叫的是这个名字」这种改口能被认出来（issue #102）'
     ev('ev_c', 'utterance', 4, '岸丶。我叫的是这个名字。是我起的，你应了'),
   ]
   assert.equal(deriveSelf(evs, { now: T0 + 4 * DAY_MS }).name, '岸丶')
+})
+
+// issue #102（2026-11-10，用户拍板）：黑名单补不完，换判据——
+// 高置信的起名句才能覆盖已有名字；裸「叫他X」只在还没有名字时采用一次。
+test('低置信的裸句子不再盖掉已有的名字（issue #102）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '以后叫他阿岸。'),
+    // 裸句子、且看起来像名字——按旧逻辑会盖成「老张」
+    ev('ev_b', 'utterance', 3, '我叫他老张。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿岸')
+})
+
+test('还没有名字时，裸句子仍然采用一次（issue #102）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我叫他老张。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 2 * DAY_MS }).name, '老张')
+})
+
+test('高置信的起名句可以覆盖已有名字（issue #102）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '以后叫他阿岸。'),
+    ev('ev_b', 'utterance', 3, '我想叫他「老张」。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '老张')
+})
+
+test('引号与「以后」是高置信，裸句子是低置信（issue #102）', () => {
+  assert.equal(pickNameHit('我想叫他“开灯的”。').confident, true)
+  assert.equal(pickNameHit('以后叫他老张。').confident, true)
+  assert.equal(pickNameHit('我叫他老张。').confident, false)
+  assert.equal(pickNameHit('哥哥只能叫他一个人'), null)
 })
