@@ -16,7 +16,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { quietBrowse, browseDigestLine, countPhrase } from '../lib/scheduler.js'
+import { quietBrowse, browseDigestLine, countPhrase, digestNamesFor, DIGEST_NAMES_CAP } from '../lib/scheduler.js'
 import { browseGapMs, lastBrowseAt, itemsFromEvents } from '../lib/browse.js'
 import { pendingGlances, staleGlances } from '../lib/whatseen.js'
 import { normalizeConfig, dateKey } from '../lib/settings.js'
@@ -263,4 +263,57 @@ test('browseDigestLine：窗外那批只报个数，不念标题；队列空但�
   assert.match(empty, /还有 5 条更早的，没摆出来/)
   // 两边都空就不该冒出一行空的
   assert.equal(browseDigestLine([], { stale: 0 }), '')
+})
+
+// ---------------------------------------------------------------- 每趟念几条：跟着配置走
+
+// 2026-11-11（用户 m01004）：原来这个数是死数（3 → 6）。用户说「如果积压的视频没有
+// 那么多条，就有几条显示几条」——所以额度只是天花板，积压不够时 browseDigestLine
+// 照实全念（下面最后一段钉这一点）。
+test('digestNamesFor：按「每天刷进多少 ÷ 每天醒几次」算，加两条余量', () => {
+  // 眼下的真机配置：一天两趟、每趟四条、醒两次 → ceil(8/2)+2 = 6，和原来的死数一致
+  assert.equal(digestNamesFor({ browse: { perDay: 2, topN: 4 }, wakesPerDay: 2, daily: { events: 2 } }), 6)
+
+  // 用户问的那种高刷配置：一天三趟、每趟七条、只醒两次 → ceil(21/2)+2 = 13
+  assert.equal(digestNamesFor({ browse: { perDay: 3, topN: 7 }, wakesPerDay: 2, daily: { events: 2 } }), 13)
+  // 一天四趟七条、醒四次 → ceil(28/4)+2 = 9
+  assert.equal(digestNamesFor({ browse: { perDay: 4, topN: 7 }, wakesPerDay: 4, daily: { events: 4 } }), 9)
+
+  // 醒得少就得一趟多念：4×7 只醒 2 次 → 16
+  assert.equal(digestNamesFor({ browse: { perDay: 4, topN: 7 }, wakesPerDay: 2, daily: { events: 2 } }), 16)
+
+  // 全拉满时不无限涨：20 是顶（这一行再长就从线索变成清单了）
+  assert.equal(digestNamesFor({ browse: { perDay: 4, topN: 20 }, wakesPerDay: 1, daily: { events: 1 } }), DIGEST_NAMES_CAP)
+
+  // 没在刷、或配置缺字段：沿用兜底值，不拿 0 去念
+  assert.equal(digestNamesFor({ browse: { perDay: 0, topN: 4 }, wakesPerDay: 2 }), 6)
+  assert.equal(digestNamesFor({ browse: { perDay: 2, topN: 0 } }), 6)
+  assert.equal(digestNamesFor({}), 6)
+
+  // 醒来次数取 daily.events 与 wakesPerDay 里小的那个（plan() 两道都查）
+  assert.equal(
+    digestNamesFor({ browse: { perDay: 2, topN: 4 }, wakesPerDay: 4, daily: { events: 1 } }),
+    10,
+    '一天只放得下一件事，就按一次醒来摊',
+  )
+})
+
+test('digestNamesFor：积压没那么多就照实全念，额度只是天花板', () => {
+  const cfg = { browse: { perDay: 2, topN: 4 }, wakesPerDay: 2, daily: { events: 2 } }
+  const max = digestNamesFor(cfg)
+
+  // 三条积压、额度六条 → 三条全念，不该说「等」
+  const three = Array.from({ length: 3 }, (_, i) => ({ bvid: `BVaaaaaaaaa${i}`, title: `${i}号` }))
+  const line = browseDigestLine(three, { max })
+  assert.match(line, /翻到了 3 条/)
+  assert.doesNotMatch(line, /等/, '三条装得下，不该说「等」')
+  assert.match(line, /《2号》/)
+
+  // 真到七条才轮到额度生效：念六条、说「等」
+  const seven = Array.from({ length: 7 }, (_, i) => ({ bvid: `BVbbbbbbbbb${i}`, title: `${i}号` }))
+  const capped = browseDigestLine(seven, { max })
+  assert.match(capped, /翻到了 7 条/)
+  assert.match(capped, /《5号》/)
+  assert.doesNotMatch(capped, /《6号》/)
+  assert.match(capped, /等/)
 })
