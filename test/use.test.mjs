@@ -243,6 +243,31 @@ test('宿主把 ctx.tools 包成只读 proxy：不抛，注册照走、记账照
   })
 })
 
+// 2026-11-10（外部真机 0.9.7）：注册窗口里宿主可能正在挂 agent preset——
+// `subagent` / `persona` 这类就是那条路上来的。那些定义不是我们的：不包 execute、
+// 不记 use 账，`this` 也原样交回去。把它们钉在我们的 ctx 上，等于把预设工具
+// 注册到全局层；之后每个 agent 再挂一次，宿主就报 `tool "subagent" is already registered`。
+test('注册窗口里别人注册的工具原样透传，不包、不记、不钉 this', async () => {
+  await withRoot(async (root) => {
+    const got = []
+    const registry = {
+      register(...args) {
+        got.push({ args, self: this })
+        return () => {}
+      },
+    }
+    const foreign = { name: 'subagent', execute: async () => ({ ok: true }) }
+    withUseDuringRegistration({ tools: registry }, root, () => {
+      registry.register(foreign)
+    })
+    assert.equal(got.length, 1)
+    assert.equal(got[0].args[0], foreign, '别人那份定义要原样交出去')
+    assert.equal(got[0].self, registry, 'register 的 this 必须还是原来那个对象')
+    const { events } = await readEvents(root)
+    assert.equal(events.length, 0, '别人的工具不进她的 use 账')
+  })
+})
+
 test('回忆：use: 行翻得到，读出来是一句人话', () => {
   const now = Date.now()
   const events = [

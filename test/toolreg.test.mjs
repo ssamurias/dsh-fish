@@ -28,6 +28,7 @@ import {
 } from '../lib/toolreg.js'
 import { FISH_TOOLS, HER_TOOLS, fishToolsNow, herToolsNow, herSceneToolsNow, registerToolRestrict } from '../lib/restrict.js'
 import { withUseDuringRegistration } from '../lib/use.js'
+import { defineTool } from '../lib/tool.js'
 
 /** 0.9.x 实际注册的那 13 个（`grep "name: '" lib/*.js` 对着数的）。 */
 const ALL_TOOLS = [
@@ -162,9 +163,12 @@ test('注册期记账由 withUseDuringRegistration 顺手做掉，注册失败�
     },
   }
   withUseDuringRegistration(ctx, 'D:\\root', () => {
-    ctx.tools.register({ name: 'her_say', execute: async () => 'ok' })
-    ctx.tools.register({ name: 'growth_commit', execute: async () => 'ok' })
-    assert.throws(() => ctx.tools.register({ name: 'boom_tool', execute: async () => 'ok' }), /registry 拒了/)
+    ctx.tools.register(defineTool({ name: 'her_say', execute: async () => 'ok' }))
+    ctx.tools.register(defineTool({ name: 'growth_commit', execute: async () => 'ok' }))
+    assert.throws(
+      () => ctx.tools.register(defineTool({ name: 'boom_tool', execute: async () => 'ok' })),
+      /registry 拒了/,
+    )
   })
   assert.deepEqual(registeredToolNames().sort(), ['growth_commit', 'her_say'], '真正下发过的才记账')
   assert.ok(!registeredToolNames().includes('boom_tool'), '注册抛错的那次不算——界面不该显示一只不存在的手')
