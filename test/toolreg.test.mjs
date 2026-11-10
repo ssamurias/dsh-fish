@@ -28,6 +28,7 @@ import {
 } from '../lib/toolreg.js'
 import { FISH_TOOLS, HER_TOOLS, fishToolsNow, herToolsNow, herSceneToolsNow, registerToolRestrict } from '../lib/restrict.js'
 import { withUseDuringRegistration } from '../lib/use.js'
+import { defineTool } from '../lib/tool.js'
 
 /** 0.9.x 实际注册的那 13 个（`grep "name: '" lib/*.js` 对着数的）。 */
 const ALL_TOOLS = [
@@ -162,12 +163,18 @@ test('注册期记账由 withUseDuringRegistration 顺手做掉，注册失败�
     },
   }
   withUseDuringRegistration(ctx, 'D:\\root', () => {
-    ctx.tools.register({ name: 'her_say', execute: async () => 'ok' })
-    ctx.tools.register({ name: 'growth_commit', execute: async () => 'ok' })
-    assert.throws(() => ctx.tools.register({ name: 'boom_tool', execute: async () => 'ok' }), /registry 拒了/)
+    ctx.tools.register(defineTool({ name: 'her_say', execute: async () => 'ok' }))
+    ctx.tools.register(defineTool({ name: 'growth_commit', execute: async () => 'ok' }))
+    assert.throws(
+      () => ctx.tools.register(defineTool({ name: 'boom_tool', execute: async () => 'ok' })),
+      /registry 拒了/,
+    )
   })
-  assert.deepEqual(registeredToolNames().sort(), ['growth_commit', 'her_say'], '真正下发过的才记账')
-  assert.ok(!registeredToolNames().includes('boom_tool'), '注册抛错的那次不算——界面不该显示一只不存在的手')
+  // 兜底路径只能按「定义时」记账（2026-11-10 起不再替换 ctx.tools.register）：
+  // 注册紧跟着同步发生，真被 registry 拒掉的那一条也会记上——清单是给自己看的自检，
+  // 宁可多一个名字，也不能为了「成功后记」再去动共享的 tools 服务。
+  assert.deepEqual(registeredToolNames().sort(), ['boom_tool', 'growth_commit', 'her_say'])
+  assert.deepEqual(registered, ['her_say', 'growth_commit'], '真正下发过的仍是这两条')
   // 包一层不许改变原行为：返回值照旧透传、原 register 要换回去
   assert.equal(typeof ctx.tools.register, 'function')
 })

@@ -157,7 +157,7 @@ test('withUse：工具抛错也留一笔，错误照旧往上抛（用户 m00493
   })
 })
 
-test('withUseDuringRegistration：注册期间临时换 register，用完换回来', () => {
+test('withUseDuringRegistration：不碰 ctx.tools，我们自己的定义照样包一层', () => {
   const defs = []
   const ctx = {
     tools: {
@@ -168,16 +168,18 @@ test('withUseDuringRegistration：注册期间临时换 register，用完换回�
     },
   }
   const orig = ctx.tools.register
-  const seen = []
+  const keysBefore = Object.keys(ctx.tools)
   withUseDuringRegistration(ctx, '/tmp/root', () => {
-    seen.push(ctx.tools.register === orig)
-    ctx.tools.register({ name: 'her_note', execute: async () => ({ ok: true }) })
+    ctx.tools.register(defineTool({ name: 'her_note', execute: async () => ({ ok: true }) }))
   })
-  // 注册期间确实换成了包装版，注册完恢复原样
-  assert.deepEqual(seen, [false])
+  // 2026-11-10（外部真机）：给 ctx.tools 换 register 会写到共享的服务实例上，
+  // 那个 patched 会一直留着、还把 this 钉在我们这个 ctx 上。所以这里一个字节都不能动。
   assert.equal(ctx.tools.register, orig)
+  assert.deepEqual(Object.keys(ctx.tools), keysBefore, '不许多出属性，也不许换掉原来的方法')
   assert.equal(defs.length, 1)
   assert.equal(defs[0].name, 'her_note')
+  // 我们自己的定义确实被包了（execute 换成了带记账的那个）
+  assert.notEqual(defs[0].execute, undefined)
 })
 
 test('withUseDuringRegistration：没有 register 时照常跑，不炸', () => {
@@ -240,6 +242,81 @@ test('宿主把 ctx.tools 包成只读 proxy：不抛，注册照走、记账照
     // 出来之后 defineTool 回到恒等，不把注册期的钩子漏到外面
     const spec = { name: 'later' }
     assert.equal(defineTool(spec), spec)
+  })
+})
+
+// 2026-11-10（外部真机 0.9.7）：注册窗口里宿主可能正在挂 agent preset——
+// `subagent` / `persona` 这类就是那条路上来的。那些定义不是我们的：不包 execute、
+// 不记 use 账，`this` 也原样交回去。把它们钉在我们的 ctx 上，等于把预设工具
+// 注册到全局层；之后每个 agent 再挂一次，宿主就报 `tool "subagent" is already registered`。
+test('注册窗口里别人注册的工具原样透传，不包、不记、不钉 this', async () => {
+  await withRoot(async (root) => {
+    const got = []
+    const registry = {
+      register(...args) {
+        got.push({ args, self: this })
+        return () => {}
+      },
+    }
+    const foreign = { name: 'subagent', execute: async () => ({ ok: true }) }
+    withUseDuringRegistration({ tools: registry }, root, () => {
+      registry.register(foreign)
+    })
+    assert.equal(got.length, 1)
+    assert.equal(got[0].args[0], foreign, '别人那份定义要原样交出去')
+    assert.equal(got[0].self, registry, 'register 的 this 必须还是原来那个对象')
+    const { events } = await readEvents(root)
+    assert.equal(events.length, 0, '别人的工具不进她的 use 账')
+  })
+})
+
+// 2026-11-10（外部真机 mikka 报告）：`ctx.tools` 是按 ctx 现取的追踪 proxy——
+// 读出来是影子方法，写属性却落到共享的服务实例上。注册期只要给它赋一次值，
+// 整进程的 tools 服务就多出一个 patched（真机上一直没被摘掉），别人的注册
+// 还会被钉在我们的 ctx 上，落到全局层。
+// 这条用例把「共享服务 + 每个 ctx 一个视图」的模型搭出来，盯两件事：
+// 窗口里我们注册完，共享服务上不能多出 register；窗口外别人注册照旧落在自己那一层。
+test('注册期不写共享的 tools 服务：窗口结束后别人的注册照旧落在自己那一层', async () => {
+  await withRoot(async (root) => {
+    const calls = []
+    // 共享实例：只存数据，方法是每个视图各自给的影子版本
+    const shared = { calls }
+    const view = (who) =>
+      new Proxy(shared, {
+        get: (t, k) =>
+          k === 'register'
+            ? function register(def) {
+                t.calls.push({ who, def })
+                return () => {}
+              }
+            : t[k],
+        // 与 cordis 一致：写属性 = 写到共享实例上
+        set: (t, k, v) => {
+          t[k] = v
+          return true
+        },
+      })
+    const a = view('a')
+    const b = view('b')
+
+    withUseDuringRegistration({ tools: a }, root, () => {
+      a.register(defineTool({ name: 'her_probe', execute: async () => ({ ok: true }) }))
+    })
+
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(shared, 'register'),
+      false,
+      '共享服务上不能多出 register（写穿会让整进程都被包住）',
+    )
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].who, 'a')
+
+    // 窗口之外，另一个 ctx 注册同名工具：必须落在自己那一层、不被我们包
+    const foreign = { name: 'subagent', execute: async () => ({ ok: true }) }
+    b.register(foreign)
+    assert.equal(calls.length, 2)
+    assert.equal(calls[1].who, 'b')
+    assert.equal(calls[1].def, foreign)
   })
 })
 
