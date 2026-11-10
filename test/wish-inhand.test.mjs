@@ -118,6 +118,12 @@ async function withHer({ allow = [], host, cold = false, sid = 's1', own = [] },
   // 2026-11-09：把时钟钉住。`tick()` 里按「今天醒过几次」「是不是刚请过假」这类判据
   // 都跟本机时间走，凌晨跑与晚上跑结果不一样（同一份代码 TZ=UTC 全绿、本地 05:3x 挂 3 条）。
   // 这里只覆盖 `Date.now()`（tick 用的就是它），固定到一条本地傍晚的时刻。
+  //
+  // 2026-11-10：`wakeNow()`/`wake()` 读的是 `new Date()`，不是 `Date.now()`，
+  // 所以「钉住的那条钟」和「叫醒看到的钟」会各走各的。卡的时间戳按钉住的钟写、
+  // 叫醒按真实钟读到 3 天以后，「还没答的摆 3 天」那条窗口就被走完了——测试会随
+  // 真实日期过期（这条 10 小时前的卡在 11-10 傍晚开始挂）。凡是调 `wakeNow` 的地方
+  // 都显式传 `now: new Date(Date.now())`，让叫醒也看钉住的那条钟。
   const realNow = Date.now
   const FIXED_NOW = new Date('2026-11-07T21:00:00+08:00').getTime()
   Date.now = () => FIXED_NOW
@@ -183,7 +189,7 @@ test('宿主上没有 read_image：她要它的那张卡不算到手，桌上、
     assert.equal(looseEnds(events, { now, has: hasNow() }).length, 1, '悬着的事里也得有它')
 
     const h = fakeHost()
-    const r = await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    const r = await wakeNow(h.ctx, { root, sessionId: 's1', force: true, now: new Date(Date.now()) })
     assert.equal(r.ok, true, JSON.stringify(r))
     assert.equal(h.prompts.length, 1)
     assert.match(h.prompts[0].section, new RegExp(READ_IMAGE_WISH), '叫醒的桌子上要摆着这张卡')
@@ -207,7 +213,7 @@ test('白名单里写了、宿主上没装：答应过的卡照摆「还没见�
     assert.deepEqual(w.map((x) => x.text), [IMAGE_GEN_WISH])
 
     const h = fakeHost()
-    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true, now: new Date(Date.now()) })
     assert.equal(h.prompts.length, 1)
     assert.match(h.prompts[0].section, new RegExp(IMAGE_GEN_WISH))
     assert.match(h.prompts[0].section, /他答应了，还没见到/)
@@ -260,7 +266,7 @@ test('冷会话：叫醒时先接上会话再摆桌子，已经到手的卡不�
     assert.equal((await settleAsk(root, { askId: id, verdict: 'approve' })).ok, true)
     assert.equal(sent.length, 0, '前提：她的 agent 还没建，收窄还没下')
     const h = fakeHost({ onResolve: warm })
-    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true, now: new Date(Date.now()) })
     assert.equal(h.prompts.length, 1)
     assert.doesNotMatch(h.prompts[0].section, new RegExp(SEARCH_WISH))
   })
@@ -286,7 +292,7 @@ test('冷会话、宿主上没有 read_image：叫醒的桌上照摆；核实之
 
     // 叫醒：会话先接上，按她这条会话真有的工具摆——read_image 没有，卡照摆
     const h = fakeHost({ onResolve: warm })
-    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true, now: new Date(Date.now()) })
     assert.equal(h.prompts.length, 1)
     assert.match(h.prompts[0].section, new RegExp(READ_IMAGE_WISH))
     assert.match(h.prompts[0].section, /你问过，还没有答复/)
@@ -348,7 +354,7 @@ test('会话 id 两边写法不一样、还有一间群房：叫醒的桌子按�
     const id = await wish(root, { text: IMAGE_GEN_WISH, subject: 'image_gen' })
     assert.equal((await settleAsk(root, { askId: id, verdict: 'approve' })).ok, true)
     const h = fakeHost()
-    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true, now: new Date(Date.now()) })
     assert.equal(h.prompts.length, 1)
     assert.match(h.prompts[0].section, new RegExp(IMAGE_GEN_WISH), '家里没有 image_gen：不能按群房的算成到手')
     assert.match(h.prompts[0].section, /他答应了，还没见到/)
@@ -361,7 +367,7 @@ test('宿主交回来的就是家里那个 agent：头里没写会话 id 也按�
     const id = await wish(root, { text: IMAGE_GEN_WISH, subject: 'image_gen' })
     assert.equal((await settleAsk(root, { askId: id, verdict: 'approve' })).ok, true)
     const h = fakeHost({ agentOf: (sid) => (sid === 's1' ? agent : null) })
-    await wakeNow(h.ctx, { root, sessionId: 's1', force: true })
+    await wakeNow(h.ctx, { root, sessionId: 's1', force: true, now: new Date(Date.now()) })
     assert.equal(h.prompts.length, 1)
     assert.match(h.prompts[0].section, new RegExp(IMAGE_GEN_WISH))
     assert.match(h.prompts[0].section, /他答应了，还没见到/)
