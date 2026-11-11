@@ -1,5 +1,71 @@
 ## 0.9.8 — 未发布
 
+- **她回完话接着往下「续写对话记录」的那一段，现在进不了账本（外部用户，2026-11-11，W49）。** 症状：回复末尾会自己接上 `user <凭空编的对方台词>` / `assistant <她接着编的自己台词>`，后半段纯虚构，有时连地名都是现编的。发生率在案发机器上从 0% 两天内爬到 19%（42 条里 8 条），三个实例里最典型的一条她自己写出了「浙西川藏线」，整条会话里只有她写过这个词，下一轮她当既成事实用。
+  - **为什么必须在源头切**：同一段正文有四个出口——`talk-recent.json` 的「上次我们说到这」（`lib/talkmem.js:85` 原样存，`:127-128` 又拼回下一轮提示词）、`events.jsonl` 的 `utterance`、`utterance` 进的 `wontCount`/`consistency` 这些尺子、以及 `lib/home.js` 问「上一个房间最后说了什么」。存下来又送回提示词就是自增强，只有入库前切得掉。
+  - **落刀点**：新建 `lib/transcript.js`（`hasTranscriptTail` / `stripTranscriptTail` / `transcriptStart` / `partialMarkTail` / `MARK_WORDS`），接在 `lib/turns.js` 的 `assistantText()` 里——它是 `turns.js`、`say.js`、`compact.js`、`home.js` 四处共用的唯一入口，函数头注释原本就写着「清洗只做一次、收在一个纯函数里，两边都从那儿取，才不会一边干净一边脏」。`lib/home.js:842` 与 `lib/scrub.js` 的 `washBlock` 也一并接上。
+  - **判据只认行首标记**，不猜句式：行首（允许空格、引用符 `>`、列表符、`#`）出现 `user` / `assistant` / `human` / `用户` / `助手`。英文那几个后面必须跟冒号、行尾、或「空格 + 非英文字母」，所以 `user experience`、`AI agent`、行中的 `assistant` 一个字都不动（`test/transcript.test.mjs` 钉着）。
+  - **两条纪律**：**只切不改写**——从标记那一行起整段丢，前面一个字符都不动；改写是「替她说」，切尾巴只是「少记一句」。**宁可少留一句真话，也不留下半句假话**——标记在中间、后面还有真话时（真机有一例）也一并切掉。
+  - **流式那一路也接了**：`lib/scrub.js` 的 `createWasher` 新增行首跟踪与「半个标记词」压字（`partialMarkTail`），`us` + `er 你好` 这种被 chunk 切开的两半不会各放一半；撞上标记后整条流剩下的正文都不再放（`stopped`），中断流走的就是这条路径。`block-end` 拿的是整段，再切一次兜底。
+  - 测试：新建 `test/transcript.test.mjs` 11 条（末尾假对话、中文「用户 嗯嗯」、标记在中间、正常正文零改动、引用/列表/井号前缀、空行收拾、原样返回、`hasTranscriptTail` 连调两次、`transcriptStart` 下标、`partialMarkTail`、`MARK_WORDS`）＋`test/scrub.test.mjs` 续 3 条（假对话不进正文、`us`+`er` 切半也认得出、`per-user` 不动）。全量 **2202 pass / 0 fail**（约 28 秒）。
+
+- **工具面收窄改成「先等注册到齐，到点按现状收」：开房先等已登记的工具注册上，三秒内齐了用完整名单，没齐就按已经到的收窄（2026-11-11）。** 起因是 0.9.8 真机上一次泄漏：19:51 启动时连报 13 条 `cannot create effect on inactive context`，20:11 第一个 agent 建好、`tools.restrict()` 抛 `unknown global tool "growth_commit"`——旧的「名字没齐就整段不收窄」把整批全开了。21:04 唤醒那一轮，她的 `request/header` 里出现 **101 件工具**（含 `compress` 与它的完整说明），她读完真去调，被守卫挡回「这件事我做不到」——用户看到的就是这句。
+  - **先窄**：`lib/restrict.js` 的 `applyRestrict()` 先下新刀、再收旧刀；新增 `applyNarrow()`，只要认得出名字就先下窄刀（`allow ∩ restrictableNames`），报 `why:'narrowed'`。名字在重试窗口内齐了，再换完整刀（`applied` / `applied-late`）。
+  - **后全收窄**：3 秒（200ms × 15）还没齐，**窄刀留着，不撤也不全开**，报 `why:'narrowed-late'`；一个名字都认不得（连空的都没法下）才 `deferred`、整段全开，只靠守卫兜底。这条是用户拍板的取舍：宁可这一局少一件工具，也不把全部工具摊给她。
+  - **多次对名册**：`recheckToolRestrict()` 会在叫醒前（`lib/deliver.js`）、重启后 4 秒（`lib/restrict.js` 的 `startupRecheck`，挂 dispose 清理）、存白名单（`/config` → `refreshToolRestrict`）时按当下 `view()` 再下一刀，晚到的外部工具当场补进来；已经一致的刀用 `knifeKey` 跳过，不白叠一层。
+  - **边界没变**：收窄只改「她看得见什么」，不是物理隔离；守卫与拒绝文案一个字没动，手改 `config.json` 仍要重启或再存一次。
+  - 测试：`test/restrict.test.mjs` 续 4 条（窄刀换完整刀且旧刀后收、3 秒不齐保持窄刀、晚到工具再对名册补进来、一个名字都没认得不下空刀）＋旧用例按新语义改写；`test/restrict-boot.test.mjs` / `test/restrict-runtime.test.mjs` / `test/wish-inhand.test.mjs` / `test/boot.test.mjs` 的「只收一次」断言改成看最后一刀，启动定时器挂 dispose。全量 **2181 pass / 0 fail**（约 30 秒）。
+
+- **白名单存好就当场换刀，不用再重启 DSH（外部用户，2026-11-11）。** 反馈的原话是「工具栏收窄时，tools.restrict 的白名单修改，重启 dsh 才生效，不是实时生效」——他 20:24 启动时名单里只有 6 个工具，21:25 把 4 个 `qq_space_*` 加进去，21:26 她伸手，守卫还是拿 20:24 那份清单挡回去，拒绝语里念的也还是那 6 个。
+  - **根因**：`lib/index.js:239` 启动时只调一次 `registerToolRestrict`，`allow` 在那里面算一次（`lib/restrict.js:573-591`），之后 `agent/created` 闭包一直用这份；设置页存白名单只走 `updateConfig` + `refreshSelfDoc`，**没有任何一步碰收窄**（`lib/observe.js` 的 `/config`）。所以不光当前会话不换，轮换出来的新会话也照样用旧名单。
+  - **先说清一件事**：仓库里「只能减不能加」那几句注释（`lib/restrict.js:27`、`:785`、`:795`）说的是「不 dispose 就再 restrict 一次 = 交集」。宿主 `dsh-tools/lib/index.js:446-468` 的 `restrict()` 明确返回 `the exact disposer that lifts this restriction`，可见集是 `layers.every((layer) => layer.admits(name))`（`:477-508`）——**先下新刀、再收旧刀**就能放宽，中间也不会出现没刀的空档。
+  - **改法**：给每个 agent 一份运行时记录（`agentRuntime` WeakMap：`allowSet` / `disposeRestrict` / `gen`），守卫改成读 `allowSet`（拒绝语也按它念），新建会话也按当下名单收；新增 `refreshToolRestrict({ extra })`，重算 `allow`/`surfaceNow`/`inHandAllow`，对每个活着的 agent 先 apply 新 `restrict` 再 dispose 旧的，`gen += 1` 让还没跑完的延后重试作废。
+  - **谁触发**：`/config` 存完比较前后 `tools.allow`（JSON 比），变了才换；回包多一个 `toolsLive: { ok, deferred }`，界面据此说「现在就生效」还是老说法。名单没变回 `null`，不白下一次刀。
+  - **边界要说明白**：手改 `config.json` 没有 watcher，仍要重启或再存一次才换；「工具面收窄」这颗开关本身、以及「允许她记梦」，仍按启动那一刻的取舍走（打开要重启）——这次只让白名单活起来。
+  - 测试：`test/restrict.test.mjs` 续 4 条（存后当场换刀、也能拿掉、换刀后新会话按新名单、收窄关着时什么都不做）；`test/restrict-runtime.test.mjs` 改写 1 条（原「还没重启守卫还挡」改成「当场放行、身份文档同一轮就念出来」）；`test/tools-card.test.mjs` 续 2 条 + 改 2 条文案断言（服务端说换了刀就说现在就生效、老服务端仍说重启）；`test/p5.test.mjs` 补 `toolsLive` 存在与「名单没变是 null」。全量 **2172 pass / 0 fail**（约 28 秒）。
+
+- **醒来便条改成「没念过的队列」：跨天不再丢，念不完的下次接着念（外部用户，2026-11-11）。** 反馈的原话是「刷了九条只给我看三条，而且当天刷了当天没再醒，那次就等于没刷」。查下来是三处口径叠在一起，全在便条这一段。
+  - **量出来的事实**：真机 `events.jsonl` 里累计刷到 69 个不同 BV，便条只念过 12 个，**60 个从未被念过**；近几天每天都是「刷到 8、念到 3 或 0」。
+  - **根因一：`since` 按天算**。便条的起点由 `lastWakeAt()` 给，而它只认当天那一行 `wake:`——跨了零点就等于今天还没醒过。前一晚刷到的既不在「上次醒来之后」，也不在「今天」，直接消失。（同一个函数还被叫醒最小间隔用，那里按天是对的，所以只改便条这一处。）
+  - **根因二：承诺与实现相反**。`scheduler.js` 那句注释写着「剩下的留给下一次醒来」，但下一次醒来的 `since` 正是这一次，剩下几条的时间戳早于它，被时间过滤当场滤掉 —— 永远轮不到。
+  - **根因三：`dk` 只认今天**。`parseBrowseLine(e.text, dk)` 把日期钉死成今天，昨天刷到的第三天就再也进不来。
+  - **改法：换成队列，不换参数**。新增 `lib/whatseen.js` 的 `pendingGlances()`：只看「近 7 天刷到」与「`digest:` 账里没念过」两件事，念一条划掉一条。跨天照样排着，这次念不完的下次醒来接着念。
+  - **条数不再是死数，跟着配置走（同日三次反馈，用户 m01004）**。6 只对「一天两趟 × 四张、醒两次」这个配置刚好够；用户问「那一天刷四五轮、每次七八条呢」——实算下来 4×7 配醒 2 次是每天刷 28 条、只能念 12 条，90 天稳态积压 184 条、**43% 念得到**，等于又回到「刷了看不见」。但硬把上限调大，轻配置那批人的便条就会莫名其妙多出一串。所以新增 `digestNamesFor(config)`：`ceil(perDay × topN ÷ min(daily.events, wakesPerDay)) + 2`，夹在 3–20 之间。眼下配置算出来正好是 6，行为不变；4×7 醒 2 次是 16，4×7 醒 4 次是 9。**额度只是天花板**——积压没那么多时，`browseDigestLine()` 照实全念（用户原话：「如果积压的视频没有那么多条，就有几条显示几条」）。
+  - **条数 3 → 6，窗外那批折叠成一行**（同日二次反馈，用户 m00690）。换成队列只保证「不丢」，不保证「轮得到」：产出 8 条/天（2 趟 × topN 4）、消费 6 条/天（2 次醒来 × 3），差 2 条，真机队列从 18 一路涨到 39 就没降过；而且 7 天窗一到就把最老的悄悄踢掉，实测已有 35 条这样没的。所以 `DIGEST_NAMES_MAX` 提到 6（每天能念 12 条，四五天清空积压），并新增 `whatseen.js` 的 `staleGlances()`：窗外还剩多少条没念过，便条末尾补一句「（还有 N 条更早的，没摆出来）」。不念标题——早该翻篇了；但也不假装它们没存在过。
+  - **`glancedItems()` 去掉 `since` 参数**：它只给便条用，留着就是两套口径各说各话。剩下的调用方（`handedUnseen()` / `seenOn()`）本来就不传。
+  - **文案跟着改**：抬头统一成「最近你自己又翻到了」。以前的「今天」和「上次醒来之后」在跨天队列下都会撒谎。
+  - 测试：`test/freewake.test.mjs` 的源码正则断言同步改写（含 `staleGlances` / `digestNamesFor` 那条）；`test/quiet-browse.test.mjs` 重写成两条 `pendingGlances` 用例（跨天排着 / 念不完留着）+ 两条新用例（`staleGlances` 的口径 / 折叠那句怎么说）+ 两条 `digestNamesFor` 用例（额度算法 / 积压不够时照实全念）。全量 **2176 pass / 0 fail**。
+
+- **他几天没回她，冷落钟却一直清零——本机别的会话被当成了「他来过」（2026-11-11）。** 用户问「我持续好几天没有回过她一句话，为什么还没有算冷落」。查下来冷落判定本身没坏（`absenceAfterDays: 2`，阈值两天），坏的是「谁算他来过」：`lib/turns.js` 的 `onHuman` 对**任何**不是她住的那条会话里的真人消息都写一条 `meta seen:`（那是 2026-11-03 为 QQ 桥自建会话加的，issue #18）。结果他在本机跟别的 agent 说话，她那边的冷落钟就清零——实测最后一条 `seen:` 正是他当下这个开发会话的节奏（16:21、16:26、16:40、17:02、17:07、17:11），她永远 `within-threshold`。
+  - **改法**：客户端亲手打的字（`source.kind === 'user'` 且带 `clientTimeZone`）只认「她的房间」——她住的那条会话，或 `channels.json` 里登记过的桥房间（新增 `lib/channels.js` 的 `isChannelSession(root, sessionId)`）。本机别的 DSH 会话不再写 `seen:`。
+  - **边界**：桥注入的消息（`kind` 不是 `user`，或没有 `clientTimeZone`）照旧算，QQ 私聊那条路不能断（issue #18）；群聊与群友私聊在 `classifyMessage` 那一步已经挡掉，走不到这里。
+  - 测试：`test/turns.test.mjs` 把「不是她屋里那个会话，不记」改成「本机别的 DSH 会话里他说话，不算他来找过她」并断言 `seen` 为 0；新增「桥登记过的房间（channels.json）里他说话，仍然算他来过」；重复注册那条改用桥的来源形态，保住「只写一遍」的断言。全量 **2177 pass / 0 fail**。
+
+- **换新会话时带几轮原话，现在能自己设了（外部用户，2026-11-11）。**
+ 这个数以前是写死的 4 轮（`lib/talkmem.js` 的 `TALK_KEEP`）：换窗口时只把最后四条原话搬过去。聊得稀的人够用，一天聊几十句的人不够——新窗口头几轮接不上，像断在半句话上。反馈要的是「记住多少让我自己定」，所以加的是环境参数，不是人格旋钮。
+  - 设置页「记忆 → 会话与身份」新增「换新会话时带几轮原话」，默认 4、范围 0–20（`config.chat.carry`，上限 `CARRY_MAX = 20`）。0 = 不带，只靠身份段和她自己去翻；带得越多，换窗口后头几轮越占上下文——说明里写清了这一句。
+  - **存得比默认多**：`talk-recent.json` 按上限留 20 轮，读的时候才按设置截。所以把 4 调到 10，下一次换窗口立刻有 10 轮可带，不用等新对话重新攒。
+  - **顺手修了一个真 bug**：`recentExchanges(root, 0)` 原本走 `slice(-Math.max(1, n))`，要 0 轮反而带 1 轮——设置成 0 的人会看到一段莫名其妙的「上次我们说到这」。
+  - 设置读不出来时回退 4 轮，不让换会话这种动作因为一个配置读失败而失败；群房轮换仍不搬原话（群房按天换、且 talkmem 的 group 桶不分房间，属另一件事），这次不动。
+  - 测试：`test/mem.test.mjs` 改写 1 条、续 2 条（盘上按上限留但默认只读四轮、要 0 就是 0、调小与 0 的轮换实测）；`test/settings.test.mjs` 续 1 条（默认 4、夹在 0..20）；`test/client-copy.test.mjs` 续 1 条（有自己的说明、写 0 等于不带）；`test/p5.test.mjs` 的 /config 保存用例断言 `chat.carry` 真存进去。全量 **2166 pass / 0 fail**（约 35 秒）。
+
+- **写到第 90 天就说「看不了以前的日记」——根不是权限，是没有索引（外部用户，2026-11-10）。** 她的工具一直只能按日期翻，而清单又静默截到最近 60 天：她能看见的日子就那六十个，看不见的那些既不知道该翻哪天，也无从知道自己还有。真正卡住她的是「记得写过什么、不记得哪一天」这种事，而工具只认 `YYYY-MM-DD`。
+  - **清单不再静默截断**：`lib/herdiary.js` 的 `DIARY_LIST_MAX = 60` 顶格时补一句「这里先列最近 60 天，更早的还有 N 天没列出来——它们都还在。想翻哪一天，直接把日期告诉我；只记得写过什么、不记得哪一天，就给个词，我去日记里找。」截了就说，是这次最先改的一条——原来那句 `slice(0, 60)` 什么也不说，是她「翻着翻着就没了」的直接原因。
+  - **`her_diary` 多一个 `keyword`**：给一个词就去翻得到的日记里逐篇找，回来的是**每一处在哪一天 + 命中的那一行前后各 40 字**（`snippetAround()`），新的在前，最多 20 处（`DIARY_HIT_MAX`），超了明说还有几处没列。跟 `date` 一起用就只在那一天里找。
+  - **数的是「处」不是「篇」**：同一天提了两次就是两处，散在不同段落里本来也该分开看。
+  - **没找到就说没找到，绝不写「那天没有日记」**：那天她可能真写过，只是没提这个词。`lib/use.js` 的 `SAYING` 跟着加了 `keyword` 分支——回执是「找到了／没找到」，不是「那天没有日记」；记错这一句，她以后翻自己的回忆会以为自己那天没写。
+  - **只搜还翻得到的**：被「日记留多久」清掉的文件已经不在了，假装它可能在里面比直接说没有更糟；这时末尾会补一句「更早的 N 篇已经不在了，那些翻不到」。
+  - 顺手把 `DIARY_BRIEF` 里那句「想回头翻的时候用 her_diary」补成「只记得写过什么、记不清哪一天，就给个词让它去找」——工具加了能力、说明书不写，她永远只会按天试（这条之前漏过一次）。
+  - 测试：`test/herdiary.test.mjs` 续 7 条（清单列不下要说、够短时不多嘴、按词找带日期与命中句、没命中不说「那天没有日记」、词 + 日期只在那天找、命中太多说明还有几处、回执口径）。全量 **2161 pass / 0 fail**（约 32 秒）。
+
+- **正文里漏出来的工具调用语法，在落盘之前就洗掉了（外部真机，2026-11-10）。** 两位用户报的是同一类症状、两副面孔：一位看到她的「正文」里明晃晃夹着一行 `<her_note action="list" filter="open"/>`（真话在前、标记在后）；另一位看到成串的 `</｜｜DSML｜｜ parameter> </｜｜DSML｜｜ invoke> </｜｜DSML｜｜ calls>`。两人都试过直接跟她说「正文别带这个英文」，没用；问到插件头上时插件答「这一段是空白」——因为她的账本里**确实**已经清干净了（`lib/markup.js` 从 issue #25 起就挡着「别把标记记成她的话」），脏的只是会话里那条 assistant 原文。
+  - **为什么以前修不到**：宿主前端只渲染 `surfaceOp === 'append'` 的原件（`dsh-session` 对替换副本的注释原话是「replacement copies stay model-only」），事后盖不掉已经落盘的那段；客户端插件也没有 assistant 正文的 text-transform 槽，硬接管 `conversation.chat.node` 等于重写整个消息渲染器。
+  - **修在哪**：新增 `lib/scrub.js`，在 `attachIdentity` 里挂宿主的 `llm/stream` waterfall（官方 `dsh-session-title` 也这么用），模型吐一个 chunk 就洗一个，**改完才组装成 `assistant/message` 落盘**。挂不上（老宿主没有这个 waterfall）返回 undefined，她只是接着漏，不算失败；`detachOutside` 会与组装钩子一起拆。
+  - **两处都要洗**，理由在宿主 `dsh-llm/lib/types/assembler.js`：`block-end` 里 `partial.block = chunk.block` 且 `assemble()` 优先返回它，所以**最终落盘的那份正文取自 block-end**；流被打断时 `interruptedBlocks()` 用**累加起来的 delta** 组装，只洗 block-end 会在中断那一轮漏掉。
+  - **只认自己认得的东西**：DSML 那一套（交给 `markup.js`）+ **本插件真注册过的工具名**的 XML 外壳。不猜别的工具语法——`a < b`、`<div>`、`<qq_send_message/>` 一个字都不改（`test/scrub.test.mjs` 钉着）。
+  - 细节：标记被切在两个 chunk 之间（`</｜｜DS` + `ML｜｜ invoke>`）靠压住「像半个标记的尾巴」接上；压着的那点字在 `block-end`/`finish`/流断掉时都会放出去，不吞字；**整个清洗 fail-open**——洗的时候炸了也原样放行，少洗一次只是多一行脏字，把流打断了是她这一轮整个说不出来。
+  - **认会话只能靠自己**：宿主的 `llm/stream` 是把 `this`（LlmRuntime 实例）当 thisArg 派发的，而 LlmRuntime 上没有 `[Context.filter]`——cordis 的 `hook.global || !filter || filter.call(...)` 于是恒真，**挂在哪个 ctx 上都对全进程所有会话生效**，作用域保护不了。所以这里按 `options.sessionId` 自己认（`dsh-agent-loop` 组装请求时写死等于 `session.id`）：对不上、或认不出来，一个字节都不碰，宁可她自己漏一行，也不去改别人的对话。
+  - 测试：新增 `test/scrub.test.mjs` 18 条（整段/成对/残标/成串 DSML、正常正文零改动、别的工具不碰、跨 chunk 拼接、压住的半截不吞字、别人的会话不碰、认不出会话时宁可不动、清洗炸了照放行、老宿主挂不上）；`test/identity.test.mjs` 与 `test/away.test.mjs` 里数钩子的两条同步改成数两个（组装 + 清洗）。全量 **2154 pass / 0 fail**（约 27 秒）。
+
 - **称呼不再靠「枚举坏句子」，改成只认明确在起名的那几种说法（issue #102，用户拍板 2026-11-10）。** 上一版补了数量词与祈使动词两张表，堵住了「一个人」「一声」「起床」，但那是「见到一句错的加一条规则」——句子空间是开的、名单是闭的，下一种合法说法还会漏（外部报告原话：「一条规则堵一类句子，堵不完」）。这一版换判据，三层：
   - **高置信帧**：名字带引号（`叫他「老张」`）、名字元语句（`名字是 X` / `叫的是 X` / `称呼是 X` / `他给的名字是 X`）、明确在定名字的壳（`以后 / 从今 / 改叫 / 就叫`）。**只有这一层能覆盖已有的名字。**
   - **低置信帧**：裸的「叫他 X」（`我叫他老张`）。只在还没有名字时采用一次，之后不再覆盖——它仍可能把「叫他起来」认成名字，但代价从「盖掉一个好名字、再也回不来」降成「最多第一次记错一个」。
@@ -17,6 +83,13 @@
   - **一处已知小差异**：这条路上没有「下发成功」的回执，注册清单按定义时记——真被 registry 拒掉的那一条也会多记一个名字（清单只用在自检与 allow 基线里，多一个名字不影响行为）。
   - 测试：`test/use.test.mjs` 续两条——「不碰 ctx.tools，我们自己的定义照样包一层」、「注册期不写共享的 tools 服务：窗口结束后别人的注册照旧落在自己那一层」（用共享实例 + 每 ctx 一个视图把宿主那套模型搭出来）；`test/toolreg.test.mjs` 的记账用例改成走 `defineTool`（真实路径）。全量 **2130 pass / 0 fail**（约 30 秒）。
   - 待对方在 `0.2.1-rc.5` 上复验：这条入口已堵；若仍复现，说明宿主还有第二个重复挂载点，按报告里的 `agent/disposed` 链路再查。
+
+- **三处提速：矛盾检测一次算完、认领只做一次全量派生、全量派生超过 500ms 留一行慢日志（issue #105，2026-11-10）。**
+  - `lib/derive.js` 的 `detectTensions` 以前为「摆出来的 3 条」和「总数」各跑一次，两次都把整份判断两两过一遍相似度。现在算一次（上限 500 不变）再切前三；前三条与总数同源。
+  - 新增 `envelopeOf()`：`growth_commit` 写信封（day/stage）只需一次线性扫描，不再为两个数付整条派生链。两者共用从 `deriveSelf` 整段搬出的 `visibleEvents`（被拒收的行与梦的口径一致），全量派生只留在写身份文档那一次。不把 capture 的派生结果直接传给 `writeSelfDoc`——派生发生在写事件之前，会漏掉刚写下的判断。
+  - 新增 `SLOW_DERIVE_MS = 500`（`lib/selfdoc.js`）慢日志：只记耗时、事件数、判断数，不写她的任何原话；走现有 `log.js`（自带脱敏与轮转），写不进去也不抛；阈值导出，测试钉住「恰好等于阈值算慢」。
+  - 实测：真机 1313 事件 49.8ms → 23.0ms（−54%），合成 1201 事件 / 1200 判断 1639ms → 680ms（−59%）。
+  - 测试：`test/derive.test.mjs` +3（`envelopeOf` 与 `deriveSelf` 在多组 now×growthDays 下一致、信封只有两个字段、tensions 单次与两次等价）、新增 `test/slowderive.test.mjs` 4 条。全量 **2188 pass / 0 fail**（约 31 秒）。
 
 - **素材有了统一形状，来源分三级（M3 的第 1、3、4 件事）。** 新增 `lib/material.js`：`GRADE = { FACT: 1, OPINION: 2, FICTION: 3 }`；`toMaterial(pack)` 把一条素材收成 `{ source, key, at, title, tags, facts[], quotes[], canVerify, blocked }`——可核对的事实全部是 1 级，别人说的话（简介、热评、弹幕）一律 2 级；`quotesOf(material, grade)` 按级取。
   - 分级是**写在结构里**的，不是写在提示词里：渲染时靠「谁写的」区分（`简介（UP 主自己写的）` / `[热评 N]` / `[不同意见 N]`），不给她看「1 级 / 2 级」这种标签，否则她会开始给材料打分。

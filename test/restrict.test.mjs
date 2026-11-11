@@ -13,7 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { HER_TOOLS, currentToolSurface, currentAllowTools, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools } from '../lib/restrict.js'
+import { HER_TOOLS, currentToolSurface, currentAllowTools, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools, recheckToolRestrict } from '../lib/restrict.js'
 import * as restrictMod from '../lib/restrict.js'
 import { wishesOf } from '../lib/wish.js'
 
@@ -309,14 +309,16 @@ test('自家工具晚到、重试后才收窄（applied-late）：前后都按�
   const host = HER_TOOLS.filter((n) => n !== 'read_image' && n !== 'her_recall')
   const her = hostAgent('C:\\h', { restrictable: [...host, 'web_search'] })
   ctx.emit('agent/created', { agent: her.agent })
-  assert.equal(her.sent.length, 0, '前提：这一下没收窄，进了重试')
+  assert.equal(her.sent.length, 1, '名字没齐：先下一把窄刀（0.9.8 的 B 方案）')
+  assert.ok(!her.sent[0].includes('her_recall'), '还没登记的名字先不塞进窄刀')
+  assert.ok(her.sent[0].includes('web_search'), '已经有的先给她，别让桌子一直全开')
   let has = currentAllowTools()
   assert.ok(has.includes('web_search'), '重试期间宿主有的她都看得见，守卫放白名单：到手')
   assert.ok(!has.includes('her_recall'), '还没登记的不算')
 
   her.restrictable.add('her_recall')
   await until(() => seen.at(-1)?.why === 'applied-late', '登记齐了要收窄下去')
-  assert.ok(!her.sent[0].includes('read_image'))
+  assert.ok(!her.sent.at(-1).includes('read_image'))
   has = currentAllowTools()
   assert.ok(has.includes('her_recall'))
   assert.ok(has.includes('web_search'))
@@ -332,7 +334,8 @@ test('换了一个她（还在重试）：按新的这个算，不沿用上一�
   // 新会话：自家名字还没到齐（进重试），web_search 这回也没有
   const b = hostAgent('C:\\h', { restrictable: HER_TOOLS.filter((n) => n !== 'her_recall') })
   ctx.emit('agent/created', { agent: b.agent })
-  assert.equal(b.sent.length, 0, '前提：B 还在重试')
+  assert.equal(b.sent.length, 1, 'B 还在等名字齐：先下窄刀')
+  assert.ok(!b.sent[0].includes('her_recall'), '还没登记的先不塞进窄刀')
   assert.ok(!currentAllowTools().includes('web_search'), 'B 手上没有 web_search')
   assert.ok(!currentAllowTools().includes('her_recall'))
 })
@@ -532,9 +535,9 @@ test('restrict 因「名字还没登记」抛错时：先不收窄，等登记�
     },
   }
   ctx.emit('agent/created', { agent })
-  assert.equal(calls.length, 1, '第一次先按完整清单试一把')
+  assert.deepEqual(calls[0].allow, ['read_image'], '第一刀只下宿主此刻真认得的名字（0.9.8 的 B 方案）')
   assert.equal(guards.length, 1, '兜底守卫要先挂上（不依赖名字表）')
-  assert.ok(say.some((m) => m.includes('延后')), '要如实说这次先不收窄')
+  assert.ok(say.some((m) => m.includes('先只给她已登记')), '要如实说这次先下了窄刀')
 
   // 宿主随后把她的工具登记齐了
   names = new Set([...HER_TOOLS])
@@ -660,7 +663,7 @@ test('own 层（dsh-ops 的 ops_*）能进白名单，但不会被塞给 restric
   assert.match(guards[0]({ name: 'web_search' }), /^这件事我做不到。/)
 })
 
-test('宿主没有 read_image：外部名字这次剔掉，照常收窄，不再永远延后（issue #61）', () => {
+test('宿主没有 read_image：外部名字这次剔掉，照常收窄，不再永远延后（issue #61）', async () => {
   // issue #61 真机：herToolsNow() 恒含 read_image；宿主没这个工具时，旧实现把它算成
   // 「还没登记完」，于是 restrict 每次都抛错、延后、再等——一次都没收窄过。
   // 名字不是我们自己注册的，等下去也不会出现；剔掉它，剩下的人照收。
@@ -691,11 +694,15 @@ test('宿主没有 read_image：外部名字这次剔掉，照常收窄，不再
   })
   ctx.emit('agent/created', { agent })
 
-  assert.equal(calls.length, 1, '应该当场收窄，而不是延后')
+  assert.equal(calls.length, 1, '先下窄刀，而不是整段延后')
   assert.ok(!calls[0].allow.includes('read_image'), '机器上没有的名字不该下给 restrict')
   assert.ok(!calls[0].allow.includes('qq_send_message'), '白名单里的外部名字也一样')
   assert.ok(calls[0].allow.includes('bili_look'), '真有的工具一个都不能少')
-  assert.ok(seen.some((r) => r.why === 'applied'), '要报成真的收窄了，不能停在 registered')
+  await until(() => ['applied', 'applied-late'].includes(seen.at(-1)?.why), '宽限过了要真收窄，不能停在 registered')
+  const last = calls.at(-1)
+  assert.ok(!last.allow.includes('read_image'))
+  assert.ok(!last.allow.includes('qq_send_message'))
+  assert.ok(last.allow.includes('bili_look'), '真有的工具一个都不能少')
   assert.ok(logs.some((m) => m.includes('read_image') && m.includes('没有')), '剔掉的名字要留一行日志')
   // 守卫仍按配置的全量放行：名字以后真出现了，不会被自己人挡住
   assert.equal(guards[0]({ name: 'qq_send_message' }), undefined)
@@ -728,9 +735,9 @@ test('自己的工具晚到、read_image 紧跟着到：宽限里等一等，晚
   ctx.emit('agent/created', { agent })
   await new Promise((r) => setTimeout(r, 80))
 
-  assert.equal(calls.length, 1, '只收窄一次')
-  assert.ok(calls[0].allow.includes('read_image'), '宽限期内到的名字要收进去，不能当场剔掉')
-  assert.ok(calls[0].allow.includes('growth_commit'), '自己的工具一个都不能少')
+  assert.ok(calls.length >= 1, '最终要落下完整刀')
+  assert.ok(calls.at(-1).allow.includes('read_image'), '宽限期内到的名字要收进去，不能当场剔掉')
+  assert.ok(calls.at(-1).allow.includes('growth_commit'), '自己的工具一个都不能少')
 })
 
 test('外部名字一直没来：宽限用完剔掉照收，不报 deferred（issue #61）', async () => {
@@ -762,10 +769,11 @@ test('外部名字一直没来：宽限用完剔掉照收，不报 deferred（is
   ctx.emit('agent/created', { agent })
   await new Promise((r) => setTimeout(r, 80))
 
-  assert.equal(calls.length, 1, '宽限过了也要照收，不能停在 deferred')
-  assert.ok(!calls[0].allow.includes('read_image'), '这台机器真没有的名字要剔掉')
+  assert.equal(calls.length, 2, '窄刀 + 宽限过后的完整刀')
+  assert.ok(!calls.at(-1).allow.includes('read_image'), '这台机器真没有的名字要剔掉')
   assert.equal(seen.at(-1).why, 'applied-late')
-  assert.equal(seen.at(-1).applied, 1)
+  // 2026-11-11：窄刀也算「真下过的一把刀」，所以这里计到 2（窄刀 + 宽限过后的完整刀）。
+  assert.equal(seen.at(-1).applied, 2)
   assert.ok(logs.some((m) => m.includes('read_image') && m.includes('没有')), '剔掉的名字要留一行日志')
 })
 
@@ -1036,4 +1044,202 @@ test('forgetBlockedTools 清空：重启后有没有被挡是新问题，不该�
   assert.equal(blockedTools().length, 1)
   forgetBlockedTools()
   assert.deepEqual(blockedTools(), [])
+})
+
+/** 带「刀口记录」的假 agent：restrict 的 disposer 记下来，好断言旧刀真被收掉。 */
+function agentWithDisposers(cwd) {
+  const calls = []
+  const disposed = []
+  const guards = []
+  const agent = {
+    session: { header: { cwd } },
+    ctx: {
+      tools: {
+        restrict: (filter) => {
+          calls.push(filter)
+          const dispose = () => disposed.push(filter)
+          return dispose
+        },
+        guard: (fn) => {
+          guards.push(fn)
+          return () => {}
+        },
+      },
+      effect: () => {},
+    },
+  }
+  return { agent, calls, disposed, guards }
+}
+
+test('白名单存盘后当场换刀：不用重启，她下一句就拿得到新加的工具（2026-11-11）', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\her-home', extra: ['web_search'], log: () => {} })
+  const h = agentWithDisposers('C:\\her-home')
+  ctx.emit('agent/created', { agent: h.agent })
+  assert.equal(h.calls.length, 1)
+  assert.ok(h.calls[0].allow.includes('web_search'))
+  assert.ok(!h.calls[0].allow.includes('qq_space_list'))
+  // 旧名单下她够不着它——这也是用户看到的那一幕
+  assert.equal(typeof h.guards[0]({ name: 'qq_space_list' }), 'string')
+
+  const r = restrictMod.refreshToolRestrict({ extra: ['web_search', 'qq_space_list'] })
+  assert.equal(r.ok, true)
+  assert.equal(h.calls.length, 2, '存完就该再下一刀')
+  assert.ok(h.calls[1].allow.includes('qq_space_list'), '新名字要真的下给 restrict，不是只改守卫')
+  assert.equal(h.disposed.length, 1, '旧刀必须先收掉，否则两刀取交集、等于没放宽')
+  // 守卫按新名单走：新名字放行，没放行的照旧挡，拒绝时念的清单也换新
+  assert.equal(h.guards[0]({ name: 'qq_space_list' }), undefined, '新名字立刻就能用')
+  const blockedMsg = h.guards[0]({ name: 'subagent' })
+  assert.equal(typeof blockedMsg, 'string', '不在名单里的照旧挡')
+  assert.ok(blockedMsg.includes('qq_space_list'), '被挡时念的清单要是新的')
+  assert.equal(readRestrictState().why, 'refreshed')
+})
+
+test('白名单热更新也管拿掉：删掉的名字下一句就挡，旧刀同时收掉', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\her-home', extra: ['web_search', 'qq_space_list'], log: () => {} })
+  const h = agentWithDisposers('C:\\her-home')
+  ctx.emit('agent/created', { agent: h.agent })
+  assert.equal(typeof h.guards[0]({ name: 'web_search' }), 'undefined')
+
+  restrictMod.refreshToolRestrict({ extra: ['qq_space_list'] })
+  assert.equal(h.calls.length, 2)
+  assert.ok(!h.calls[1].allow.includes('web_search'), '删掉的名字不能再下给 restrict')
+  assert.equal(h.disposed.length, 1)
+  assert.equal(typeof h.guards[0]({ name: 'web_search' }), 'string', '删掉之后立刻要挡')
+})
+
+test('热更新之后新建的会话（轮换/群房）直接按新名单收，不用等重启', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\her-home', extra: ['web_search'], log: () => {} })
+  restrictMod.refreshToolRestrict({ extra: ['web_search', 'qq_space_list'] })
+  const later = agentWithDisposers('C:\\her-home')
+  ctx.emit('agent/created', { agent: later.agent })
+  assert.equal(later.calls.length, 1)
+  assert.ok(later.calls[0].allow.includes('qq_space_list'), '新会话读的是当下的白名单，不是注册那一刻的')
+})
+
+test('收窄关着的时候热更新什么都不做（她本来就看得见全部）', () => {
+  const ctx = fakeCtx()
+  registerToolRestrict(ctx, { herDir: 'C:\\her-home', enabled: false, log: () => {} })
+  const r = restrictMod.refreshToolRestrict({ extra: ['qq_space_list'] })
+  assert.equal(r.ok, false)
+  assert.equal(r.why, 'disabled')
+  assert.deepEqual(r.allow, [])
+})
+
+// 2026-11-11（用户拍板的 B 方案）：先摆已知的、齐了再换完整的；等不齐就全开，
+// 这一局只靠守卫。下面三条钉住「不空刀、不放空档、超时真收手」。
+test('窄刀换成完整刀：先下新刀再收旧刀，中间总有一把在岗', async () => {
+  const ctx = fakeCtx()
+  const order = []
+  let names = new Set(['web_search'])
+  const agent = {
+    session: { header: { cwd: 'C:\\h' } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: (scope) => scope === agent
+          ? { restrictableNames: new Set(names), visible: new Map([...names].map((n) => [n, {}])) }
+          : { restrictableNames: new Set() },
+        restrict: ({ allow }) => {
+          order.push(['apply', allow.join(',')])
+          return () => order.push(['dispose', allow.join(',')])
+        },
+        guard: () => () => {},
+      },
+    },
+  }
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], retryMs: 5, retryMax: 20, log: () => {} })
+  ctx.emit('agent/created', { agent })
+  names = new Set([...HER_TOOLS, 'web_search'])
+  await until(() => order.filter((x) => x[0] === 'apply').length >= 2, '齐了要换完整刀')
+
+  const knives = order.filter((x) => x[0] === 'apply')
+  assert.equal(knives.length, 2, '窄刀一把、完整刀一把')
+  assert.ok(knives[0][1].includes('web_search'), '窄刀里有她当时真有的名字')
+  assert.ok(knives[1][1].includes('her_recall'), '完整刀里有后来登记上的名字')
+  const secondApply = order.findIndex((x) => x[0] === 'apply' && x[1] === knives[1][1])
+  const firstDispose = order.findIndex((x) => x[0] === 'dispose')
+  assert.ok(secondApply >= 0 && firstDispose > secondApply, '先下新刀、再收旧刀，中间不留空档')
+})
+
+test('3 秒等不齐：窄刀留着，不撤也不全开（2026-11-11，先B后全收窄）', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  const calls = []
+  const disposed = []
+  const guards = []
+  const names = new Set(['web_search'])
+  const agent = {
+    session: { header: { cwd: 'C:\\h' } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: () => ({ restrictableNames: new Set(names), visible: new Map([...names].map((n) => [n, {}])) }),
+        restrict: ({ allow }) => { calls.push(allow); return () => disposed.push(allow) },
+        guard: (fn) => { guards.push(fn); return () => {} },
+      },
+    },
+  }
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], retryMs: 5, retryMax: 2, log: () => {}, onResult: (r) => seen.push(r) })
+  ctx.emit('agent/created', { agent })
+  assert.equal(calls.length, 1, '先下窄刀')
+  await until(() => seen.at(-1)?.why === 'narrowed-late', '等不齐要如实报「按已认得的收着」')
+
+  assert.equal(disposed.length, 0, '窄刀不许撤——撤了就把宿主全量工具表摆给她看')
+  assert.deepEqual(seen.at(-1).effective, ['web_search'], 'effective 是她真看得见的那几件')
+  assert.match(guards[0]({ name: 'subagent' }), /^这件事我做不到。/, '守卫还在，真调用仍然被拦')
+})
+
+test('晚到的工具：再对一次名册就能补进来，旧刀当场收掉（2026-11-11）', async () => {
+  const ctx = fakeCtx()
+  const calls = []
+  const disposed = []
+  const names = new Set(['web_search'])
+  const agent = {
+    session: { header: { cwd: 'C:\\h' } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: () => ({ restrictableNames: new Set(names), visible: new Map([...names].map((n) => [n, {}])) }),
+        restrict: ({ allow }) => { calls.push(allow); return () => disposed.push(allow) },
+        guard: () => () => {},
+      },
+    },
+  }
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], retryMs: 5, retryMax: 2, log: () => {}, onResult: () => {} })
+  ctx.emit('agent/created', { agent })
+  assert.deepEqual(calls[0], ['web_search'], '第一刀只有已认得的')
+
+  // 晚到：宿主终于认得 her_recall 了
+  names.add('her_recall')
+  const r = recheckToolRestrict()
+  assert.equal(r.ok, true)
+  assert.deepEqual([...calls.at(-1)].sort(), ['her_recall', 'web_search'], '再对名册要把晚到的补进来')
+  assert.equal(disposed.length, 1, '旧刀收掉，先下新刀再收旧刀')
+  assert.deepEqual([...r.effective].sort(), ['her_recall', 'web_search'])
+})
+
+test('一个名字都没认得：不下空刀，宁可全开也不把她焊死在桌上（2026-11-11）', async () => {
+  const ctx = fakeCtx()
+  const seen = []
+  const calls = []
+  const agent = {
+    session: { header: { cwd: 'C:\\h' } },
+    ctx: {
+      effect: () => {},
+      tools: {
+        view: () => ({ restrictableNames: new Set(), visible: new Map() }),
+        // 宿主此刻一个名字都不认：整份清单递过去会抛错，只能等它登记完。
+        restrict: ({ allow }) => { calls.push(allow); throw new Error('tools.restrict() names unknown global tool "read_image"') },
+        guard: () => () => {},
+      },
+    },
+  }
+  registerToolRestrict(ctx, { herDir: 'C:\\h', extra: ['web_search'], retryMs: 5, retryMax: 2, log: () => {}, onResult: (r) => seen.push(r) })
+  ctx.emit('agent/created', { agent })
+  await until(() => seen.at(-1)?.why === 'deferred', '等不齐就如实报 deferred')
+  assert.ok(calls.length > 0, '试过才知道等不齐')
+  assert.ok(calls.every((a) => a.length > 0), '一个都认不得时绝不下空刀（C 方案，用户明确不要）')
 })

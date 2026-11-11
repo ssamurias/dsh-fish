@@ -217,6 +217,38 @@ test('收窄开着、白名单清空后保存：回执说她只剩自己那几�
   noRenderErrors(H)
 })
 
+test('收窄开着、加了个名字保存：服务端说当场换了刀，回执就说现在就生效，不说重启（2026-11-11）', async () => {
+  const routes = routesFor({ restrict: true, allow: ['web_search'] })
+  // 0.9.8 起 /config 存完会回 toolsLive：有它就是当场换过刀了。
+  routes['POST /config'] = ({ body }) => ({ body: { ok: true, toolsLive: { ok: true, deferred: 0 }, config: { ...body } } })
+  const H = mount(routes)
+  await H.settle()
+  await H.click('插件')
+  const input = H.find((n) => n.type === 'input' && String(n.props.placeholder || '').startsWith('例如：web_search'))[0]
+  input.props.onChange({ target: { value: 'web_search, her_say' } })
+  await H.settle()
+  await H.click('保存设置', toolsCard(H))
+  const note = receipt(H)
+  assert.match(note, /现在就生效/, `存完当场换刀，回执得说现在就生效：${note}`)
+  assert.match(note, /多看见 1 个/, note)
+  assert.ok(!note.includes('重启'), `别再说重启：${note}`)
+  noRenderErrors(H)
+})
+
+test('服务端没回 toolsLive（老版本/名单没动）：回执仍按老说法说重启之后，不能说「现在就生效」', async () => {
+  const H = mount(routesFor({ restrict: true, allow: ['web_search'] }))
+  await H.settle()
+  await H.click('插件')
+  const input = H.find((n) => n.type === 'input' && String(n.props.placeholder || '').startsWith('例如：web_search'))[0]
+  input.props.onChange({ target: { value: 'web_search, her_say' } })
+  await H.settle()
+  await H.click('保存设置', toolsCard(H))
+  const note = receipt(H)
+  assert.match(note, /重启 DSH 之后/, note)
+  assert.ok(!note.includes('现在就生效'), `没换刀就不能说现在就生效：${note}`)
+  noRenderErrors(H)
+})
+
 test('收窄关着时填一个名字保存：回执不说「多看见 1 个工具」——她本来就全看得见', async () => {
   const H = mount(routesFor({ restrict: false, allow: [] }))
   await H.settle()
@@ -280,7 +312,7 @@ const toolsBody = (extra = {}) => ({ ok: true, known: [...HER, 'web_search'], ow
 /** 卡片底部那句（分组下面、白名单输入框上面）。 */
 const bottomLine = (H) => {
   const card = toolsCard(H)
-  return H.find((n) => n.type === 'div' && n.props?.className === 'dim' && /加不加都不影响她|两样都要重启/.test(H.textOf(n)), card).map((n) => H.textOf(n)).at(-1) ?? ''
+  return H.find((n) => n.type === 'div' && n.props?.className === 'dim' && /加不加都不影响她|存好当场就对她生效/.test(H.textOf(n)), card).map((n) => H.textOf(n)).at(-1) ?? ''
 }
 
 test('收窄关着时第一句也说清：不挂守卫，别的插件的工具她也全看得见', async () => {
@@ -478,7 +510,7 @@ test('服务端不给 allowNow（老版本）时，她自己的照旧全摆在�
   assert.ok(!H.textOf(card).includes('这一局不在她手上'))
 })
 
-test('白名单输入框旁写明存好之后要重启才对她生效（名单拉不到、上面那几组不出现时也看得见）', async () => {
+test('白名单输入框旁写明存好当场生效（名单拉不到、上面那几组不出现时也看得见）', async () => {
   const H = mount(routesFor({ restrict: true, toolsFail: true }))
   await H.settle()
   await H.click('插件')
@@ -487,7 +519,8 @@ test('白名单输入框旁写明存好之后要重启才对她生效（名单�
   assert.ok(input, '前提：输入框在')
   assert.ok(!H.textOf(card).includes('点名字只是填进下面的框'), '前提：分组没摆出来')
   const near = H.find((n) => n.type === 'div' && n.props?.className === 'dim' && H.textOf(n).includes('白名单填工具名'), card)[0]
-  assert.match(H.textOf(near), /重启 DSH 之后才对她生效/)
+  assert.match(H.textOf(near), /当场就对她生效/)
+  assert.ok(!/要重启 DSH/.test(H.textOf(near)), '存完当场换刀了，别再说要重启')
 })
 
 // ---------------------------------------------------------------------------

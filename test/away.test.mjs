@@ -357,6 +357,7 @@ test('台账已经绑了会话 id 时，同一个工作区里别的会话不该�
 // 钩子不是段，mountedCount 不变，但回家那一刻必须跟着一起拆。
 function fakeAgentWithHook() {
   const sections = []
+  const events = []
   let guardDisposed = 0
   let hookDisposed = 0
   const agent = {
@@ -365,28 +366,29 @@ function fakeAgentWithHook() {
       tools: { guard: () => () => { guardDisposed += 1 } },
       effect: (fn) => fn,
       on: (evt) => {
-        if (evt !== 'system-prompt/assemble') return () => {}
+        events.push(evt)
         return () => { hookDisposed += 1 }
       },
     },
   }
-  return { agent, sections, guardDisposed: () => guardDisposed, hookDisposed: () => hookDisposed }
+  return { agent, sections, events, guardDisposed: () => guardDisposed, hookDisposed: () => hookDisposed }
 }
 
-test('出门时也会挂上组装钩子（摘掉宿主那句 coding agent），回家一起拆', () => {
+test('出门时也会挂上组装钩子与正文清洗钩子，回家一起拆', () => {
   const root = tmpRoot()
   try {
-    const { agent, sections, hookDisposed } = fakeAgentWithHook()
+    const { agent, sections, events, hookDisposed } = fakeAgentWithHook()
     assert.equal(attachIdentity(agent, root, { frozen: '走的时候的我' }).ok, true)
     assert.equal(sections.length, 3, '钩子不是段，不许占段位')
     assert.equal(mountedCount(agent), 3, 'mountedCount 只数段：身份 + 处境 + 手边')
+    assert.deepEqual(events, ['system-prompt/assemble', 'llm/stream'], '组装钩子 + 正文清洗钩子')
     assert.equal(hookDisposed(), 0, '还没拆')
 
     const r = detachOutside(agent)
     assert.equal(r.ok, true)
-    assert.equal(r.removed, 4, '三段 + 钩子')
+    assert.equal(r.removed, 5, '三段 + 两个钩子')
     assert.equal(sections.length, 0)
-    assert.equal(hookDisposed(), 1, '钩子也必须拆——不然回家那一刻旧钩子还挂着')
+    assert.equal(hookDisposed(), 2, '两个钩子都必须拆——不然回家那一刻旧钩子还挂着')
     assert.equal(mountedCount(agent), 0)
   } finally {
     rmSync(root, { recursive: true, force: true })

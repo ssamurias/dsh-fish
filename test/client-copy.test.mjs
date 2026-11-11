@@ -471,6 +471,15 @@ test('换新会话带过去的是最近几轮原话，不是核心认知', async
   assert.match(hint, /最近几轮原话/)
 })
 
+// 2026-11-11（外部用户反馈）：带几轮要能自己调，0 得说清楚是不带 —— 否则
+// 填 0 的人会以为「省一点」，实际是换完窗口一句旧话都接不上。
+test('换新会话带几轮原话：有自己的说明，写 0 等于不带', async () => {
+  const { render } = await mount({ state: stateWith(), tab: 'memory' })
+  const hint = hintOf(render(), '换新会话时带几轮原话')
+  assert.match(hint, /原话/)
+  assert.match(hint, /0 = 不带/)
+})
+
 test('记得很牢不是永远：90 天没碰会掉档，身份段只列 5 条', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'memory', mem: { events: 3, diaries: 0 } })
   const c = card(render(), '记忆')
@@ -513,6 +522,7 @@ test('数字越界时，报错里的名字和控件上的一样', async () => {
     ['bili', '随机多等'],
     ['bili', '每天回复几条'],
     ['memory', '聊满多少轮换新会话'],
+    ['memory', '换新会话时带几轮原话'],
     ['memory', '身份段字数'],
   ]) {
     const box = await typeOutOfRange(tab, label)

@@ -126,7 +126,10 @@ test('插件停用时收得干净：宿主只认 ctx.effect，定时器要停，
       assert.equal(cleanups.length, 1)
       assert.equal(disposeHandlers, 0)
       cleanups[0]()
-      assert.equal(live.size, 0, '定时器都要停')
+      // 2026-11-11：启动后 4 秒还会对一次名册（她自己那条会话可能早于工具注册建好），
+      // 这一拍挂在插件自己的 dispose 上，所以要连 dispose 一起收。
+      h.dispose?.()
+      assert.equal(live.size, 0, '定时器都要停（含启动 4 秒对名册那一拍）')
       assert.doesNotThrow(() => { cleanups[0](); h.dispose?.() })
     } finally {
       globalThis.setInterval = realSet

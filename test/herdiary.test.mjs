@@ -15,9 +15,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { registerHerDiary, renderDiary, DIARY_READ_MAX } from '../lib/herdiary.js'
+import { registerHerDiary, renderDiary, DIARY_READ_MAX, DIARY_LIST_MAX, DIARY_HIT_MAX } from '../lib/herdiary.js'
 import { DIARY_BRIEF } from '../lib/persona.js'
 import { writeDaily } from '../lib/store.js'
+import { heardLine } from '../lib/use.js'
 
 async function tmpRoot() {
   return mkdtemp(join(tmpdir(), 'fish-herdiary-'))
@@ -196,4 +197,95 @@ test('这段机制句确实进身份文档（selfdoc 的 diary 分支还在）',
   assert.ok(selfdoc.includes('if (diary) body.push(DIARY_BRIEF'), 'diary 开关仍然决定这一段进不进文档')
   const src = await readFile(new URL('../lib/persona.js', import.meta.url), 'utf8')
   assert.ok(src.includes('type=diary'), '机制句在 persona.js 里')
+})
+
+// ---------- 2026-11-10 外部用户：写到第 90 天就「看不了以前的日记」----------
+// 根因不是没权限，是**没有索引**：清单静默截到 60 天（她以为那就是全部），
+// 而工具只认日期——可她记不清的恰恰是日期。两处一起改：上限要说出来，再加按词找。
+
+test('日期清单列不下时就明说还差几天，不静默截断', () => {
+  const days = []
+  for (let i = 0; i < DIARY_LIST_MAX + 12; i += 1) days.push(`2026-01-${String(i + 1).padStart(2, '0')}`)
+  const text = renderDiary({ dates: days })
+  assert.match(text, new RegExp(`更早的还有 12 天没列出来`), '截了就必须说')
+  assert.match(text, /它们都还在/, '别让她以为更早的没了')
+  assert.match(text, /给个词/, '告诉她还有按词找这条路')
+  // 列出来的条数就是上限
+  assert.equal((text.match(/^- 2026-/gm) ?? []).length, DIARY_LIST_MAX)
+})
+
+test('日期清单够短时不多嘴', () => {
+  const text = renderDiary({ dates: ['2026-10-28', '2026-11-02'] })
+  assert.doesNotMatch(text, /没列出来/)
+})
+
+test('按词找：每一处都说清哪一天、前后写了什么', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeDaily('diaryDir', '2026-10-20', '今天摔了一跤，又在同一个跟头栽了。', root)
+    await writeDaily('diaryDir', '2026-10-28', '没提那个词。', root)
+    await writeDaily('diaryDir', '2026-11-02', '他说他没松手，我想起那个跟头。', root)
+    const out = await toolFor(root).execute({ keyword: '跟头' })
+    assert.equal(out.found, true)
+    assert.equal(out.keyword, '跟头')
+    assert.match(out.text, /提到「跟头」的 2 处/, '数的是处，不是篇')
+    assert.match(out.text, /- 2026-10-20 /)
+    assert.match(out.text, /- 2026-11-02 /)
+    assert.doesNotMatch(out.text, /2026-10-28/, '没提这个词的那天不该出现')
+    assert.match(out.text, /同一个跟头栽了/, '要给她命中的那句话，不是只给日期')
+    // 新的在前
+    assert.ok(out.text.indexOf('2026-11-02') < out.text.indexOf('2026-10-20'))
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('按词找没命中：说没找到，绝不说「那天没有日记」', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeDaily('diaryDir', '2026-10-20', '今天摔了一跤。', root)
+    const out = await toolFor(root).execute({ keyword: '跟头' })
+    assert.equal(out.found, false)
+    assert.equal(out.keyword, '跟头')
+    assert.match(out.text, /没找到「跟头」/)
+    assert.match(out.text, /翻得到的 1 篇日记里/)
+    assert.doesNotMatch(out.text, /那天没有日记/)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('按词找 + 日期：只在那一天里找', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeDaily('diaryDir', '2026-10-20', '跟头。', root)
+    await writeDaily('diaryDir', '2026-11-02', '又栽了一个跟头。', root)
+    const out = await toolFor(root).execute({ keyword: '跟头', date: '2026-11-02' })
+    assert.match(out.text, /提到「跟头」的 1 处/)
+    assert.doesNotMatch(out.text, /- 2026-10-20/)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('按词找命中太多时说还有几处没列', async () => {
+  const root = await tmpRoot()
+  try {
+    const many = Array.from({ length: DIARY_HIT_MAX + 5 }, (_, i) => `第 ${i} 个跟头。`).join('\n')
+    await writeDaily('diaryDir', '2026-10-20', many, root)
+    const out = await toolFor(root).execute({ keyword: '跟头' })
+    assert.match(out.text, new RegExp(`还有 5 处没列`))
+    assert.equal((out.text.match(/^- 2026-/gm) ?? []).length, DIARY_HIT_MAX)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('按词找的回执不说「那天没有日记」', async () => {
+  // 那天她可能真写过，只是没提这个词——记成「那天没有日记」，
+  // 她以后翻自己的回忆会以为自己那天没写（use.js 的 SAYING）。
+  assert.equal(heardLine({ keyword: '跟头', found: false, text: '' }, 'her_diary'), '没找到。')
+  assert.equal(heardLine({ keyword: '跟头', found: true, text: '' }, 'her_diary'), '找到了。')
+  // 不带 keyword 时口径不变
+  assert.equal(heardLine({ found: false, text: '' }, 'her_diary'), '那天没有日记。')
 })

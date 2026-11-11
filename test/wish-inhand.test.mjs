@@ -178,8 +178,9 @@ const OWN_ONLY = HER_TOOLS.filter((n) => n !== 'read_image')
 test('宿主上没有 read_image：她要它的那张卡不算到手，桌上、悬着的事里都还在（issue #58）', async () => {
   await withHer({ host: OWN_ONLY }, async (root, { sent, logs }) => {
     // 前提：read_image 确实没下给宿主（收窄时剔掉了）
-    assert.equal(sent.length, 1)
-    assert.ok(!sent[0].includes('read_image'))
+    assert.ok(sent.length >= 1)
+    const last = sent.at(-1)
+    assert.ok(!last.includes('read_image'))
     assert.ok(logs.some((m) => m.includes('read_image') && m.includes('没有')))
 
     await wish(root, { text: READ_IMAGE_WISH, subject: 'read_image' })
@@ -199,8 +200,8 @@ test('宿主上没有 read_image：她要它的那张卡不算到手，桌上、
 
 test('白名单里写了、宿主上没装：答应过的卡照摆「还没见到」；真到手的那张照旧撤掉（issue #58）', async () => {
   await withHer({ allow: ['image_gen', 'web_search'], host: [...HER_TOOLS, 'web_search'] }, async (root, { sent }) => {
-    assert.ok(!sent[0].includes('image_gen'), '前提：image_gen 这台机器上没有，没下给宿主')
-    assert.ok(sent[0].includes('web_search'))
+    assert.ok(!sent.at(-1).includes('image_gen'), '前提：image_gen 这台机器上没有，没下给宿主')
+    assert.ok(sent.at(-1).includes('web_search'))
 
     const genId = await wish(root, { text: IMAGE_GEN_WISH, subject: 'image_gen', ts: new Date(Date.now() - 2 * HOUR).toISOString() })
     assert.equal((await settleAsk(root, { askId: genId, verdict: 'approve' })).ok, true)

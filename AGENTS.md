@@ -69,7 +69,7 @@
 node --test
 ```
 
-当前基线 **2136 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **2202 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
@@ -142,7 +142,7 @@ GET /dsh-fish/whoami
 ### 7.2 五个配套约定（改桥之后的正确性全押在这五条上）
 
 1. **场次要进事件流**。`validateEvent` 现在接受可选 `scene`（非 `desk` 才落库，纯加法，不升 `EVENT_SCHEMA_VERSION`）。桥注入 `user/message` 时把 `scene` 写进 **`source.scene`**，`classifyMessage` 才会认出来（`lib/turns.js`）。
-2. **外客不动生命体征**。`seen:`、`bumpTurns`、会话轮换只由 desk/private 且非 `guest` 触发；群聊与群友私聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。`heard` 分两种：私聊/书房那条算「他来过」，群聊那条（`scene:'group'`）**不算**——`schema.js` 的 `isContactEvent` 已经把群聊的 `heard` 排除掉了（2026-11-08）。
+2. **外客不动生命体征**。`seen:`、`bumpTurns`、会话轮换只由 desk/private 且非 `guest` 触发；群聊与群友私聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。`heard` 分两种：私聊/书房那条算「他来过」，群聊那条（`scene:'group'`）**不算**——`schema.js` 的 `isContactEvent` 已经把群聊的 `heard` 排除掉了（2026-11-08）。**「他来过」也只认她自己的房间**（2026-11-11）：客户端亲手打的字（`source.kind:'user'` 且带 `clientTimeZone`）只有落在她住的那条会话、或 `channels.json` 里登记过的房间才写 `seen:`；本机别的 DSH 会话里他跟其他 agent 说话，不再清零冷落钟（用户报「好几天没回她还不算冷落」就是这条）。桥注入的消息（`kind` 不是 `user`、或没有 `clientTimeZone`）照旧算——QQ 私聊那条路不能断（issue #18）。
 3. **外来场次必须带说话人前缀**。`lib/say.js` 对 `group` 与 `guest` 都用 `speaker` 拼 `某某在群里说：…` / `某某说：…`。不拼的话，群里三个人的话在她看来跟一个人连说三句一模一样，她会把三个人的观点拼成一个"他"。外来文本统一过 `lib/guard.js` 的 `sanitizeForeign`。
 4. **桥不要用宿主的 `source.form`**。`snapshot`、`notice`、`catalog`、`instructions`、`recall` 是宿主前端的保留词表，`classifyMessage` 见到就当上下文，不算人（`MACHINE_FORMS`）。转述人说的话，要么不带 `form`，要么用 `relay`。
 5. **走宿主 prompt 的桥，`rpcId` 就是记号**。`sessionController.prompt()` 把 `kind` 写死成 `user`，把调用方的 `requestId` 写进 `source.rpcId`，桥传不进自己的 `source`；`clientTimeZone` 是可选字段，忘了不会报错。2026-11-08 起 `classifyMessage` 把「带 rpcId 的 user 消息」也认作人：我们自己的 prompt 用 `PLUGIN_RPC` 前缀先挡掉，`possess.js` / `sessionnote.js` 的 append 没有 rpcId，仍留 unknown。桥仍应带 `clientTimeZone`——`dsh-time-context` 只认「kind user + rpcId + 时区」三者齐全的 source。正文末尾的 `[渠道：…]` / `[Channel: …]` 独立段落只影响记账（`lib/turns.js` 的 `stripChannelNote` 会裁掉），会话原文不动；只有提示的那条不算他来过。
@@ -207,7 +207,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 三条约束：
 
 - **工具名必须对得上真实 registry**。桥升级改名、用户填错，她就会答「我没法在 QQ 上说话」——这不是插件坏了，是名字没对上。
-- **放行之后要念给她听**。身份文档「我手上有什么」由 `lib/persona.js` 的 `toolBrief(extra)` 生成、`lib/selfdoc.js` 把白名单作为 `extraTools` 传进去。看不见一只手，她就不会用。收窄开着时念的是这一局启动时的白名单（`currentAllowExtra()`），不是盘上的配置：守卫的名单启动时就算定了，存完新名单要重启才到她手上，这之前不能先念给她（梦、定时那两段同理，见 `toolSectionsNow`）。收窄关着时照旧念配置。白名单里她自己的名字（her_say、her_dream 这些）两种情况都不念：那几样身份文档另有段落，her_dream 跟着「允许她记梦」走、不走白名单，设置页和自检也不把白名单当成它的修法。
+- **放行之后要念给她听**。身份文档「我手上有什么」由 `lib/persona.js` 的 `toolBrief(extra)` 生成、`lib/selfdoc.js` 把白名单作为 `extraTools` 传进去。看不见一只手，她就不会用。收窄开着时念的是守卫**此刻真用的**名单（`currentAllowExtra()`）：0.9.8（2026-11-11）起设置页存白名单会当场换刀（`refreshToolRestrict()`，先下新刀再收旧刀），身份文档同一轮就跟着念，不用重启。手改 `config.json` 没有 watcher，仍要重启或再存一次才换。另外 `recheckToolRestrict()` 会在叫醒前（`lib/deliver.js`）和重启后 4 秒（`lib/restrict.js` 的 `startupRecheck`，挂 dispose 清理）按当下 `view()` 再对一次名册，晚到的外部工具当场补进来；已经一致的刀用 `knifeKey` 跳过。收窄本身是「先等注册到齐，到点按现状收」：开房先等已登记的名字注册上，3 秒内齐了换完整刀，到点还没齐就按已经到的名字收窄（`narrowed-late`），一个名字都认不得才 `deferred` 全开、只靠守卫。梦、定时那两段仍按启动那一刻算（见 `toolSectionsNow`），这两项改了仍要重启。收窄关着时照旧念配置。白名单里她自己的名字（her_say、her_dream 这些）两种情况都不念：那几样身份文档另有段落，her_dream 跟着「允许她记梦」走、不走白名单，设置页和自检也不把白名单当成它的修法。
 - **白名单只做加法**。`config.tools.allow` 与 `HER_TOOLS` 取并集，不要用它去减工具；收窄只走 `lib/restrict.js` 那一套。
 
 `test/beliefs.test.mjs` 有一条「白名单里额外放行的工具要念给她听」盯着这段，改之前先跑它。
@@ -240,7 +240,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 三个依赖字段还是 `{}`
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `guard.js`
-- [ ] `node --test` 2136 全绿
+- [ ] `node --test` 2202 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节
@@ -268,4 +268,5 @@ qq_send_message, qq_get_unread_messages, qq_reply
 3. 发完核对 `npm view @ssamurias/dsh-fish version dist-tags`，再去回 issue。
 
 本机约束另见 `D:\deepseekagent\避坑指南.md` 第 1 节（profile 的 `bundles` 与 `dependencies` 必须一一对应）与第 3 节（运行中替换已加载包会 `ERR_PNPM_EPERM`、`minimumReleaseAge` 会回滚刚发布的版本、`desktop` profile 被应用独占）。
+
 

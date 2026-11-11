@@ -1,7 +1,8 @@
 /**
  * restrict-runtime.test.mjs —— 「她此刻手上有什么」各处说的是同一份（0.9.5 核对出的余项，接 #61 #64 #69）
  *
- * 收窄的名单是 DSH 启动那一刻算定的：守卫按它放行，改了设置要重启才换。
+ * 收窄的名单在 DSH 启动那一刻算定；0.9.8（2026-11-11）起，设置页存白名单会当场换刀
+ * （守卫、身份文档同一轮跟着换），手改 config.json 没有 watcher，仍要重启或再存一次才换。
  * 0.9.5 里另外几处各看各的：
  *   ① 身份文档存完设置就当场重写，白名单、梦、定时三段却按配置写——从存完到重启这段时间，
  *      文档说她有，她一伸手就是「这件事我做不到」；
@@ -143,7 +144,7 @@ const until = async (cond, ms = 2000) => {
 // ① 身份文档：白名单、梦、定时三段，收窄开着时按运行中的名单写
 // ---------------------------------------------------------------------------
 
-test('存了新的白名单、还没重启：身份文档不提前说她有，跟守卫说的一样（#64 / 0.9.5）', async () => {
+test('存了新的白名单，当场就换刀：守卫立刻放行，身份文档同一轮就念出来（2026-11-11）', async () => {
   await withRoot(async (root, herDir) => {
     forgetBlockedTools()
     await writeConfig(normalizeConfig({}), root)
@@ -152,23 +153,24 @@ test('存了新的白名单、还没重启：身份文档不提前说她有，�
     const host = hostAgent(herDir, () => [...HER_TOOLS, 'her_say', 'bash', 'schedule_create'])
     bus.emit('agent/created', { agent: host.agent })
     assert.equal(host.sent.length, 1, '前提：这一局真收窄了')
+    assert.match(host.guards[0]({ name: 'bash' }), /^这件事我做不到。/, '前提：存之前守卫挡着')
 
     const ctx = observeCtx(root)
     const obs = registerObserve(ctx, { root })
     try {
-      // 设置页存白名单就是这一下：存完当场重写身份文档。
+      // 设置页存白名单就是这一下：存完当场换刀，不用重启。
       const r = await hit(ctx.routes, '/config', 'POST', { tools: { restrict: true, allow: ['bash', 'schedule_create'] } })
       assert.equal(r.status, 200, JSON.stringify(r.payload))
       assert.deepEqual(r.payload.config.tools.allow, ['bash', 'schedule_create'], '前提：配置真的存进去了')
+      assert.equal(r.payload.toolsLive?.ok, true, '回包要说换了刀，界面才能说「现在就生效」')
 
       const doc = await docOf(root)
-      // 守卫还按启动时的名单拦它们……
-      assert.match(host.guards[0]({ name: 'bash' }), /^这件事我做不到。/)
-      assert.match(host.guards[0]({ name: 'schedule_create' }), /^这件事我做不到。/)
-      // ……身份文档就不能先说她有。
-      assert.ok(!doc.includes(EXTRA_HEAD), `还没到她手上的名字不该念给她：\n${doc}`)
-      assert.ok(!/\bbash\b/.test(doc), '身份文档里不该出现 bash')
-      assert.ok(!doc.includes(SCHEDULE_LINE), '定时那一段也要等重启之后才挂')
+      // 守卫当场就放行——不用等重启……
+      assert.equal(host.guards[0]({ name: 'bash' }), undefined, '存完当场换刀，守卫立刻放行 bash')
+      assert.equal(host.guards[0]({ name: 'schedule_create' }), undefined, '存完当场换刀，守卫立刻放行 schedule_create')
+      // ……身份文档同一轮就得照实说她有，不能跟守卫说两样。
+      assert.ok(doc.includes(`${EXTRA_HEAD}bash、schedule_create。`), `换刀之后身份文档要同步念出来：\n${doc}`)
+      assert.ok(doc.includes(SCHEDULE_LINE), '定时那一段也该跟着挂上')
     } finally {
       obs?.dispose?.()
     }
@@ -320,7 +322,7 @@ test('/tools：宿主没给 visible 时 skippedSure 是 false，界面跟自检�
     const host = hostAgent(herDir, () => names, { visible: false })
     bus.emit('agent/created', { agent: host.agent })
     await until(() => seen.some((r) => r.why === 'deferred' || r.why.startsWith('applied')), 1500)
-    assert.equal(host.sent.length, 1, '前提：收窄了')
+    assert.ok(host.sent.length >= 1, '前提：收窄了')
 
     const ctx = observeCtx(root)
     const obs = registerObserve(ctx, { root })
@@ -514,9 +516,10 @@ test('老宿主（view 不给 visible）没有 read_image、白名单多一个�
     bus.emit('agent/created', { agent: host.agent })
     await until(() => seen.some((r) => r.why === 'deferred' || r.why.startsWith('applied')), 1500)
 
-    assert.equal(host.sent.length, 1, `应该收窄一次，而不是每拍都抛错直到 deferred：${seen.map((r) => r.why).join(',')}`)
-    assert.ok(!host.sent[0].includes('read_image') && !host.sent[0].includes('qq_send_message'), '不在 restrictableNames 里的别人的名字不交给 restrict')
-    for (const n of names) assert.ok(host.sent[0].includes(n), `${n} 是她的，一个都不能少`)
+    assert.ok(host.sent.length >= 1, `应该收窄一次，而不是每拍都抛错直到 deferred：${seen.map((r) => r.why).join(',')}`)
+    const sent = host.sent.at(-1)
+    assert.ok(!sent.includes('read_image') && !sent.includes('qq_send_message'), '不在 restrictableNames 里的别人的名字不交给 restrict')
+    for (const n of names) assert.ok(sent.includes(n), `${n} 是她的，一个都不能少`)
     assert.equal(host.guards[0]({ name: 'qq_send_message' }), undefined, '守卫照旧按配置放行：真在 own 层的她照样用得上')
     assert.ok(logs.some((m) => m.includes('qq_send_message') && m.includes('没交给它')), '剔掉的名字留一行日志，且不说成「这台机器上没有」')
   })
@@ -535,9 +538,10 @@ test('老宿主上外部名字比 agent/created 晚到一点：宽限里等到�
     bus.emit('agent/created', { agent: host.agent })
     await until(() => seen.some((r) => r.why === 'deferred' || r.why.startsWith('applied')), 2000)
 
-    assert.equal(host.sent.length, 1, seen.map((r) => r.why).join(','))
-    assert.ok(host.sent[0].includes('qq_send_message'), `晚到一点的外部名字要等到、收进名单，不然这一局她调不到：${host.sent[0]}`)
-    assert.ok(host.sent[0].includes('growth_commit'))
+    assert.ok(host.sent.length >= 1, seen.map((r) => r.why).join(','))
+    const sent = host.sent.at(-1)
+    assert.ok(sent.includes('qq_send_message'), `晚到一点的外部名字要等到、收进名单，不然这一局她调不到：${sent}`)
+    assert.ok(sent.includes('growth_commit'))
     assert.equal(seen.at(-1).why, 'applied-late')
   })
 })
@@ -555,9 +559,10 @@ test('老宿主上自己的工具晚到：照旧等它们登记齐，晚到的�
     await until(() => seen.some((r) => r.why === 'deferred' || r.why === 'applied-late'), 2000)
 
     assert.equal(seen.at(-1).why, 'applied-late', seen.map((r) => r.why).join(','))
-    assert.equal(host.sent.length, 1)
-    assert.ok(host.sent[0].includes('growth_commit'), '自己的工具到了才收，不能少')
-    assert.ok(!host.sent[0].includes('read_image'), '一直没来的 read_image 剔掉')
+    assert.ok(host.sent.length >= 1)
+    const sent = host.sent.at(-1)
+    assert.ok(sent.includes('growth_commit'), '自己的工具到了才收，不能少')
+    assert.ok(!sent.includes('read_image'), '一直没来的 read_image 剔掉')
   })
 })
 

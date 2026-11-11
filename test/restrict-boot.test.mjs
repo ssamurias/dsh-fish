@@ -135,7 +135,9 @@ async function bootAndWait(root, opts) {
   forgetRegisteredTools() // 新进程里注册记录本来就是空的
   const { ctx, host } = fakeHost(opts)
   const h = apply(ctx, { root })
-  await waitFor(() => host.sent.length > 0)
+  // 2026-11-11（先B后全收窄）：第一拍可能先下一把窄刀（只含当时已登记的名字），
+  // 等自家工具全登记上、换完整刀，才算「启动走完」。
+  await waitFor(() => host.sent.length > 0 && host.sent.at(-1).includes('her_say'))
   return { h, host }
 }
 
@@ -156,9 +158,10 @@ test('新启动：她的会话早于工具注册建好，her_say 照样在 allow
       assert.equal(host.createdAt.herSay, false, '前提：agent/created 发出时 her_say 还没注册')
       assert.equal(host.createdAt.growthCommit, false, '前提：agent/created 发出时她的工具一件都还没注册')
       assert.ok(host.tools.has('her_say'), '启动走完后 her_say 应该注册上了')
-      assert.equal(host.sent.length, 1, `收窄应该在工具注册上之后下一次：${JSON.stringify(readRestrictState())}`)
+      // 2026-11-11（先B后全收窄）：第一拍先按当下认得的下窄刀，登记齐了再换完整刀。
+      assert.ok(host.sent.length >= 1, `收窄应该下一次：${JSON.stringify(readRestrictState())}`)
 
-      const sent = host.sent[0]
+      const sent = host.sent.at(-1)
       assert.ok(sent.includes('her_say'), `下给宿主的 allow 里要有 her_say：${sent.join(',')}`)
       const st = readRestrictState()
       assert.ok(st.allow.includes('her_say'), '配置那份 allow 里也要有')
@@ -196,9 +199,9 @@ test('白名单里有外部名字（宿主有的、没装的）：her_say 照样
     const { h, host } = await bootAndWait(root, { hostTools: ['bash', 'read', 'read_image', 'web_search'] })
     try {
       assert.equal(host.createdAt?.herSay, false, '前提：agent/created 发出时 her_say 还没注册')
-      assert.equal(host.sent.length, 1, `收窄应该下一次：${JSON.stringify(readRestrictState())}`)
+      assert.ok(host.sent.length >= 1, `收窄应该下一次：${JSON.stringify(readRestrictState())}`)
 
-      const sent = host.sent[0]
+      const sent = host.sent.at(-1)
       assert.ok(sent.includes('her_say'), `下给宿主的 allow 里要有 her_say：${sent.join(',')}`)
       assert.ok(sent.includes('web_search'), '宿主有的外部名字要下给宿主')
       assert.ok(!sent.includes('qq_send_message'), '这台机器上没有的外部名字这次剔掉（issue #61）')
@@ -220,9 +223,9 @@ test('关着记梦启动：her_dream 照 #64 不给，her_say 不跟着丢', asy
     const { h, host } = await bootAndWait(root)
     try {
       assert.equal(host.createdAt?.herSay, false, '前提：agent/created 发出时 her_say 还没注册')
-      assert.equal(host.sent.length, 1, `收窄应该下一次：${JSON.stringify(readRestrictState())}`)
+      assert.ok(host.sent.length >= 1, `收窄应该下一次：${JSON.stringify(readRestrictState())}`)
 
-      const sent = host.sent[0]
+      const sent = host.sent.at(-1)
       assert.ok(sent.includes('her_say'), `下给宿主的 allow 里要有 her_say：${sent.join(',')}`)
       assert.ok(!sent.includes('her_dream'), '记梦关着，her_dream 不进 allow（issue #64 的取舍）')
       assert.ok(surfaceNames().includes('her_say'), `提示词工具段那一行要有 her_say：${currentToolSurface()}`)

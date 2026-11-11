@@ -148,7 +148,7 @@ test('/config 白名单收下观测台提交的全部环境键（含 chat 与 me
       // 客户端整表提交一直带着它们，白名单漏登记 → 改任何一项都报 400。
       bili: { minIntervalMs: 900, jitterMs: 300 },
       notify: { enabled: false },
-      chat: { rotateAfter: 30 },
+      chat: { rotateAfter: 30, carry: 6 },
       memory: { docBudget: 1500 },
       comment: { enabled: false, perDay: 1, replyPerDay: 2, replyToReplies: true, scanEveryMin: 30, window: ['20:00', '23:00'] },
     }
@@ -172,6 +172,7 @@ test('/config 白名单收下观测台提交的全部环境键（含 chat 与 me
     assert.deepEqual(payload.config.browse.window, ['08:30', '22:30'])
     assert.deepEqual(payload.config.window, ['19:00', '22:00'])
     assert.equal(payload.config.chat.rotateAfter, 30)
+    assert.equal(payload.config.chat.carry, 6, '换会话带几轮原话必须真的存进去')
     assert.equal(payload.config.memory.docBudget, 1500)
     assert.equal(payload.config.bili.minIntervalMs, 900, '请求间隔必须真的存进去')
     assert.equal(payload.config.bili.jitterMs, 300, '请求抖动必须真的存进去')
@@ -291,6 +292,25 @@ test('own 层的 ops_* 能存进白名单，且 /tools 会说明「收窄挡不�
     })
     assert.equal(status, 200, `ops_bash 该存得进去：${JSON.stringify(saved)}`)
     assert.deepEqual(saved.config.tools.allow, ['ops_bash', 'read_image'])
+    // 0.9.8（2026-11-11，外部用户反馈）：白名单存完当场换刀，结果要回给界面说「现在就生效」。
+    // 这一条用例没挂收窄（liveReg 空），换刀是 disabled——界面据此仍按老说法说重启。
+    assert.ok(saved.toolsLive, '存完要把换刀结果一起回给界面')
+    assert.equal(saved.toolsLive.ok, false, '这一条里收窄没注册，换刀只能是 disabled')
+
+    // 名单没变时不必再下一次刀：toolsLive 是 null，界面据此走「名单没变」那句。
+    let again = null
+    const req2 = {
+      method: 'POST',
+      url: '/dsh-fish/config',
+      headers: { 'content-type': 'application/json' },
+      on: (ev, fn) => { if (ev === 'data') fn(Buffer.from(body, 'utf8')); if (ev === 'end') fn() },
+    }
+    await config.handler(req2, {
+      writeHead: () => {},
+      end: (s) => { again = JSON.parse(s || '{}') },
+      setHeader: () => {},
+    })
+    assert.equal(again.toolsLive, null, '名单没变就不该再换刀')
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }

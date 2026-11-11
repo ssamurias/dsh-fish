@@ -16,10 +16,10 @@ import { join } from 'node:path'
 
 import { personaLine, assemble, foldOlderBeliefs, HARD_BANS, sleepPrompt } from '../lib/persona.js'
 import { renderSelfDoc } from '../lib/selfdoc.js'
-import { addExchange, recentExchanges, renderCarry, TALK_KEEP } from '../lib/talkmem.js'
+import { addExchange, recentExchanges, renderCarry, TALK_KEEP, TALK_MAX } from '../lib/talkmem.js'
 import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS, ROTATE_RETRY_MS } from '../lib/home.js'
 import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET, literalsOf, freshnessOf, FRESH_FLOOR } from '../lib/recall.js'
-import { normalizeConfig, DEFAULTS } from '../lib/settings.js'
+import { normalizeConfig, DEFAULTS, updateConfig, CARRY_MAX } from '../lib/settings.js'
 
 const DAY = 86_400_000
 
@@ -99,14 +99,25 @@ test('「更早以前」是折叠不是删除：原文仍在，只截断显示',
 
 // ---------------------------------------------------------------- 轮换搬运
 
-test('talkmem 只留最近几轮，且不改原话', () => withRoot(async (root) => {
-  for (let i = 0; i < TALK_KEEP + 3; i++) await addExchange(root, { me: `他说第${i}句`, her: `她说第${i}句` })
-  const list = await recentExchanges(root, 50)
-  assert.equal(list.length, TALK_KEEP)
-  assert.equal(list.at(-1).me, `他说第${TALK_KEEP + 2}句`)
-  const txt = renderCarry(list)
+// 2026-11-11：盘上按上限存（用户把设置调大时不用等新对话攒），
+// 但默认读出来的还是 4 轮——老版本的行为一个字不变。
+test('talkmem 盘上按上限留、默认只读四轮，且不改原话', () => withRoot(async (root) => {
+  for (let i = 0; i < TALK_MAX + 3; i++) await addExchange(root, { me: `他说第${i}句`, her: `她说第${i}句` })
+  const stored = await recentExchanges(root, 50)
+  assert.equal(stored.length, TALK_MAX)
+  assert.equal(stored.at(-1).me, `他说第${TALK_MAX + 2}句`)
+  assert.equal((await recentExchanges(root)).length, TALK_KEEP)
+  assert.equal(TALK_MAX, CARRY_MAX)
+  const txt = renderCarry(await recentExchanges(root))
   assert.match(txt, /上次我们说到这/)
   assert.match(txt, /他说第/)
+}))
+
+test('要 0 轮就是 0 轮（不能因为 slice(-1) 变成带一轮）', () => withRoot(async (root) => {
+  await addExchange(root, { me: '他说一句', her: '她说一句' })
+  assert.deepEqual(await recentExchanges(root, 0), [])
+  assert.deepEqual(await recentExchanges(root, -3), [])
+  assert.equal(await recentExchanges(root, 1).then((l) => l.length), 1)
 }))
 
 test('空的话不记（避免一堆空行占名额）', () => withRoot(async (root) => {
@@ -163,6 +174,32 @@ test('轮换：旧会话改名留档、新会话接管、原话搬过去', () =>
   // 没留话的时候不许留上一个房间的残句（否则新房间会读到一句不是这次说的）
   const saved = JSON.parse(await readFile(homeFile, 'utf8'))
   assert.equal(saved.lastWords, undefined)
+}))
+
+test('换会话带几轮原话听设置的：调小就少带，0 就整段不带（2026-11-11）', () => withRoot(async (root) => {
+  const { writeAtomic, paths } = await import('../lib/store.js')
+  const homeFile = join(paths(root).root, 'home.json')
+  const reseed = async () => writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 40 }))
+  for (let i = 0; i < 6; i++) await addExchange(root, { me: `第${i}句`, her: `答${i}` })
+
+  // 调小到 2：只带最后两轮
+  await updateConfig({ chat: { carry: 2 } }, root)
+  await reseed()
+  assert.equal((await rotateTalkSession(fakeCtx(), { root })).ok, true)
+  let carry = await activeCarry(root)
+  assert.match(carry, /第5句/)
+  assert.match(carry, /第4句/)
+  assert.doesNotMatch(carry, /第3句/)
+
+  // 0 = 不带：连标题都不出现，别留一节空壳
+  await updateConfig({ chat: { carry: 0 } }, root)
+  await reseed()
+  assert.equal((await rotateTalkSession(fakeCtx({ createId: 'sess-3' }), { root })).ok, true)
+  carry = await activeCarry(root)
+  assert.equal(carry, '')
+  const saved = JSON.parse(await readFile(homeFile, 'utf8'))
+  assert.equal(saved.carry, '')
+  assert.equal(saved.sessionId, 'sess-3')
 }))
 
 test('换会话只换该换的：preset / title 要留下，hearAt 跟着轮数归零（issue #14 第二报 / issue #60）', () => withRoot(async (root) => {

@@ -30,6 +30,7 @@ import {
 import { homeStatus } from '../lib/home.js'
 import { appendEvent, readEvents, writeAtomic, paths } from '../lib/store.js'
 import { recentExchanges } from '../lib/talkmem.js'
+import { saveChannel } from '../lib/channels.js'
 import { deriveSelf } from '../lib/derive.js'
 
 const HER_SESSION = 's-her'
@@ -778,7 +779,7 @@ test('桥登记成群聊之后，那几轮不涨轮数、不记「他来过」�
   }
 })
 
-test('不是她屋里那个会话，不记', async () => {
+test('本机别的 DSH 会话里他说话，不算他来找过她（2026-11-11）', async () => {
   const root = await tmpRoot()
   try {
     const { ctx } = fakeCtx()
@@ -788,12 +789,36 @@ test('不是她屋里那个会话，不记', async () => {
       ctx.emit('session/event', session('s-other'), TURN_END)
       await settled()
       assert.equal((await homeStatus(root)).turns, 0)
-      // 2026-11-03（issue #18）：屋子不搬，但「他来过」必须记下来——
-      // 否则外渠道（QQ 桥自己建会话）聊一个月，冷落检测还是落一条「他有 N 天没出现」。
+      // 2026-11-11（用户报「好几天没回她，为什么不算冷落」）：原先这里写 seen，
+      // 于是他在本机跟别的 agent 说话也会把冷落钟清零。别的会话不是他的私聊房，
+      // 不该算「他来找过她」——她没等到人，就得真记成没等到人。
       const { events } = await readEvents(root)
       const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
-      assert.equal(seen.length, 1, '别的会话里说话，只留一条「他来过」，不进这一轮的记忆')
-      assert.equal(seen[0].source, 'system')
+      assert.equal(seen.length, 0, '别的会话里说话，不替她记「他来过」')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 2026-11-11：收窄之后还要保证桥开的私聊房不被误伤——channels.json 里登记过
+// 的会话，就是她和他的一间房，里面的动静照旧算「他来过了」。
+test('桥登记过的房间（channels.json）里他说话，仍然算他来过', async () => {
+  const root = await tmpRoot()
+  try {
+    await saveChannel(root, { channel: 'qq:dm:10001', scene: 'private', sessionId: 's-qq-room' })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session('s-qq-room'), humanMsg('在私聊房里说句话'))
+      ctx.emit('session/event', session('s-qq-room'), TURN_END)
+      await settled()
+      assert.equal((await homeStatus(root)).turns, 0, '房间不是她的家，轮数照旧不涨')
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 1, '登记过的私聊房算他来找过她')
     } finally {
       off()
     }
@@ -1343,7 +1368,17 @@ test('同一进程里重复注册：只挂一个观察者，seen: 不会写两�
     const off1 = registerTurns(ctx, { root, log: () => {} })
     const off2 = registerTurns(ctx, { root, log: () => {} })
     try {
-      ctx.emit('session/event', session('s-qq'), humanMsg('同一句话'))
+      // 用桥那条路（kind:'qq'）：2026-11-11 起本机其他 DSH 会话不再记 seen，
+      // 这条用例要测的是「重复注册只写一遍」，所以走仍然会记账的外渠道。
+      ctx.emit('session/event', session('s-qq'), {
+        type: 'user/message',
+        data: {
+          id: 'qq-dup-1',
+          role: 'user',
+          content: [{ type: 'text', text: '同一句话' }],
+          source: { kind: 'qq' },
+        },
+      })
       await settled()
 
       const { events } = await readEvents(root)

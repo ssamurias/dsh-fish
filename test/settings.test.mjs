@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeConfig, DEFAULTS, inWindow, dateKey, pickWakeTime, updateConfig, loadConfig, biliOn } from '../lib/settings.js'
+import { normalizeConfig, DEFAULTS, inWindow, dateKey, pickWakeTime, updateConfig, loadConfig, biliOn, CARRY_MAX } from '../lib/settings.js'
 import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -36,6 +36,16 @@ test('越界值被夹到合法区间', () => {
   assert.equal(c.growthDays, 180)
   assert.equal(c.wakesPerDay, 0)
   assert.equal(c.daily.events, 6)
+})
+
+// 2026-11-11（外部用户反馈）：换会话带几轮原话要能调，上限跟 talkmem 的落盘上限是同一个数。
+test('换会话带几轮原话：默认 4，夹在 0..CARRY_MAX', () => {
+  assert.equal(normalizeConfig({}).chat.carry, 4)
+  assert.equal(normalizeConfig({ chat: { carry: 99 } }).chat.carry, CARRY_MAX)
+  assert.equal(normalizeConfig({ chat: { carry: -1 } }).chat.carry, 0)
+  assert.equal(normalizeConfig({ chat: { carry: 7 } }).chat.carry, 7)
+  // 写坏了不崩，回默认
+  assert.equal(normalizeConfig({ chat: { carry: 'abc' } }).chat.carry, 4)
 })
 
 test('非法时间窗回落到默认，不抛错', () => {
