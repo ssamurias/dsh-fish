@@ -460,6 +460,22 @@ test('bring_back：卡被接走时账上还挂着，答了才动文件', async (
   })
 })
 
+test('规矩申请：挂了几天还答不答得上，跟 rules.holdDays 走', async () => {
+  await withRoot(async (root) => {
+    const DAY = 86400000
+    const ctxArg = { day: 1, stage: 1, source: 'system', now: Date.now() - 4 * DAY }
+    const offer = await appendEvent({ type: 'grant_offer', text: '想试试', grant: { rule: 'some-rule' } }, ctxArg, root)
+    assert.ok(Date.now() - Date.parse(offer.ts) > 3.9 * DAY, '申请得是 4 天前的')
+    // 默认 3 天：已经搁置，答不上。
+    assert.equal((await answerCard(root, { id: `grant:${offer.id}`, selected: ['可以'] })).ok, false)
+    assert.equal((await readEvents(root)).events.filter((e) => e.type === 'grant').length, 0)
+    // 设成 5 天：还在等，答得上。
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ rules: { holdDays: 5 } }), 'utf8')
+    assert.deepEqual(await answerCard(root, { id: `grant:${offer.id}`, selected: ['可以'] }), { ok: true })
+    assert.equal((await readEvents(root)).events.find((e) => e.type === 'grant')?.grant?.verdict, 'approve')
+  })
+})
+
 test('规矩申请：只认还在等的那一张', async () => {
   await withRoot(async (root) => {
     const ctxArg = { day: 1, stage: 1, source: 'system' }

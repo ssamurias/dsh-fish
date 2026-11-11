@@ -59,6 +59,17 @@ function seedOffer(root, { id = 'g-1', rule = 'learn-affection', at = Date.now()
   return ev
 }
 
+test('currentOffer：挂几天算搁置跟 rules.holdDays 走', async () => withRoot(async (root) => {
+  const DAY = 86400000
+  seedOffer(root, { id: 'g-hold', at: Date.now() - 4 * DAY })
+  // 默认 3 天：4 天前提的已经算搁置。
+  assert.equal(await currentOffer(root), null)
+  // 设成 5 天：还在等，能裁决。
+  writeFileSync(join(root, 'config.json'), JSON.stringify({ rules: { holdDays: 5 } }), 'utf8')
+  assert.equal((await currentOffer(root))?.id, 'g-hold')
+  assert.equal(await currentOffer(root, Date.now() + 2 * DAY), null, '过了 5 天照样搁置')
+}))
+
 test('recordGrant：裁决两个字之外的都不写', async () => withRoot(async (root) => {
   const r = await recordGrant(root, { offerId: 'g-1', rule: 'x', verdict: 'sure' })
   assert.equal(r.ok, false)
