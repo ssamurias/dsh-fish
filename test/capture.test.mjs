@@ -50,7 +50,7 @@ test('growth_commit 落库，且返回值不含任何状态数字', async () => 
     // 随机拼出 DAY 这条就红，大约两千次一次。id 长什么样，上面那句 assert.match 已经管了。
     const { id: _id, ...shown } = out
     const dumped = JSON.stringify(shown).toLowerCase()
-    for (const leak of ['stage', 'needs', 'autonomy', 'competence', 'relatedness', 'day', 'autonomy']) {
+    for (const leak of ['stage', 'needs', 'autonomy', 'competence', 'relatedness', 'day']) {
       assert.ok(!dumped.includes(leak), `返回值不应含 ${leak}`)
     }
 
