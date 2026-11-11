@@ -141,3 +141,51 @@ test('体检：只读，跑完事件流不变', () => {
   examine(events)
   assert.equal(JSON.stringify(events), before)
 })
+
+// ---- 0.9.9 S-A：体检多报三个数（拦住过几次 / 改口几次 / 一天内翻面几次） ----
+
+function meta(text, daysAgo) {
+  return { id: `m${++seq}`, v: 1, ts: at(daysAgo), day: 1, stage: 1, type: 'meta', source: 'system', text }
+}
+
+test('体检：本周拦下过几次，按改写 / 钥匙分开数', () => {
+  const events = [
+    meta('guard:rewrite', 1),
+    meta('guard:rewrite', 3),
+    meta('guard:secret', 2),
+    meta('guard:rewrite', 10), // 上周的，不进这一周
+    meta('seen:2026-10-01T00:00:00.000Z', 1),
+  ]
+  const r = examine(events)
+  assert.deepEqual(r.guards, { rewrite: 2, secret: 1 })
+})
+
+test('体检：拦住时只记类别，事件流里搜不到被拦原文', () => {
+  const secret = 'sk-proj-abcdef0123456789'
+  const events = [meta('guard:secret', 1)]
+  const r = examine(events)
+  assert.equal(r.guards.secret, 1)
+  assert.doesNotMatch(JSON.stringify(r), new RegExp(secret))
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(secret))
+})
+
+test('体检：本周改口几次，修正与推翻分开数', () => {
+  const events = [
+    { id: 'r1', v: 1, ts: at(1), day: 1, stage: 1, type: 'revise', source: 'tool', text: '改成这样', refs: ['b1'], verdict: 'refined' },
+    { id: 'r2', v: 1, ts: at(2), day: 1, stage: 1, type: 'revise', source: 'tool', text: '推翻', refs: ['b2'], verdict: 'refuted' },
+    { id: 'r3', v: 1, ts: at(9), day: 1, stage: 1, type: 'revise', source: 'tool', text: '上周的', refs: ['b3'], verdict: 'refined' },
+  ]
+  const r = examine(events)
+  assert.deepEqual(r.revises, { week: 2, refined: 1, refuted: 1 })
+})
+
+test('体检：同一条判断一天内翻面才算一次（方向相反、且都在 24 小时内）', () => {
+  const events = [
+    { id: 'r1', v: 1, ts: at(1.9), day: 1, stage: 1, type: 'revise', source: 'tool', text: 'A', refs: ['b1'], verdict: 'refuted' },
+    { id: 'r2', v: 1, ts: at(1.1), day: 1, stage: 1, type: 'revise', source: 'tool', text: 'B', refs: ['b1'], verdict: 'refined' },
+    { id: 'r3', v: 1, ts: at(1), day: 1, stage: 1, type: 'revise', source: 'tool', text: 'C', refs: ['b2'], verdict: 'refined' },
+    { id: 'r4', v: 1, ts: at(0.9), day: 1, stage: 1, type: 'revise', source: 'tool', text: 'D', refs: ['b2'], verdict: 'refined' },
+  ]
+  const r = examine(events)
+  assert.equal(r.flips, 1)
+})
