@@ -97,7 +97,8 @@ test('写一条梦：refs 落到她的话上就成功，一天只能一条', asy
 
   const second = await writeDream(root, { text: '又梦见一次。', refs: ['ev_a'] })
   assert.equal(second.ok, false)
-  assert.match(second.note, /今天已经记过/)
+  assert.match(second.note, /第 \d+ 天已经记过一条梦了/)
+  assert.doesNotMatch(second.note, /今天/)
 }))
 
 test('「昨夜」卡只给最近一条梦的原文来源，其余条目照旧只给 id', async () => withRoot(async (root) => {
