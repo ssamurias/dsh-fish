@@ -827,6 +827,139 @@ test('桥登记过的房间（channels.json）里他说话，仍然算他来过'
   }
 })
 
+// 宿主 0.2.2-rc.2：客户端里他亲手点出来、但 kind 不是 'user' 的两种消息。
+// 形状照宿主源码手写（dsh-api-session-controller 的 prompt()：content 为空时
+// kind 写成 'retry'；dsh-user-questions 的 answer()：kind 'user-question-reply'）。
+/** 一轮失败后点「继续」：正文是空的 */
+function retryMsg(extra = {}) {
+  return {
+    type: 'user/message',
+    data: {
+      id: `m-${Math.random().toString(36).slice(2)}`,
+      role: 'user',
+      content: [],
+      source: { kind: 'retry', rpcId: 'rpc-retry-1', clientTimeZone: 'Asia/Shanghai', ...extra },
+    },
+  }
+}
+
+/** 答了一张问题卡：没有 rpcId，也没有时区 */
+function questionReplyMsg() {
+  return {
+    type: 'user/message',
+    data: {
+      id: `m-${Math.random().toString(36).slice(2)}`,
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: JSON.stringify({ kind: 'answer_to_pending_question', tool: 'ask_user_question', callId: 'call-1' }),
+      }],
+      source: { kind: 'user-question-reply', callId: 'call-1', outcome: 'answered' },
+    },
+  }
+}
+
+const seenCount = async (root) => {
+  const { events } = await readEvents(root)
+  return events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length
+}
+
+// 别的会话里桌面打字从 2026-11-11 起不算「他来找过她」，但那个判断只认 kind 'user'。
+// 「继续」和问题卡的回答被当成桥注入的消息，在取正文之前就写了 seen：
+// 他在任何别的会话里点一下「继续」，她的冷落钟就清零。
+test('本机别的 DSH 会话里点「继续」（kind retry，空正文），不算他来找过她', async () => {
+  for (const [name, msg] of [
+    ['带时区', retryMsg()],
+    ['不带时区', retryMsg({ clientTimeZone: undefined })],
+  ]) {
+    const root = await tmpRoot()
+    try {
+      const { ctx } = fakeCtx()
+      const logs = []
+      const off = registerTurns(ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+      try {
+        assert.equal(classifyMessage(msg.data), 'human', '判法没变：在她自己的房间里它仍是他动的手')
+        ctx.emit('session/event', session('s-other'), msg)
+        ctx.emit('session/event', session('s-other'), TURN_END)
+        await settled()
+        assert.equal(await seenCount(root), 0, `${name}：别的会话里点「继续」，不替她记「他来过」`)
+        assert.equal((await homeStatus(root)).turns, 0)
+        assert.deepEqual(logs, [], `${name}：也不打「只记他来过」那行日志`)
+      } finally {
+        off()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+    }
+  }
+})
+
+test('本机别的 DSH 会话里答一张问题卡（kind user-question-reply），不算他来找过她', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session('s-other'), questionReplyMsg())
+      ctx.emit('session/event', session('s-other'), TURN_END)
+      await settled()
+      assert.equal(await seenCount(root), 0, '别的会话里答卡，不替她记「他来过」')
+      assert.equal((await homeStatus(root)).turns, 0)
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('桥登记过的房间里点「继续」、答问题卡，仍然算他来过', async () => {
+  for (const make of [retryMsg, questionReplyMsg]) {
+    const root = await tmpRoot()
+    try {
+      await saveChannel(root, { channel: 'qq:dm:10001', scene: 'private', sessionId: 's-qq-room' })
+      const { ctx } = fakeCtx()
+      const off = registerTurns(ctx, { root, log: () => {} })
+      try {
+        ctx.emit('session/event', session('s-qq-room'), make())
+        ctx.emit('session/event', session('s-qq-room'), TURN_END)
+        await settled()
+        assert.equal(await seenCount(root), 1, '登记过的私聊房是她的房间，照旧')
+        assert.equal((await homeStatus(root)).turns, 0, '房间不是她的家，轮数照旧不涨')
+      } finally {
+        off()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+    }
+  }
+})
+
+test('她的家里：答问题卡照旧算一轮；点「继续」正文是空的，照旧不记', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(), retryMsg())
+      ctx.emit('session/event', session(), TURN_END)
+      await settled()
+      assert.equal(await seenCount(root), 0, '空正文的「继续」在她家里本来就不写 seen')
+      assert.equal((await homeStatus(root)).turns, 0)
+
+      ctx.emit('session/event', session(), questionReplyMsg())
+      ctx.emit('session/event', session(), TURN_END)
+      await waitFor(async () => (await homeStatus(root)).turns === 1)
+      assert.equal(await seenCount(root), 1, '她家里答卡：他来过')
+      assert.equal((await homeStatus(root)).turns, 1, '也照旧涨一轮')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
 // 2026-11-03（github:ssamurias/dsh-fish#18）：QQ 桥之类外渠道注进来的消息，
 // source.kind 不是 'user'，原来第一道判据就当 context 吞掉——turns 恒为 1、
 // heard 只有一条、冷落检测到点就误记。判据改成机器黑名单后，这条路要真的通。
