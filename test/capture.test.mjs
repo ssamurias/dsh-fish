@@ -46,7 +46,10 @@ test('growth_commit 落库，且返回值不含任何状态数字', async () => 
     assert.match(out.id, /^ev_[0-9A-Z]{26}$/)
 
     // 回显检查：返回值里不能出现阶段/天数/needs 之类
-    const dumped = JSON.stringify(out).toLowerCase()
+    // id 先拿掉再查：它是 ULID，后 16 位是随机的 Crockford 字母（D、A、Y 都在里面），
+    // 随机拼出 DAY 这条就红，大约两千次一次。id 长什么样，上面那句 assert.match 已经管了。
+    const { id: _id, ...shown } = out
+    const dumped = JSON.stringify(shown).toLowerCase()
     for (const leak of ['stage', 'needs', 'autonomy', 'competence', 'relatedness', 'day', 'autonomy']) {
       assert.ok(!dumped.includes(leak), `返回值不应含 ${leak}`)
     }
