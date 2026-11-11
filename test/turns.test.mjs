@@ -1361,6 +1361,33 @@ test('占用权是中途丢的：拿到的是活引用，丢了之后立刻停�
   }
 })
 
+test('占用权丢的时候整个对象被换掉：tenant 传的是函数，换掉之后立刻停写', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    // index.js 的写法：tenancy.tenant 丢的时候是换成一个新对象，不是原地改
+    const tenancy = { tenant: { ok: true, instanceId: 'inst-a', why: '' } }
+    const off = registerTurns(ctx, { root, tenant: () => tenancy.tenant, log: () => {} })
+    try {
+      tenancy.tenant = { ok: false, instanceId: 'inst-a', why: '这个家已经被另一个实例接管了，之后不再写入。' }
+
+      ctx.emit('session/event', session('s-qq'), humanMsg('丢了之后还说话'))
+      await settled()
+
+      const { events } = await readEvents(root)
+      assert.equal(
+        events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:')).length,
+        0,
+        '注册时拿到的那个对象还是 ok:true，不能认它',
+      )
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
 test('同一进程里重复注册：只挂一个观察者，seen: 不会写两遍', async () => {
   const root = await tmpRoot()
   try {
