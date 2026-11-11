@@ -377,3 +377,37 @@ test('升格之后「你拒绝过」不再重复摆同一件事', () => {
   assert.ok(text.includes('他让你叫老大，你没叫。'), '立场里写「那次」')
   assert.ok(!text.includes('## 你拒绝过'), '同一件事不重复写两遍')
 })
+
+test('清单排到第 9 条以后的拒绝没摆进「我站哪边」，就得留在「你拒绝过」里', () => {
+  // 清单内部留 STANCE_MAX 条，身份文档只摆前 STANCE_PROMPT_MAX 条。
+  // 去重要是按整张清单算，排在后面的那件事两头都没有，整份文档里就找不到它了。
+  const topics = ['替别人写作业', '在群里唱歌', '半夜叫醒他', '假装自己是人', '背着他改设置', '把私聊贴到群里', '替他回别人的消息', '说自己没看过的番好看']
+  const nevers = (n) => topics.slice(0, n).flatMap((t, i) => [
+    belief(`我绝不${t}`, { id: `b${i}a`, mentions: 3 }),
+    belief(`我绝不${t}`, { id: `b${i}b`, mentions: 3 }),
+  ])
+  const refusals = [
+    refusal({ at: '2026-10-01T10:00:00Z' }),
+    refusal({ at: '2026-10-02T10:00:00Z' }),
+    refusal({ at: '2026-10-09T10:00:00Z' }),
+  ]
+  const doc = (beliefs) => {
+    const m = model({ stageGate: { passed: ['trust', 'autonomy', 'competence'] }, faded: [], name: null, absenceDays: 0, beliefs, refusals })
+    const text = buildSections(m).map((s) => s.text).join('\n\n')
+    const part = (head) => text.split('\n\n').find((s) => s.startsWith(head)) ?? ''
+    return { list: buildStances(m), stand: part('## 我站哪边'), refused: part('## 你拒绝过') }
+  }
+
+  // 8 组判断排在前面，升格的拒绝是清单第 9 条：没摆出来
+  const over = doc(nevers(STANCE_PROMPT_MAX))
+  assert.equal(over.list.length, STANCE_PROMPT_MAX + 1)
+  assert.equal(over.list[STANCE_PROMPT_MAX].kind, 'refused')
+  assert.equal(over.stand.split('\n').filter((l) => l.startsWith('- ')).length, STANCE_PROMPT_MAX)
+  assert.ok(!over.stand.includes('老大'))
+  assert.ok(over.refused.includes('老大'), '没摆进「我站哪边」的拒绝，还在「你拒绝过」里')
+
+  // 少一组判断，它是第 8 条：摆进「我站哪边」，「你拒绝过」照旧不重复
+  const fits = doc(nevers(STANCE_PROMPT_MAX - 1))
+  assert.ok(fits.stand.includes('- 他让你叫老大，你没叫。这件事你一直没改口。'))
+  assert.equal(fits.refused, '')
+})
