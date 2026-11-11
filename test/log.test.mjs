@@ -33,6 +33,10 @@ import {
 } from '../lib/log.js'
 import { DEFAULTS } from '../lib/settings.js'
 import { validateEvent } from '../lib/schema.js'
+import { readEvents } from '../lib/store.js'
+import { withUse } from '../lib/use.js'
+import { addNote } from '../lib/note.js'
+import { makeAppointment } from '../lib/appoint.js'
 
 async function tempRoot() {
   return await mkdtemp(join(tmpdir(), 'fish-log-'))
@@ -286,8 +290,8 @@ test('导出的事件流不带正文：设置页答应了「不含正文」「�
   for (const word of ['甲句', '乙句', '丙号', '丁句', '戊号', '己号', '庚号', '辛句', '壬句', '癸句', '子句', '丑句']) {
     assert.equal(text.includes(word), false, `导出里不该出现「${word}」`)
   }
-  // meta 原样留着：watched: 这种计数只在事件流里，日志文件里没有
-  assert.ok(text.includes(meta), 'meta 行要原样留着')
+  // 纯记账的 meta 原样留着：watched: 这种计数只在事件流里，日志文件里没有
+  assert.ok(text.includes(meta), '记账的 meta 行要原样留着')
   // 排查还要看得出「哪一条、什么时候、什么类型、多长」，否则这段尾巴就白带了
   const out = text.split('\n')
   const row = JSON.parse(out.find((l) => l.includes(rows[0].id)))
@@ -305,4 +309,137 @@ test('导出的事件流不带正文：设置页答应了「不含正文」「�
   const short = JSON.parse(out.find((l) => l.includes('ev-no-flags')))
   assert.deepEqual(short.flags, [])
   assert.equal(short.textLen, '合成丑句没有标记'.length)
+})
+
+// ---- meta 行的白名单（use: 这类记账是「meta 行原样留」之后才加的） ----
+
+function eventSection(text) {
+  const out = text.split('\n')
+  const from = out.findIndex((l) => l.startsWith('--- 事件流（'))
+  const to = out.findIndex((l, i) => i > from && l.startsWith('--- '))
+  return out.slice(from + 1, to < 0 ? undefined : to).filter((l) => l !== '')
+}
+
+test('导出不带她记下的原文：her_note / her_appoint 的 use: 行只留「工具 + 成没成」', async () => {
+  const root = await tempRoot()
+  // 走真的 addNote / makeAppointment 和真的 withUse：回执的 echo 就是她写的原文，
+  // use.js 的 heardLine 优先拿它拼进 `use:<工具> ok <那句>`。
+  const note = withUse({ name: 'her_note', execute: (a) => addNote(root, a) }, { root, tool: 'her_note' })
+  const appoint = withUse({ name: 'her_appoint', execute: (a) => makeAppointment(root, a) }, { root, tool: 'her_appoint' })
+  const due = new Date(Date.now() + 3 * 86_400_000)
+  const dk = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`
+  assert.equal((await note.execute({ text: '合成寅句只想自己记着的话' }, undefined)).ok, true)
+  assert.equal((await appoint.execute({ what: '合成卯句约好要做的事', due: dk }, undefined)).ok, true)
+
+  // 先确认前提：原文真的在事件流的 use: 行里（否则下面的「不出现」是空过）
+  const { events } = await readEvents(root)
+  const uses = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('use:'))
+  assert.equal(uses.length, 2)
+  assert.ok(uses[0].text.includes('寅句') && uses[1].text.includes('卯句'), '事件流里的 use: 行带着原文')
+
+  const text = buildBundle(root, { lines: 5, eventLines: 60 })
+  assert.equal(text.includes('寅句'), false, '导出里不该出现便条原文')
+  assert.equal(text.includes('卯句'), false, '导出里不该出现约定原文')
+  // 排查要的那一半还在：哪个工具、成没成、什么时候、后半句多长
+  const rows = eventSection(text).map((l) => JSON.parse(l))
+  assert.equal(rows.length, 2)
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['flags', 'id', 'text', 'textLen', 'ts', 'type'])
+  assert.equal(rows[0].id, uses[0].id)
+  assert.equal(rows[0].ts, uses[0].ts)
+  assert.equal(rows[0].textLen, uses[0].text.length)
+  assert.equal(rows[0].text, `use:her_note ok（后面 ${uses[0].text.length - 'use:her_note ok'.length} 字不导出）`)
+  assert.match(rows[1].text, /^use:her_appoint ok（后面 \d+ 字不导出）$/)
+})
+
+test('导出的 meta 行：夹着人写的字的只留头和长度，不认识的前缀也一样', async () => {
+  const root = await tempRoot()
+  const opts = { day: 1, stage: 1, source: 'system' }
+  const mk = (text) => validateEvent({ type: 'meta', text }, opts)
+  const rows = [
+    mk('use:her_say fail 合成辰句没说出去的话'),
+    mk('use:her_note\tok 合成巳句形状不对的账'),
+    mk('proactive-say:2026-11-05:合成午句为什么现在想说'),
+    mk('selfrule:合成未句她请求的规矩'),
+    mk('import-name:合成申号名字'),
+    mk('import-mark:合成酉号来源'),
+    mk('someday-new:合成戌句以后才加的记账'),
+    mk('合成亥句没有前缀的一行'),
+  ]
+  writeFileSync(join(root, 'events.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8')
+
+  const text = buildBundle(root, { lines: 5, eventLines: 60 })
+  for (const word of ['辰句', '巳句', '午句', '未句', '申号', '酉号', '戌句', '亥句']) {
+    assert.equal(text.includes(word), false, `导出里不该出现「${word}」`)
+  }
+  const got = eventSection(text).map((l) => JSON.parse(l))
+  assert.deepEqual(got.map((r) => r.text.replace(/（后面 \d+ 字不导出）$/, '')), [
+    'use:her_say fail',
+    'use:',
+    'proactive-say:2026-11-05:',
+    'selfrule:',
+    'import-name:',
+    'import-mark:',
+    'someday-new:',
+    '',
+  ])
+  got.forEach((r, i) => {
+    assert.equal(r.id, rows[i].id)
+    assert.equal(r.textLen, rows[i].text.length)
+    assert.match(r.text, /（后面 \d+ 字不导出）$/)
+  })
+})
+
+test('导出的 meta 行：纯记账的原样留着，没有后半句的也不动', async () => {
+  const root = await tempRoot()
+  const opts = { day: 1, stage: 1, source: 'system' }
+  const plain = [
+    'sched:2026-11-05 2026-11-05T02:30:00.000Z',
+    'wake:2026-11-05 table',
+    'wakefail:2026-11-05 屋子没接上，这次没开口',
+    'fired:first_look',
+    'quiet:2026-11-05 无候选模板，今天不打扰',
+    'sleep:2026-11-05',
+    'think:2026-11-05',
+    'table:2026-11-05',
+    'rest:2026-11-05',
+    'drive-spend:2026-11-05:1762300000000',
+    'proactive-turn:2026-11-05:1762300000000',
+    'proactive-silent:2026-11-05:1762300000000',
+    'digest:2026-11-05 BV1xx411c7mD BV1xx411c7mE',
+    'rotate:40:sess-1',
+    'hand:2026-11-05 BV1xx411c7mD',
+    'browse:2026-11-05 [{"bvid":"BV1xx411c7mD","title":"合成标题"}]',
+    'browse-more:2026-11-05 [{"bvid":"BV1xx411c7mE","title":"合成标题"}]',
+    'browsed:BV1xx411c7mD',
+    'looked:BV1xx411c7mD 合成标题',
+    'look:2026-11-05 BV1xx411c7mD {"title":"合成标题","up":"合成作者","duration":60,"view":1}',
+    'watched:2026-11-05 BV1xx411c7mD {"title":"合成标题","up":"合成作者","duration":60,"view":1}',
+    'hook:1',
+    'comment:2026-11-05 BV1xx411c7mD 123',
+    'creply:2026-11-05 BV1xx411c7mD 123 456 owner',
+    'cseen:2026-11-05 456',
+    'seen:2026-11-05T02:30:00.000Z',
+    'diary:2026-11-05 trip:t1',
+    'letter:2026-11-05:ev_1',
+    'react:ev_1:like',
+    'ask-ok:ev_1',
+    'ask-no:ev_1',
+    'ask-later:ev_1',
+    'ask-time:ev_1 {"wakesPerDay":2}',
+    'outing-reject:ev_1 ev_2',
+    'outing-keep:ev_1',
+    'possess-reject:ev_1',
+    'possess-keep:ev_1',
+    'absence-reject:ev_1',
+    '家换了：甲 → 乙。这不是搬家——旧家的东西还在旧地方，没有并过来；这边从一开始就是新的。',
+    // 整行就是头的：没有可藏的，照原样
+    'use:bili_search ok',
+    'proactive-say:2026-11-05:free',
+    'import-mark:',
+  ]
+  const lines = plain.map((t) => JSON.stringify(validateEvent({ type: 'meta', text: t }, opts)))
+  writeFileSync(join(root, 'events.jsonl'), lines.join('\n') + '\n', 'utf8')
+
+  const got = eventSection(buildBundle(root, { lines: 5, eventLines: 100 }))
+  assert.deepEqual(got, lines)
 })
