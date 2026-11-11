@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { CATALOG, findTemplate } from '../lib/events.js'
 import { pick, cardContext, PRESSURE } from '../lib/generator.js'
 import { normalizeConfig } from '../lib/settings.js'
+import { deriveSelf } from '../lib/derive.js'
 
 // 2026-11-08 扩充包：17 张新卡。
 // 这一组测试只守两件事：
@@ -57,7 +58,7 @@ test('扩充包：prompt 只给处境，不写台词、不撒娇、不读数值'
     faded: [{ text: '一条很久没提的判断' }],
     tensions: [{ a: { text: '甲说法' }, b: { text: '乙说法' } }],
     scars: [{ quote: '那次他走的时候' }],
-    facts: { refused: 1 },
+    facts: { refused: 1, askRejected: 1 },
     lastSeenAt: Date.now(),
   })
   const ctx = { dream: { text: '海面下有一扇门' }, interest: { label: '鱼为什么浮上来' }, question: { text: '鱼会疼吗' }, occurrences: 0 }
@@ -95,7 +96,8 @@ test('扩充包：条件在事实出现后成立，并把原话带进处境', ()
   assert.match(byId.faded_check.prompt(model({ faded: [{ text: '旧判断' }] })), /旧判断/)
   assert.equal(byId.scar_revisit.cond(model({ scars: [{ quote: '那次他走的时候' }] })), true)
   assert.match(byId.scar_revisit.prompt(model({ scars: [{ quote: '那次他走的时候' }] })), /那次他走的时候/)
-  assert.equal(byId.after_no.cond(model({ facts: { refused: 1 } })), true)
+  assert.equal(byId.after_no.cond(model({ facts: { refused: 1 } })), false, '她自己拒绝过别人，不等于她被拒过')
+  assert.equal(byId.after_no.cond(model({ facts: { refused: 0, askRejected: 1 } })), true)
   assert.equal(byId.teach_him.cond(model({ beliefCount: 5 })), true)
   assert.equal(byId.leave_something.cond(model({ stage: 4, day: 26 })), true)
   assert.match(byId.dream_note.prompt(model({}), { dream: { text: '海面下有一扇门' } }), /海面下有一扇门/)
@@ -156,4 +158,46 @@ test('扩充包 · 端到端：问过没答案的问题，question_follow 能选
   const r = pick(m, cfg, today(), events)
   assert.equal(r?.template?.id, 'question_follow')
   assert.match(r.prompt, /浮上来/)
+})
+
+// after_no 说的是「你提过一件事，他没答应」。这句话要有账：事件流里得有一条被驳回的 ask。
+test('after_no：只有她自己的拒绝时不出；有一条被驳回的请求才出', () => {
+  const tpl = findTemplate('after_no')
+  let n = 0
+  const ev = (type, daysAgo, over = {}) => ({
+    id: `ev_an${++n}`, v: 1, ts: at(daysAgo), day: 1, stage: 1, type, source: 'tool',
+    text: '', refs: [], verdict: null, confidence: 0.5, flags: [], ...over,
+  })
+  const base = [
+    ev('seed', 9, { source: 'import', text: '你不是助手。你刚开始存在。' }),
+    ev('utterance', 8, { text: '我觉得下雨天适合待在家里。' }),
+    ev('refusal', 7, { text: '我拒绝改掉自己的名字。' }),
+    ev('utterance', 6, { text: '我不想回答这个。' }),
+  ]
+  const ask = (id, daysAgo) => ev('ask', daysAgo, { id, source: 'system', text: '我想多一次醒来的时间。', ask: { kind: 'other', subject: '' } })
+  const answer = (askId, daysAgo, verdict, via = 'ui') =>
+    ev('answer', daysAgo, { source: 'system', text: '（没留话）', ask: { askId, verdict, reason: '', via } })
+
+  // 1) 她拒绝过（正式一次、口头一次），但从没被拒过
+  const onlyHers = deriveSelf(base, { growthDays: 30 })
+  assert.equal(onlyHers.facts.refused, 2)
+  assert.equal(onlyHers.facts.askRejected, 0)
+  assert.equal(tpl.cond(onlyHers), false, '只有她自己的拒绝：这张卡说的事没发生过')
+
+  // 2) 问了还没答 / 答应了 / 以后再说 / 放了一天没人答：都不是「没答应」
+  const notRejected = deriveSelf([
+    ...base,
+    ask('ev_q1', 5), answer('ev_q1', 5, 'approve'),
+    ask('ev_q2', 4), answer('ev_q2', 4, 'later'),
+    ask('ev_q3', 3), answer('ev_q3', 2, 'later', 'timeout'),
+    ask('ev_q4', 0),
+  ], { growthDays: 30 })
+  assert.equal(notRejected.facts.askRejected, 0)
+  assert.equal(tpl.cond(notRejected), false)
+
+  // 3) 有一条被驳回的请求
+  const rejected = deriveSelf([...base, ask('ev_q5', 2), answer('ev_q5', 2, 'reject')], { growthDays: 30 })
+  assert.equal(rejected.facts.askRejected, 1)
+  assert.equal(rejected.facts.refused, 2, '她被拒不改她拒绝别人的那个数')
+  assert.equal(tpl.cond(rejected), true)
 })
