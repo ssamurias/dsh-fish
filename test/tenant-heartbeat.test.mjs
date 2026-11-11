@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 
-import { claimRoot, beatRoot, beatRootState, releaseRoot, TENANT_FILE, HEARTBEAT_MS } from '../lib/tenant.js'
+import { claimRoot, beatRoot, beatRootState, releaseRoot, withFileLock, TENANT_FILE, CLAIM_LOCK_FILE, HEARTBEAT_MS } from '../lib/tenant.js'
 import { collectBackup, restoreBackup } from '../lib/backup.js'
 import { appendEvent } from '../lib/store.js'
 import { apply } from '../lib/index.js'
@@ -139,7 +139,7 @@ test('beatRootState：这一次读或写碰到 EBUSY / EPERM 是 unknown，下�
   await withBase(async (root) => {
     const now = 1_800_000_000_000
     await claimRoot(root, { instanceId: 'A', now })
-    const real = { readFile: fs.readFile, writeFile: fs.writeFile }
+    const real = { readFile: fs.readFile, rename: fs.rename }
     const fail = (code) => Object.assign(new Error(`${code}: resource busy or locked`), { code })
     try {
       fs.readFile = async (file, ...a) => {
@@ -148,14 +148,15 @@ test('beatRootState：这一次读或写碰到 EBUSY / EPERM 是 unknown，下�
       }
       assert.deepEqual(await beatRootState(root, 'A', { now: now + 1000 }), { state: 'unknown', code: 'EBUSY' })
       fs.readFile = real.readFile
-      fs.writeFile = async (file, ...a) => {
-        if (String(file).endsWith(TENANT_FILE)) throw fail('EPERM')
-        return real.writeFile(file, ...a)
+      // 声明是原子写的（tmp + rename）：写不成发生在 rename 盖上去那一步
+      fs.rename = async (from, to, ...a) => {
+        if (String(to).endsWith(TENANT_FILE)) throw fail('EPERM')
+        return real.rename(from, to, ...a)
       }
       assert.deepEqual(await beatRootState(root, 'A', { now: now + 2000 }), { state: 'unknown', code: 'EPERM' })
     } finally {
       fs.readFile = real.readFile
-      fs.writeFile = real.writeFile
+      fs.rename = real.rename
     }
     assert.deepEqual(await beatRootState(root, 'A', { now: now + 3000 }), { state: 'mine' })
   })
@@ -289,7 +290,7 @@ test('从备份恢复带旧 instanceId 的包之后：过了心跳她照样能�
 test('心跳碰到几次 EBUSY / EPERM：不置只读，之后照常续上；文件里真是别人时照旧丢、不抢回', async () => {
   await withBase(async (root) => {
     const inst = await boot(root)
-    const real = { readFile: fs.readFile, writeFile: fs.writeFile }
+    const real = { readFile: fs.readFile, rename: fs.rename }
     try {
       const mine = (await inst.claimOnDisk()).instanceId
       let busy = 0
@@ -303,12 +304,12 @@ test('心跳碰到几次 EBUSY / EPERM：不置只读，之后照常续上；文
       assert.equal((await inst.note('读不成的那几拍之后')).ok, true)
 
       let denied = 0
-      fs.writeFile = async (file, ...a) => {
-        if (String(file).endsWith(TENANT_FILE)) { denied++; throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) }
-        return real.writeFile(file, ...a)
+      fs.rename = async (from, to, ...a) => {
+        if (String(to).endsWith(TENANT_FILE)) { denied++; throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) }
+        return real.rename(from, to, ...a)
       }
       for (let i = 0; i < 200 && denied < 3; i++) await sleep(BEAT / 2)
-      fs.writeFile = real.writeFile
+      fs.rename = real.rename
       assert.ok(denied >= 3)
       assert.equal((await inst.note('写不成的那几拍之后')).ok, true)
       assert.deepEqual(inst.lostLogs(), [])
@@ -318,9 +319,11 @@ test('心跳碰到几次 EBUSY / EPERM：不置只读，之后照常续上；文
       for (let i = 0; i < 100 && t1 === t0; i++) { await sleep(BEAT); t1 = (await inst.claimOnDisk()).beatAt }
       assert.ok(t1 > t0, '之后的心跳照常续期')
 
-      // 真被接管：文件里明写着另一个实例
+      // 真被接管：文件里明写着另一个实例。和真的认领一样在 .instance.lock 里写——
+      // 不拿锁的话可能正落在某一拍心跳「读完、还没写回」之间，被那一拍盖回去。
       const cur = await inst.claimOnDisk()
-      await fs.writeFile(join(root, TENANT_FILE), JSON.stringify({ ...cur, instanceId: 'OTHER', pid: process.pid, beatAt: Date.now() }), 'utf8')
+      await withFileLock(join(root, CLAIM_LOCK_FILE), () =>
+        fs.writeFile(join(root, TENANT_FILE), JSON.stringify({ ...cur, instanceId: 'OTHER', pid: process.pid, beatAt: Date.now() }), 'utf8'))
       let n = null
       for (let i = 0; i < 100; i++) {
         await sleep(BEAT)
@@ -340,7 +343,47 @@ test('心跳碰到几次 EBUSY / EPERM：不置只读，之后照常续上；文
       assert.equal((await inst.claimOnDisk()).instanceId, 'OTHER')
     } finally {
       fs.readFile = real.readFile
-      fs.writeFile = real.writeFile
+      fs.rename = real.rename
+      await inst.stop()
+    }
+  })
+})
+
+test('从备份恢复搬旧档的那一下排在心跳后面：一拍心跳正开着家里的文件时不搬', async () => {
+  // Windows 上目录里有文件开着，整个目录就改不了名（恢复回「旧档搬不动（EPERM）」）。
+  // 一拍心跳现在要建锁、写临时文件、改名，开着文件的时间比以前长，所以搬的那一下要和它错开。
+  await withBase(async (root, base) => {
+    const src = join(base, 'export', 'dsh-fish')
+    await fs.mkdir(src, { recursive: true })
+    await appendEvent({ type: 'seed', text: '起点' }, { day: 1, stage: 1, source: 'system' }, src)
+    const bundle = JSON.parse(JSON.stringify(await collectBackup(src)))
+
+    const inst = await boot(root)
+    const real = { open: fs.open, unlink: fs.unlink, readFile: fs.readFile, rename: fs.rename }
+    const isLock = (f) => String(f).endsWith(CLAIM_LOCK_FILE)
+    let busy = false
+    let moved = 0
+    let overlap = 0
+    try {
+      // 拿到 .instance.lock 到放掉它之间算「这一拍正在做」；中间读声明那一下拖慢，让窗口够宽
+      fs.open = async (f, ...a) => { const fh = await real.open(f, ...a); if (isLock(f)) busy = true; return fh }
+      fs.unlink = async (f, ...a) => { try { return await real.unlink(f, ...a) } finally { if (isLock(f)) busy = false } }
+      fs.readFile = async (f, ...a) => {
+        if (busy && String(f).endsWith(TENANT_FILE)) await sleep(150)
+        return real.readFile(f, ...a)
+      }
+      fs.rename = async (from, to, ...a) => {
+        if (String(from) === String(root)) { moved += 1; if (busy) overlap += 1 }
+        return real.rename(from, to, ...a)
+      }
+      for (let i = 0; i < 400 && !busy; i++) await sleep(5)
+      assert.equal(busy, true, '等到一拍心跳做到一半')
+      const r = await inst.post('/dsh-fish/backup/restore', bundle)
+      assert.equal(r.status, 200, JSON.stringify(r.body))
+      assert.equal(moved, 1, '旧档搬走了一次')
+      assert.equal(overlap, 0, '搬的时候没有哪一拍心跳正开着里面的文件')
+    } finally {
+      Object.assign(fs, real)
       await inst.stop()
     }
   })
