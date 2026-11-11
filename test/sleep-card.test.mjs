@@ -27,6 +27,18 @@ test('没有候选时就不摆那两行——不硬凑', () => {
   assert.doesNotMatch(p, /\n {2}- 「/)
 })
 
+test('有同极性、相似度在中段的一对时，把她自己的两句话摆出来', () => {
+  const p = sleepPrompt(
+    m([
+      { id: 'a', text: '他说的话我一般会先想一想再回', since: ago(1) },
+      { id: 'b', text: '别人说的话我通常先想一想再回应', since: ago(2) },
+    ]),
+    { now: NOW },
+  )
+  assert.match(p, /\n {2}- 「他说的话我一般会先想一想再回」/)
+  assert.match(p, /\n {2}- 「别人说的话我通常先想一想再回应」/)
+})
+
 test('想不出来有出口，不逼她给一个答案', () => {
   const p = sleepPrompt(m(), { now: NOW })
   assert.match(p, /我没想清楚/)
