@@ -436,6 +436,90 @@ test('数量词和祈使动词不会被当成称呼（issue #102）', () => {
   assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '哥哥')
 })
 
+// 她说到对方时写的不一定是「他」。对方是女生、或者她不猜性别时，
+// 写出来是「以后我叫她「阿岸」」「以后叫 TA 阿岸」——原来的正则只认「他」，
+// 整句认不出来：称呼一直是空的，身份段写「你还没想好怎么称呼他」。
+test('称呼也认「她 / TA」，不只认「他」', () => {
+  // 「叫 / 称呼 / 称」这一侧
+  assert.deepEqual(pickNameHit('以后我叫她「阿岸」。'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('我想称呼她阿岸。'), { name: '阿岸', confident: false })
+  assert.deepEqual(pickNameHit('称她为「阿岸」'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('我叫TA「阿岸」'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('以后叫 TA 阿岸。'), { name: '阿岸', confident: true })
+  assert.equal(pickName('以后叫ta阿岸'), '阿岸')
+  assert.equal(pickName('以后叫 TA Alice'), 'Alice')
+  // 「给的名字 / 自己的名字」这一侧
+  assert.equal(pickName('她给自己的名字是阿岸'), '阿岸')
+  assert.equal(pickName('她给了自己的名字：阿岸，说她认这个名字。'), '阿岸')
+  assert.equal(pickName('TA 自己的名字：阿岸'), '阿岸')
+  assert.equal(pickName('问过了，ta给的名字是阿岸'), '阿岸')
+  // 整条链路：身份里的称呼跟着有了，后来用同样的句式改口也跟得上
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '以后我叫她「阿岸」。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 2 * DAY_MS }).name, '阿岸')
+  evs.push(ev('ev_b', 'utterance', 3, '以后叫她折帆。'))
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '折帆')
+})
+
+test('「她 / TA」这一侧，该挡的照样挡', () => {
+  // 代词本身不算称呼
+  assert.equal(pickName('以后叫她她吧'), null)
+  assert.equal(pickName('以后叫TA他'), null)
+  assert.equal(pickName('以后叫她TA吧'), null)
+  // 她自己的名字不是对对方的称呼
+  assert.equal(pickName('她给我起了名字：小鱼。'), null)
+  // 讨论名字、祈使句、数量词、「的名字」——#98 #100 #102 那几类换成「她」也不认
+  assert.equal(pickName('从她名字上切下来的一块'), null)
+  for (const s of ['叫她出去', '叫她走开', '我叫她起床', '叫 TA 闭嘴']) assert.equal(pickName(s), null)
+  assert.equal(pickName('哥哥只能叫她一个人'), null)
+  assert.equal(pickName('我叫她的名字，她应了。'), null)
+  // 「她们 / 她俩 / ta们」说的是几个人，不是对方
+  for (const s of ['以后叫她们姐妹', '以后叫她俩姐妹花', '以后叫ta们家人']) assert.equal(pickName(s), null)
+  // TA 得是单独的一个词。ta 开头的英文单词、TA 开头的别的名字，不是代词
+  for (const s of ['这个东西以后叫table吧', '以后叫tag「阿岸」', '以后叫Tata吧', '以后叫Ta-chan吧', '以后叫ta_bot吧', '以后叫TA2吧']) {
+    assert.equal(pickName(s), null, s)
+  }
+  // ta 结尾的英文单词也不是
+  for (const s of ['Meta给的名字叫Llama', 'data自己的名字是表一', 'beta给了自己的名字：贝塔', '这个 beta 自己的名字叫内测', 'vista给的名字是X']) {
+    assert.equal(pickName(s), null, s)
+  }
+  // TA 在上一行的末尾，「自己的名字」在下一行，不是一句话
+  assert.equal(pickName('我问了ta\n自己的名字是阿岸'), null)
+  // 截过了头，把后半句的 TA 带了进来：不是名字（「以后叫他阿岸；他同意」原来也认不出）
+  assert.equal(pickName('以后叫ta阿岸；ta同意'), null)
+  // 「她」指的是第三个人：裸的「叫她X」是低置信，盖不掉已经定下的称呼
+  assert.deepEqual(pickNameHit('群里的人都叫她王姐'), { name: '王姐', confident: false })
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '以后叫他折帆。'),
+    ev('ev_b', 'utterance', 3, '群里的人都叫她王姐'),
+    ev('ev_c', 'utterance', 4, '我叫她起床'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 4 * DAY_MS }).name, '折帆')
+})
+
+// 每条正则只看最左边那一处。「她 / TA」要是并进老的两条正则，下面这些话里
+// 前半句的「叫她…」就会盖住后半句真正的称呼（认成空，或者认成「王姐」）。
+// 所以「她 / TA」单独成条、排在最后：老的几条认得出的，结果一个字不变。
+test('原来认得出的话，夹了一句「她 / TA」结果也不变', () => {
+  assert.deepEqual(pickNameHit('我叫她起床，以后叫他阿岸'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('群里的人都叫她王姐，我以后叫他阿岸'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('妈妈叫ta回家吃饭。以后叫你「阿岸」'), { name: '阿岸', confident: true })
+  assert.equal(pickName('她给的名字是小鱼。他给的名字是阿岸'), '阿岸')
+  // 改口那条窄通道也排在「她 / TA」前面
+  assert.equal(pickName('阿岸。我叫的是这个名字。以前叫她小鱼'), '阿岸')
+  assert.equal(pickName('以后叫她小鱼。我叫的是「阿岸」'), '阿岸')
+  // 整条链路：已经定下的称呼照样能改
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '以后叫他折帆。'),
+    ev('ev_b', 'utterance', 3, '视频里大家都叫她老师。以后叫他阿岸吧。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿岸')
+})
+
 // issue #102：她改口时说的是「岸丶。我叫的是这个名字。」——名字在句首，
 // 「叫的是」在下一句，老正则两条都够不着，错误值就再也盖不回来。
 test('「我叫的是这个名字」这种改口能被认出来（issue #102）', () => {
