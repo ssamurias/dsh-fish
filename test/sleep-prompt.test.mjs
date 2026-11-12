@@ -65,7 +65,11 @@ test('判据要早于判空醒算，且这一天照常把这句推进正文', ()
   const at = src.indexOf('sleepDue = sleepPromptDue(')
   const table = src.indexOf('if (staleOn && !sleepDue')
   assert.ok(at >= 0 && table >= 0 && at < table, 'sleepDue 必须先算、table 才判')
-  assert.match(src, /if \(sleepDue\) \{ parts\.push\('', SLEEP_TODAY\); askedSleep = true \}/)
+  // 0.9.9（S-B）：这一天除了时机句，还要把三个尺度的问句一起递出去。
+  assert.match(
+    src,
+    /if \(sleepDue\) \{ parts\.push\('', SLEEP_TODAY, sleepPrompt\(model, \{ now: now\.getTime\(\) \}\)\); askedSleep = true \}/,
+  )
 })
 
 // ---- 成长日和本地日期对不齐：同一个成长日跨本地零点只递一次 ----
