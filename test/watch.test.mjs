@@ -3,6 +3,9 @@
  *
  * 真的抽帧要联网 + 开 ffmpeg，这里不测；测的是她会踩到的那几条边界：
  * 开关关着、给的不是视频号、额度用完。
+ *
+ * 走到 grabFrames 的用例一律注入假客户端和假的 ffmpeg 探测结果（registerWatch 的
+ * deps.client / deps.ffmpeg），一条请求都不发、一个子进程都不开。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,8 +16,8 @@ import { join } from 'node:path'
 
 import { watchedToday, registerWatch, pasteLine } from '../lib/watch.js'
 import { logFile } from '../lib/log.js'
-import { appendEvent } from '../lib/store.js'
-import { updateConfig } from '../lib/settings.js'
+import { appendEvent, readEvents } from '../lib/store.js'
+import { updateConfig, dateKey } from '../lib/settings.js'
 
 test('watchedToday 只数当天的 watched: 记录，昨天的不算', () => {
   const dk = '2026-10-23'
@@ -161,20 +164,71 @@ test('额度用完时日志写数字（1/1），好追额度怎么用掉的', as
   })
 })
 
+/**
+ * 假的 B 站客户端：三个接口都答「有这条视频」，顺手记下被问过哪几个。
+ * grabFrames 只用 view / tags / playurl 这三个。
+ */
+function fakeClient(over = {}) {
+  const calls = []
+  const client = {
+    calls,
+    view: async (bvid) => {
+      calls.push('view')
+      return { ok: true, data: { bvid, cid: 1, title: '一条普通的视频', up: '某个UP', mid: 1, duration: 120 } }
+    },
+    tags: async () => {
+      calls.push('tags')
+      return { ok: true, data: [] }
+    },
+    playurl: async () => {
+      calls.push('playurl')
+      return { ok: true, data: { url: 'https://media.invalid/v.mp4', duration: 120 } }
+    },
+    ...over,
+  }
+  return client
+}
+
 test('抽帧失败时写 warn 一行，带上失败原因', async () => {
   await withRoot(async (root) => {
-    // ffmpeg 不在 PATH 上 → grabFrames 失败；这条是导出包里最值钱的一行
-    const saved = process.env.PATH
-    process.env.PATH = ''
-    try {
-      await updateConfig({ bili: { enabled: true }, video: { enabled: true } }, root)
-      const ctx = fakeCtx()
-      registerWatch(ctx, { root })
-      await ctx._tools[0].execute({ bvid: 'BV1ED4y1Y7dc' })
-      assert.match(readLog(root), /看画面：抽帧失败 BV1ED4y1Y7dc/)
-    } finally {
-      process.env.PATH = saved
-    }
+    // 本机没有 ffmpeg → grabFrames 失败；这条是导出包里最值钱的一行。
+    //
+    // 原来这条靠清空 PATH 让 ffmpeg 找不到，但 grabFrames 是**先联网后探 ffmpeg**的：
+    // 它会拿这个真的 BV 号去打 B 站（finger/spi、view，有网时还有标签和播放地址），
+    // 设了 DSH_FISH_FFMPEG 时清空 PATH 也挡不住 ffmpeg。现在客户端和探测结果都注入。
+    await updateConfig({ bili: { enabled: true }, video: { enabled: true } }, root)
+    const ctx = fakeCtx()
+    const client = fakeClient()
+    registerWatch(ctx, { root, client, ffmpeg: { ok: false, why: '没找到 ffmpeg' } })
+    const out = await ctx._tools[0].execute({ bvid: 'BV1ED4y1Y7dc' })
+    assert.equal(out.ok, false)
+    assert.match(out.note, /本机没有可用的 ffmpeg/)
+    // 注入的客户端真的被用上了（没有另建一个去联网），而且一路走到了探 ffmpeg 那一步
+    assert.deepEqual(client.calls, ['view', 'tags', 'playurl'])
+    assert.match(readLog(root), /\[warn\] 看画面：抽帧失败 BV1ED4y1Y7dc 本机没有可用的 ffmpeg/)
+  })
+})
+
+test('上游说取不到这条视频时，抽帧失败那一行带的是上游的原因', async () => {
+  await withRoot(async (root) => {
+    await updateConfig({ bili: { enabled: true }, video: { enabled: true } }, root)
+    const ctx = fakeCtx()
+    const client = fakeClient({
+      view: async () => {
+        client.calls.push('view')
+        return { ok: false, message: '稿件不可见' }
+      },
+    })
+    // ffmpeg 给成「没有」：上游先拒的时候不该轮到它说话
+    registerWatch(ctx, { root, client, ffmpeg: { ok: false, why: '没找到 ffmpeg' } })
+    const out = await ctx._tools[0].execute({ bvid: 'BV1ED4y1Y7dc' })
+    assert.equal(out.ok, false)
+    assert.equal(out.note, '稿件不可见')
+    assert.deepEqual(client.calls, ['view'])
+    assert.match(readLog(root), /看画面：抽帧失败 BV1ED4y1Y7dc 稿件不可见/)
+    // 失败不占额度
+    const { events } = await readEvents(root)
+    assert.equal(watchedToday(events, dateKey()), 0)
   })
 })
 

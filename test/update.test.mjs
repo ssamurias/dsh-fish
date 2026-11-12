@@ -1,7 +1,8 @@
 /**
  * update.test.mjs —— 「检查更新」的纯逻辑。
  *
- * 这里一条网络都不发：checkUpdate 接受 fetchImpl，测试全用假的。
+ * 这里一条网络都不发：checkUpdate 接受 fetchImpl，测试全用假的；
+ * 要测「不传 fetchImpl 落回全局 fetch」的那两条，先把 globalThis.fetch 换成假的再调。
  * 真正联网的行为只能靠人手点一下验证，不适合放进 CI（GitHub 在国内时通时不通）。
  *
  * 守的四件事：
@@ -131,15 +132,58 @@ test('HTTP 非 200 也算失败', async () => {
   assert.equal(r.ok, false)
 })
 
+/**
+ * 把全局 fetch 临时换掉再跑 fn，跑完换回来。
+ *
+ * checkUpdate 的 fetchImpl 默认值是 globalThis.fetch：不传（或传 undefined）就落到它身上。
+ * 原来这里直接传 undefined，于是每跑一次测试都真的去查 7 个源
+ * （npm、GitHub API 两个、两个镜像、jsDelivr、raw.githubusercontent.com），
+ * 和文件头那句「一条网络都不发」对不上。
+ */
+async function withGlobalFetch(fake, fn) {
+  const desc = Object.getOwnPropertyDescriptor(globalThis, 'fetch')
+  Object.defineProperty(globalThis, 'fetch', { value: fake, configurable: true, writable: true, enumerable: true })
+  try {
+    return await fn()
+  } finally {
+    if (desc) Object.defineProperty(globalThis, 'fetch', desc)
+    else delete globalThis.fetch
+  }
+}
+
 test('环境里没有 fetch：优雅返回，不炸', async () => {
-  const r = await checkUpdate({ current: '0.3.0', fetchImpl: undefined, timeoutMs: 1000 })
-  // checkUpdate 的默认值是 globalThis.fetch；Node 18+ 一定有，
-  // 这里显式传 null 模拟"没有"的环境
-  const r2 = await checkUpdate({ current: '0.3.0', fetchImpl: null, timeoutMs: 1000 })
+  // 显式传 null
+  const r1 = await checkUpdate({ current: '0.3.0', fetchImpl: null, timeoutMs: 1000 })
+  assert.equal(r1.ok, false)
+  assert.ok(r1.error.includes('fetch'))
+
+  // 真的没有：全局 fetch 拿掉，fetchImpl 也不传
+  const r2 = await withGlobalFetch(undefined, () => checkUpdate({ current: '0.3.0', timeoutMs: 1000 }))
   assert.equal(r2.ok, false)
   assert.ok(r2.error.includes('fetch'))
-  // Node 环境下 r 应该是真的去查了（成功或失败都算正常返回，不抛）
-  assert.equal(typeof r.ok, 'boolean')
+  assert.equal(r2.current, '0.3.0')
+})
+
+test('不传 fetchImpl：用的是全局 fetch，它全拒时照样不抛', async () => {
+  const asked = []
+  const refuse = async (url) => {
+    asked.push(String(url))
+    throw new TypeError('fetch failed')
+  }
+  const r = await withGlobalFetch(refuse, () => checkUpdate({ current: '0.3.0', fetchImpl: undefined, timeoutMs: 1000 }))
+  assert.ok(asked.length > 0, '默认值应当落到全局 fetch 上')
+  assert.equal(r.ok, false)
+  assert.ok(r.error.includes('连不上 GitHub'))
+})
+
+test('不传 fetchImpl：全局 fetch 查得到时照常给结果', async () => {
+  const fake = fakeFetch({
+    'releases/latest': () => resp({ tag_name: 'v0.4.0' }),
+  })
+  const r = await withGlobalFetch(fake, () => checkUpdate({ current: '0.3.0', timeoutMs: 1000 }))
+  assert.equal(r.ok, true)
+  assert.equal(r.latest, '0.4.0')
+  assert.equal(r.hasUpdate, true)
 })
 
 test('当前版本读不到：不下判断，不谎报有新版', async () => {
