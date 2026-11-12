@@ -146,6 +146,11 @@ test('开头写着工具名照旧算到手：空白、引号、括号先跳过�
     '（bili_look_at）看某一秒',
     'read',
     'read 的翻页',
+    // issue #109：文档早就写了「用 / 就」这类前缀，代码 0.9.7 收窄时漏了，0.9.9 补上
+    '用 her_note 记长一点的东西',
+    '用her_note记一下',
+    '就是 bili_look 能看整条的',
+    '就用 her_note 列一下',
   ]
   for (const subject of arrived) {
     const e = ask({ id: 'a1', text: '想要', subject })
@@ -157,6 +162,9 @@ test('开头写着工具名照旧算到手：空白、引号、括号先跳过�
   assert.equal(toolArrived(ask({ id: 'a1', text: '想要', subject: 'reader 那种' }), has), false)
   // 短名哪怕在开头也不参与这种比对
   assert.equal(toolArrived(ask({ id: 'a1', text: '想要', subject: 'her 那种东西' }), ['her']), false)
+  // 「像」不剥（#102）：「用像…」剥掉「用」之后仍以「像」开头，不能算到手
+  assert.equal(toolArrived(ask({ id: 'a1', text: '想要', subject: '像 bash 那样能跑 python 的东西' }), has), false)
+  assert.equal(toolArrived(ask({ id: 'a1', text: '想要', subject: '用像 bash 那样的东西' }), has), false)
 })
 
 test('超时那种也一样：后来在别处给了，就别再摆「你问过，还没有答复」（issue #58）', () => {

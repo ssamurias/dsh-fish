@@ -167,10 +167,12 @@ function backend(cfg) {
 function fakeFetch(routes, fallback) {
   const calls = []
   const f = async (url, init = {}) => {
-    const path = String(url).replace(/^\/dsh-fish/, '')
+    const full = String(url)
+    // 子路径部署（issue #132）下前缀不在站点根，剥到 /dsh-fish 为止再匹配后端路由。
+    const path = full.replace(/^.*?\/dsh-fish(?=\/|$)/, '') || '/'
     const method = init.method || 'GET'
     const body = init.body ? JSON.parse(init.body) : undefined
-    calls.push({ method, path, body })
+    calls.push({ method, path, url: full, body })
     const r = (await routes(method, path, body)) ?? fallback(method, path, body)
     const status = r.status ?? 200
     return { ok: status >= 200 && status < 300, status, json: async () => r.body ?? {} }
@@ -188,7 +190,7 @@ function gate() {
 
 // ---------------------------------------------------------------- 挂载
 
-async function mount({ routes = () => undefined, cfg = DISK, win = {} } = {}) {
+async function mount({ routes = () => undefined, cfg = DISK, win = {}, baseURI } = {}) {
   // 「查多久的记录」存在 localStorage：有的 Node 有它，别让上一条用例选过的天数带进来
   try { globalThis.localStorage?.removeItem?.('fish.histDays') } catch { /* 没有就算了 */ }
   const mini = miniReact()
@@ -198,6 +200,7 @@ async function mount({ routes = () => undefined, cfg = DISK, win = {} } = {}) {
   const window = { ...win, __ModuleLoader__: { load(spec) { loaded.push(spec) } } }
   const document = {
     visibilityState: 'visible',
+    baseURI,
     querySelector: () => null,
     createElement: () => ({ setAttribute() {}, textContent: '' }),
     head: { appendChild() {} },
@@ -251,6 +254,34 @@ async function mount({ routes = () => undefined, cfg = DISK, win = {} } = {}) {
   await app.settle()
   return app
 }
+
+// ---------------------------------------------------------------- 0：挂在子路径下时请求跟着前缀走（issue #132）
+
+test('挂子路径时 API 跟着 baseURI 走，不再打到站点根', async () => {
+  const app = await mount({
+    baseURI: 'https://host:5667/app/deepseek-harness/fngateway/',
+    routes: (m, p) => (m === 'GET' && p === '/state' ? { body: stateOf(DISK) } : undefined),
+  })
+  try {
+    assert.ok(app.fetch.calls.length > 0, '至少要发一次 /state')
+    for (const c of app.fetch.calls) {
+      assert.ok(c.url.startsWith('/app/deepseek-harness/fngateway/dsh-fish/'),
+        `请求要带子路径前缀，实际：${c.url}`)
+    }
+  } finally { app.unmount() }
+})
+
+test('宿主注入 __DSH_BASE_PATH__ 时优先用它（issue #132）', async () => {
+  const app = await mount({
+    win: { __DSH_BASE_PATH__: '/gw/' },
+    baseURI: 'https://host/app/deepseek-harness/fngateway/',
+    routes: (m, p) => (m === 'GET' && p === '/state' ? { body: stateOf(DISK) } : undefined),
+  })
+  try {
+    assert.ok(app.fetch.calls.length > 0)
+    for (const c of app.fetch.calls) assert.ok(c.url.startsWith('/gw/dsh-fish/'), `实际：${c.url}`)
+  } finally { app.unmount() }
+})
 
 function textOf(node, out = []) {
   if (node == null || node === false) return out

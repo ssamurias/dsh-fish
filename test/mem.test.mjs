@@ -263,6 +263,13 @@ test('搬运段在身份文档末尾，且不挤掉黑名单', () => {
   for (const ban of HARD_BANS) assert.ok(doc.includes(ban))
 })
 
+test('身份文档说清：工具调用后的续写不是新的叫醒（issue #110）', () => {
+  const doc = renderSelfDoc(model(), { carry: '' })
+  assert.match(doc, /调用过工具/)
+  assert.match(doc, /不是新的叫醒/)
+  assert.match(doc, /回执不是谁在跟我说话/)
+})
+
 // ---------------------------------------------------------------- 回忆工具
 
 test('中文查询会切二字片段（否则整句匹配全落空）', () => {
