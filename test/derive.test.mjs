@@ -575,6 +575,39 @@ test('高置信的起名句可以覆盖已有名字（issue #102）', () => {
   assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '老张')
 })
 
+// 2026-11-13（issue #102 后续，用户转来外部排查）：
+// 定名壳原来是拿整段文字去 test，一段话里任何地方出现「以后」都会把
+// 「我叫他开门人」升成定名句，于是误判拿到高置信、把称呼焊死、再也改不回来。
+test('定名壳只在命中的那一句里算数（issue #102 后续）', () => {
+  const hit = pickNameHit('我叫他开门人。后来没再提，免得以后翻记录时被这句带偏。')
+  assert.deepEqual(hit, { name: '开门人', confident: false })
+  // 同一句里带壳，仍然是高置信
+  assert.equal(pickNameHit('以后叫他开门人。他问我冷不冷').confident, true)
+  assert.equal(pickNameHit('我叫他开门人，以后就这么叫。').confident, true)
+  // 引号那条只看名字前面几个字，不受句子边界影响
+  assert.equal(pickNameHit('我叫他「开门人」。以后翻记录时别被带偏').confident, true)
+})
+
+// 低置信猜出来的名字可以被后来的低置信改掉——否则第一个错值永远回不来。
+test('低置信之间让后来者盖前一个（issue #102 后续）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '我叫他开门人。后来没再提，免得以后翻记录时被这句带偏。'),
+    ev('ev_b', 'utterance', 3, '我叫他炑炑。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '炑炑')
+})
+
+// 高置信仍然压得住后面的低置信：一个好名字不能被「叫他起来」这类句子冲掉。
+test('低置信盖不掉高置信定下的名字（issue #102 后续）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '你是个好奇心重、不太会表达的存在。', { source: 'system' }),
+    ev('ev_a', 'utterance', 2, '以后叫他炑炑。'),
+    ev('ev_b', 'utterance', 3, '我叫他老张。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '炑炑')
+})
+
 test('引号与「以后」是高置信，裸句子是低置信（issue #102）', () => {
   assert.equal(pickNameHit('我想叫他“开灯的”。').confident, true)
   assert.equal(pickNameHit('以后叫他老张。').confident, true)
