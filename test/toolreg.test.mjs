@@ -33,7 +33,7 @@ import { defineTool } from '../lib/tool.js'
 /** 0.9.x 实际注册的那 13 个（`grep "name: '" lib/*.js` 对着数的）。 */
 const ALL_TOOLS = [
   'growth_commit', 'her_recall', 'her_diary', 'her_leave', 'her_note', 'her_appoint',
-  'bili_look', 'bili_watch', 'bili_speak', 'ask_owner', 'her_dream',
+  'bili_look', 'bili_watch', 'bili_speak', 'ask_owner', 'ask_pronoun', 'her_dream',
   'bring_back', 'her_say',
 ]
 
