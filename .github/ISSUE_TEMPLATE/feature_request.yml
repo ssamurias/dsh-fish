@@ -1,0 +1,40 @@
+name: 建议
+description: 想法、改法、体验上的建议（不要求你已经写好代码）
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提建议前先看一眼 [`AGENTS.md`](https://github.com/ssamurias/dsh-fish/blob/main/AGENTS.md) 里那几条硬约束——
+        零依赖、没有人格设置界面、四条黑名单是代码级硬禁。撞上这几条的改动不会被合并，
+        但**换个实现的思路可能可以**，所以照样欢迎提。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到了什么
+      description: 具体一点：在什么场景下、她的反应哪里不对、你本来期待什么
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你想到的改法（可选）
+      description: 代码、伪代码、或者一句话方向都行
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: 大概属于哪块
+      options:
+        - 她的说话方式 / 提示词
+        - 记忆与回忆（事件流、身份文档、日记）
+        - 主动开口 / 叫醒 / 节奏
+        - B 站（刷、评论、字幕）
+        - 设置页 / 观测台
+        - 安装、升级、多实例
+        - 文档
+        - 说不清
+    validations:
+      required: true

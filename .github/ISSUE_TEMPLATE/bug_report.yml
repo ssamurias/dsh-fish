@@ -1,0 +1,58 @@
+name: 装不上 / 用不了
+description: 装了却没反应、设置页空着、重启后崩、「升级了却没变化」
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先跑一遍自带的自检脚本，它零依赖、插件没加载也能跑，八成的安装问题它会直接说出原因：
+
+        ```
+        node tools/check-install.mjs                 # 扫所有 profile
+        node tools/check-install.mjs --profile desktop
+        ```
+
+        npm 装的，脚本在 `node_modules/@ssamurias/dsh-fish/tools/check-install.mjs`。
+
+        更多排查（升级没变化、两个工作区两个家、会话归档、多实例、DSH 版本适配）在
+        [docs/troubleshooting.md](https://github.com/ssamurias/dsh-fish/blob/main/docs/troubleshooting.md)。
+  - type: input
+    id: version
+    attributes:
+      label: 插件版本
+      description: 设置 → 大肥鱼 → 插件页能看到；或读 profile 里 `node_modules/@ssamurias/dsh-fish/package.json` 的 version
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH 版本与 profile
+      description: 桌面版还是用 node 起的？哪个 profile？
+      placeholder: 0.2.1-rc.3 / desktop
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 你做了什么、期待什么、实际看到什么
+    validations:
+      required: true
+  - type: textarea
+    id: check-install
+    attributes:
+      label: check-install.mjs 的输出
+      description: 直接粘全文。里面有本机路径，介意的话把用户名遮掉
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志（可选）
+      description: 升级相关看 `~/.dsh-fish/updates/last.log`；app 启动日志也行
+      render: text
+    validations:
+      required: false
