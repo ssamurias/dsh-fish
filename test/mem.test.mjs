@@ -575,16 +575,18 @@ test('rotateAfter=0 表示永不换会话', () => {
   assert.equal(normalizeConfig({ chat: { rotateAfter: 0 } }).chat.rotateAfter, 0)
 })
 
-test('睡前卡：三个尺度各问一句，不要求她总结人生', () => {
+test('睡前卡：没素材不问，有素材只问一句，不要求她总结人生', () => {
+  // 1.0（用户 m01648）：不再固定问三个尺度——问哪一句跟着这段时间的素材走。
+  assert.equal(sleepPrompt(model({ beliefs: [] }), { question: { kind: 'none', ask: '' } }), '')
   const p = sleepPrompt(model({ beliefs: [{ id: 'b', text: '判断' }] }))
   assert.match(p, /停下来，想一想/)
-  assert.match(p, /哪一句话/)
-  assert.match(p, /两面/)
-  assert.match(p, /哪一点变了/)
+  assert.match(p, /这阵子/)
   assert.match(p, /不要总结/)
   assert.match(p, /我没想清楚/)
-  // 0.9.9（S-B）：做法（narration + refs）常驻在身份文档的 SLEEP_BRIEF，
-  // 卡上不再派活——她收到的是问题，不是工单。
+  // 一张卡只问一句：三问并排的老写法不能再回来。
+  assert.doesNotMatch(p, /哪一句话，是你现在还会想起来的/)
+  assert.doesNotMatch(p, /哪一点变了/)
+  // 0.9.9（S-B）：做法常驻在身份文档的 SLEEP_BRIEF，卡上不再派活。
   assert.doesNotMatch(p, /narration/)
 })
 
