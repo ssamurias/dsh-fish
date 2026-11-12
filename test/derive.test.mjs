@@ -194,8 +194,11 @@ test('卡太久后时间兜底推进，并标记 forced', () => {
 })
 
 // 2026-11-09（用户 m00925）：把成长周期从 7 天改成 30 天，阶段会按新周期重算、
-// 退回到天数对应的那一档；但「到过第几阶段」是事件里真发生过的，不能跟着退。
-test('改长成长周期，阶段会退回，stagePeak 不回退', () => {
+// 退回到天数对应的那一档；但「到过第几阶段」不能跟着退。
+// 2026-11-12（issue #128）：证据从「事件里的 stage」改成「改周期时记下的 meta」——
+// 0.9.8 之后卡在门上也会写下没到过的 stage，两者在事件流里长得一模一样，
+// 再扫普通事件就等于把「没到过」当成「到过」。
+test('改长成长周期，阶段会退回，stagePeak 只认改周期时的那条 meta', () => {
   const now = T0 + 13 * DAY_MS // 第 14 天
   const seed = ev('ev_seed', 'seed', 1, '种', { source: 'system' })
   const thought = ev('ev_a', 'utterance', 2, '我觉得安静更好。')
@@ -203,11 +206,17 @@ test('改长成长周期，阶段会退回，stagePeak 不回退', () => {
   const short = deriveSelf([seed, thought], { now, growthDays: 7 })
   assert.equal(short.stage, 4, '前提：7 天周期下第 14 天已经期满放行到阶段 4')
   assert.equal(short.stagePeak, 4, '没改过周期时，peak 就等于当前阶段')
-  // 那几天写下的卡，事件里记的 stage 是 4（和真机上一样）
+  // 那几天写下的事件里记的 stage 是 4（和真机上一样）
   const staged = [{ ...seed, stage: 1 }, { ...thought, stage: 4 }]
   const long = deriveSelf(staged, { now, growthDays: 30 })
   assert.equal(long.stage, 2, '改成 30 天后阶段按新周期重算，退回 2')
-  assert.equal(long.stagePeak, 4, '「曾到过第 4 阶段」要留着，界面靠它说明不是退步')
+  assert.equal(long.stagePeak, 2, 'issue #128：不再拿普通事件的 stage 当「到过」')
+
+  // 真正的出处：改周期那一刻 updateConfig 写下的 `stage-was:4`
+  const marked = [...staged, ev('ev_was', 'meta', 13, 'stage-was:4', { source: 'system' })]
+  const longMarked = deriveSelf(marked, { now, growthDays: 30 })
+  assert.equal(longMarked.stage, 2)
+  assert.equal(longMarked.stagePeak, 4, '「曾到过第 4 阶段」要留着，界面靠它说明不是退步')
 })
 
 test('stability：抽掉 3 条判断后，她的自我描述变化有限（承重度）', () => {
