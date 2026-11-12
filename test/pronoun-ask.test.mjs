@@ -162,3 +162,24 @@ test('状态：问过几次、答过什么，一眼看得出来', async () => wi
   const raw = await readConfig(root)
   assert.equal(raw?.owner?.pronoun, undefined)
 }))
+
+test('换代词不改她自己的原话（2026-11-12 用户反馈）', () => {
+  const model = deriveSelf([])
+  model.beliefs = [{ id: 'b1', text: '我还是喜欢吉他，他说改天教我', since: '2026-11-02T10:00:00.000Z' }]
+  const doc = renderSelfDoc(model, { budget: 8000, pronoun: '她' })
+  // 她写下的句子一个字都不该变——「吉他」不是「吉她」，那个「他」也是她当时写的。
+  assert.ok(doc.includes('我还是喜欢吉他，他说改天教我'), '她自己的原话被改了')
+  // 模板句照常换：这一节的小标题是插件写的，里面的「他」指主人。
+  assert.ok(doc.includes('她说的事和你记得的不一样时'), '模板句里的主人代词没换成「她」')
+  assert.ok(!doc.includes('他说的事和你记得的不一样时'))
+})
+
+test('答完当场重写身份文档，不等到下一次派生', async () => withRoot(async (root) => {
+  const w = await applyPronounAnswer(root, 'ev_q1', '她')
+  assert.equal(w.ok, true)
+  const { selfDocPath } = await import('../lib/selfdoc.js')
+  const { readFileSync } = await import('node:fs')
+  const doc = readFileSync(selfDocPath(root), 'utf8')
+  assert.ok(doc.length > 0, '答完应该已经落盘一份')
+  assert.ok(doc.includes('她说的事和你记得的不一样时'), '新代词应该已经写进文档')
+}))

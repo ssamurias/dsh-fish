@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  PRONOUN_VALUES, DEFAULT_PRONOUN, normalizePronoun, pronounOf, pronounize, pronounFor, resetPronounCache,
+  PRONOUN_VALUES, DEFAULT_PRONOUN, OWNER_SLOT, normalizePronoun, pronounOf,
+  fillOwner, fillOwnerDeep, pronounFor, resetPronounCache,
 } from '../lib/pronoun.js'
 import { normalizeConfig, DEFAULTS } from '../lib/settings.js'
 import { writeConfig } from '../lib/store.js'
@@ -43,31 +44,32 @@ test('pronounOf 从配置里取，缺省是「他」', () => {
   assert.equal(pronounOf({ owner: '她' }), '他', 'owner 不是对象就退回默认，不炸')
 })
 
-test('pronounize 只换指主人的「他」', () => {
-  assert.equal(pronounize('他说他今天很累。', '她'), '她说她今天很累。')
-  assert.equal(pronounize('他没来。', 'TA'), 'TA没来。')
-  // 默认值 -> 原样返回，一个字节都不动
-  assert.equal(pronounize('他说他今天很累。'), '他说他今天很累。')
-  assert.equal(pronounize('他说他今天很累。', '他'), '他说他今天很累。')
-  assert.equal(pronounize('', '她'), '')
-  assert.equal(pronounize(undefined, '她'), '')
+test('fillOwner 只填模板里的占位符，不按字替换', () => {
+  assert.equal(OWNER_SLOT, '{T}')
+  assert.equal(fillOwner('{T}说{T}今天很累。', '她'), '她说她今天很累。')
+  assert.equal(fillOwner('{T}没来。', 'TA'), 'TA没来。')
+  // 没有占位符的文本一个字节都不动——她的原话走的就是这条路
+  assert.equal(fillOwner('我喜欢吉他，他说改天教我。', '她'), '我喜欢吉他，他说改天教我。', 'issue #127：她的原话不许被改')
+  assert.equal(fillOwner('他们都说他今天不在。', '她'), '他们都说他今天不在。', '复数与别人的他都不该动')
+  assert.equal(fillOwner('维他命买了吗？', 'TA'), '维他命买了吗？')
+  assert.equal(fillOwner('', '她'), '')
+  assert.equal(fillOwner(undefined, '她'), '')
 })
 
-test('词素里的「他」不换（其他 / 他人 / 他者）', () => {
-  assert.equal(pronounize('他和其他人都不在。', '她'), '她和其他人都不在。')
-  assert.equal(pronounize('其它事明天再说。', '她'), '其它事明天再说。')
-  assert.equal(pronounize('他者视角。', 'TA'), '他者视角。')
-  assert.equal(pronounize('他日再见。', '她'), '他日再见。')
-  // 同一句里词素与主人混着出现，也不能被连带
-  assert.equal(pronounize('他只关心其他事。', '她'), '她只关心其他事。')
+test('填多少次都一样（幂等）', () => {
+  const once = fillOwner('{T}说他明天来。', '她')
+  assert.equal(once, '她说他明天来。', '只填占位符，句子里剩下的「他」是别人的，不动')
+  assert.equal(fillOwner(once, '她'), once)
+  assert.equal(fillOwner(once, 'TA'), once, '已经填过的文本不再变')
 })
 
-test('同一个代词换两遍不叠加（幂等）', () => {
-  const once = pronounize('他说他明天来。', '她')
-  assert.equal(pronounize(once, '她'), once)
-  // 「换回去」不是靠这个函数：源文本（persona.js 里那句）始终是「他」，
-  // 改回默认时由重新渲染身份文档来恢复，所以这里只要求不再动已经换过的文本。
-  assert.equal(pronounize('她说她明天来。', '他'), '她说她明天来。')
+test('fillOwnerDeep 递归填结构体，别的类型原样返回', () => {
+  assert.deepEqual(
+    fillOwnerDeep({ text: '{T}说的事', list: ['{T}来了'], n: 1, nested: { a: '{T}' } }, '她'),
+    { text: '她说的事', list: ['她来了'], n: 1, nested: { a: '她' } },
+  )
+  const map = new Map([['k', '{T}']])
+  assert.equal(fillOwnerDeep(map, '她'), map, 'Map / Date 这类不该被拆开')
 })
 
 test('normalizeConfig 收编 owner.pronoun', () => {
