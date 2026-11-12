@@ -15,7 +15,10 @@
  *
  * 认领、心跳、让出三处读改写声明都在 `.instance.lock` 里做，声明是原子写的（临时文件 + 改名）。
  * 所以一拍心跳读到声明是自己的、还没写回的时候，别的实例来接管得排在它后面；设置页那两条要搬
- * 整个数据目录的路也排在在途的那一拍后面。这两样在最后两条里钉住。
+ * 整个数据目录的路也排在在途的那一拍后面。这两样在倒数第二、第三条里钉住。
+ *
+ * 「迁移工作区」没有排在心跳后面：一拍心跳读到声明是自己的、还没写回的时候，老目录可以正好被封存走。
+ * 写声明的那一下不替它建目录，所以这一拍写不成，不会把老目录建回来、把声明写在里面。最后一条钉住。
  *
  * 用假宿主的那几条真的 apply()，把 15 秒的心跳缩成几十毫秒。
  *
@@ -138,8 +141,8 @@ function fakeCtx() {
  *   hb.fail    read / write 不为空时，这个实例读声明 / 把写好的声明改名盖上去直接抛这个错误码
  *              （装「别的进程正开着它」）；pointer 不为空时，读位置指针抛这个错误码
  *   hb.failed  这样抛过几次。write 数的是「几次写」：一次写里改名被拒会重试几遍
- *              （lib/store.js 的 writeAtomic），同一个临时文件只算一次
- *   hb.held    read / write 不为空时，心跳走到这一步先停住（见 hold）
+ *              （lib/tenant.js 的 writeClaim），同一个临时文件只算一次
+ *   hb.held    read / readDone / write 不为空时，心跳走到这一步先停住（见 hold）
  *   hb.ticks   心跳定时器响过几次（停着的时候不算）
  */
 async function boot(root) {
@@ -154,7 +157,7 @@ async function boot(root) {
     io: 0,
     fail: { read: '', write: '', pointer: '' },
     failed: { read: 0, write: 0, pointer: 0 },
-    held: { read: null, write: null },
+    held: { read: null, readDone: null, write: null },
   }
   const real = { fs: {}, setInterval: globalThis.setInterval, setTimeout: globalThis.setTimeout }
   const WHY = { EBUSY: 'resource busy or locked', EPERM: 'operation not permitted' }
@@ -185,6 +188,12 @@ async function boot(root) {
         await h.gate
       }
       const out = await fn.apply(fs, a)
+      const done = beat && step === 'read' ? hb.held.readDone : null
+      if (done) {
+        hb.held.readDone = null
+        done.there = true
+        await done.gate
+      }
       if (beat && name === 'open') {
         // 往锁文件里写、把它关上走的是句柄自己的方法，不经过 fs.*：句柄关上之前都算在途
         hb.io++
@@ -199,7 +208,7 @@ async function boot(root) {
   }
   const stop = async () => {
     hb.fail.read = hb.fail.write = hb.fail.pointer = ''
-    hb.held.read = hb.held.write = null
+    hb.held.read = hb.held.readDone = hb.held.write = null
     for (const h of holds) h.release()
     try {
       await Promise.all(f.cleanups.map((c) => (typeof c === 'function' ? c() : c)))
@@ -256,8 +265,9 @@ async function boot(root) {
   const resume = () => { hb.paused = false }
 
   /**
-   * 让定时器起的下一拍心跳停在某一步之前，只停一次：'read' 是读声明（已经拿着 `.instance.lock`）；
-   * 'write' 是把写好的声明改名盖上去（读到声明是自己的了，临时文件也写好了，还没写回）。
+   * 让定时器起的下一拍心跳停在某一步上，只停一次：'read' 是读声明之前（已经拿着 `.instance.lock`）；
+   * 'readDone' 是声明刚读完（内容已经读到手，还没判断、没开始写回：临时文件还没写）；
+   * 'write' 是把写好的声明改名盖上去之前（读到声明是自己的了，临时文件也写好了，还没写回）。
    * 回来的东西上 there 是「已经停在那儿了」，release() 放它走；停着的时候 hb.io 不是 0。
    */
   const hold = (step) => {
@@ -808,4 +818,64 @@ test('设置页要搬整个数据目录的那两条路排在心跳后面：一�
       }
     })
   }
+})
+
+test('心跳读到声明是自己的、还没写回的时候数据目录被迁走：这一拍不把老目录建回来，声明不写在老位置，她的写工具被拒', async () => {
+  // 写声明的那一下要是先替它建目录（lib/store.js 的 writeAtomic 就是先 mkdir -p），这一拍会把刚封存走的
+  // 老目录建回来、把声明写在里面：之后每一拍读到的都是自己的声明，不会再去看位置指针，她的写工具一直回
+  // 成功，东西落在老位置，重启后走指针去新位置就看不到了。
+  await withBase(async (root, base) => {
+    const inst = await boot(root)
+    try {
+      assert.equal((await inst.note('搬之前记一笔')).ok, true)
+      assert.ok((await inst.claimOnDisk())?.instanceId, '启动时占上了')
+
+      const held = inst.hold('readDone')
+      assert.ok(await until(() => held.there), '等到一拍心跳读完声明（读到的是自己的）、还没开始写回')
+      // 这一拍停着的时候搬。它手里没有开着的文件（锁文件建好就关上了），拦不住老目录改名。
+      // 搬的那一下正好有文件在变（启动的收尾还在写）会回 409，等于没搬：换一个空文件夹再来。
+      let r = null
+      await until(async () => {
+        r = await inst.post('/dsh-fish/move', { target: await fs.mkdtemp(join(base, 'new-place-')) })
+        return !(r.status === 409 && /对不上|复制到一半失败/.test(String(r.body?.error ?? '')))
+      }, { every: 50 })
+      assert.equal(r.status, 200, JSON.stringify(r.body))
+      assert.equal(r.body.ok, true)
+      if (!r.body.oldDirMoved) {
+        // 没能当场改名（Windows 上别的进程正开着里面的文件）：迁移照样算成，老目录留在原处。替它挪开。
+        const aside = join(base, 'old-left-behind')
+        assert.ok(
+          await until(() => fs.rename(root, aside).then(() => true, () => false), { every: 50 }),
+          '老目录要挪得开',
+        )
+      }
+      await assert.rejects(fs.stat(root), { code: 'ENOENT' }, '老目录封存走了，那一拍还停在读完声明的地方')
+
+      // 放开，让这一拍接着去写回；定时器先不起新的一拍，等它走完就看
+      held.release()
+      await inst.pause()
+      await assert.rejects(fs.stat(root), { code: 'ENOENT' }, '那一拍写回的时候没有把老目录建回来')
+      inst.resume()
+
+      assert.ok(await inst.rings(3), '搬完以后过几拍心跳')
+      await inst.pause()
+      const n = await inst.note('搬完、过了几拍心跳再记的')
+      assert.equal(n.ok, false, '搬走以后不能照样回成功')
+      assert.match(n.note, /搬到了新位置/)
+      assert.equal(await inst.claimOnDisk(), null, '老位置没有声明')
+      // 被拒的那一下会顺手把老位置建出来（写日志、记工具用量），那不归这里管；声明和它的临时文件不能在里面
+      assert.deepEqual(
+        (await fs.readdir(root).catch(() => [])).filter((name) => name.startsWith(TENANT_FILE)),
+        [],
+        '也没有声明的临时文件',
+      )
+      assert.ok(!inst.logs.some((l) => l.includes('占用声明不在了')), '没有走「重新写上」那条路')
+      assert.deepEqual(await filesWith(root, '搬完、过了几拍心跳再记的'), [], '老位置里没有她搬完以后写的东西')
+      assert.deepEqual(await filesWith(r.body.to, '搬完、过了几拍心跳再记的'), [])
+      assert.ok((await filesWith(r.body.to, '搬之前记一笔')).includes('events.jsonl'), '搬之前记的在新位置的事件流里')
+      inst.resume()
+    } finally {
+      await inst.stop()
+    }
+  })
 })
