@@ -138,7 +138,7 @@ test('出门那条会话：身份用走时快照、并挂上兜底守卫；家�
     }), 'utf8')
 
     let handler = null
-    registerIdentity({ on: (e, fn) => { handler = fn; return () => {} } }, { root, herDir, log: () => {} })
+    registerIdentity({ on: (e, fn) => { if (e === 'agent/created') handler = fn; return () => {} } }, { root, herDir, log: () => {} })
     assert.equal(typeof handler, 'function')
 
     // 外面那条：cwd 是工作区，身份段读到的是快照
@@ -187,7 +187,7 @@ test('先记账再建会话：会话还没有 cwd 也认得出是出门，并把
     assert.equal(st.outing.sessionId, '')
 
     let handler = null
-    registerIdentity({ on: (e, fn) => { handler = fn; return () => {} } }, { root, herDir, log: () => {} })
+    registerIdentity({ on: (e, fn) => { if (e === 'agent/created') handler = fn; return () => {} } }, { root, herDir, log: () => {} })
     const sections = []
     let guarded = false
     // 宿主 `agent/created` 触发时 header 里还没有 cwd
@@ -220,7 +220,7 @@ test('台账记了 id、会话 header 没 cwd 时，靠 id 也认得出', async 
     mkdirSync(workDir, { recursive: true })
     await startOuting(root, { sessionId: 'session-out-2', cwd: workDir, now: Date.now() })
     let handler = null
-    registerIdentity({ on: (e, fn) => { handler = fn; return () => {} } }, { root, herDir, log: () => {} })
+    registerIdentity({ on: (e, fn) => { if (e === 'agent/created') handler = fn; return () => {} } }, { root, herDir, log: () => {} })
     const sections = []
     handler({ agent: { session: { header: { id: 'session-out-2' } }, ctx: { systemPrompt: { section: (o) => sections.push(o) }, tools: { guard: () => () => {} }, effect: (fn) => fn } } })
     assert.equal(sections.length, 3)
@@ -239,7 +239,7 @@ test('认不出来时留一行日志，不静默跳过', async () => {
     await startOuting(root, { sessionId: 'session-out-3', cwd: workDir, now: Date.now() })
     const lines = []
     let handler = null
-    registerIdentity({ on: (e, fn) => { handler = fn; return () => {} } }, { root, herDir, log: (l) => lines.push(String(l)) })
+    registerIdentity({ on: (e, fn) => { if (e === 'agent/created') handler = fn; return () => {} } }, { root, herDir, log: (l) => lines.push(String(l)) })
     const sections = []
     handler({ agent: { session: { header: { id: 'session-other', cwd: join(root, 'somebody') } }, ctx: { systemPrompt: { section: (o) => sections.push(o) } } } })
     assert.equal(sections.length, 0)

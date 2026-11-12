@@ -33,6 +33,7 @@ import {
   attachIdentity,
   clearWakeSection,
   clearWakeSectionFor,
+  forgetTurnIdentity,
   getWakeSection,
   identityText,
   lastTrimReport,
@@ -40,6 +41,7 @@ import {
   registerIdentity,
   reorderForHer,
   resetIdentityCache,
+  resetTurnIdentity,
   setWakeSection,
   splitVolatileIdentity,
   toolNamesIn,
@@ -131,6 +133,82 @@ test('attachIdentity：没有 systemPrompt 时返回 ok:false，不抛', () => {
   assert.equal(r2.ok, false)
 })
 
+// issue #110（2026-11-13 用户 m01547 的真机文档）：同一轮里工具回执之后，
+// 身份文档被 refreshSelfDoc 重写了，宿主第 2 步重新组装出**不一样**的 system prompt
+// 再下发一次——她把这个形状读成「又被叫醒了一次」，于是补一句话收尾。
+// 修法：身份段一轮只读一次盘，中途写盘只影响下一轮。
+test('issue #110：同一轮里重写身份文档，system prompt 那一段不变', () => {
+  resetIdentityCache()
+  resetTurnIdentity()
+  clearWakeSection()
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  const file = selfDocPath(root)
+  fs.writeFileSync(file, '第一版身份', 'utf8')
+
+  const calls = []
+  const agent = {
+    session: { header: { id: 'session-issue110' } },
+    ctx: { systemPrompt: { section: (o) => calls.push(o) } },
+  }
+  attachIdentity(agent, root)
+  const sec = calls[0]
+  assert.equal(sec.text(), '第一版身份')
+
+  // 她这一步调了 growth_commit → 文件被重写（同一轮还没结束）
+  fs.writeFileSync(file, '第二版身份', 'utf8')
+  const later = new Date(Date.now() + 2000)
+  fs.utimesSync(file, later, later)
+  assert.equal(identityText(root), '第二版身份', '文件确实变了（前置条件）')
+  assert.equal(sec.text(), '第一版身份', '同一轮里绝不能让 system prompt 变样')
+
+  // 下一轮开始：丢掉快照，读新的一份
+  forgetTurnIdentity('session-issue110')
+  assert.equal(sec.text(), '第二版身份')
+})
+
+test('issue #110：轮边界才丢快照（user/message、turn/end），同轮内不动', () => {
+  resetIdentityCache()
+  resetTurnIdentity()
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  const file = selfDocPath(root)
+  fs.writeFileSync(file, '第一版身份', 'utf8')
+
+  const handlers = {}
+  const ctx = {
+    on: (evt, fn) => {
+      handlers[evt] = fn
+      return () => {}
+    },
+  }
+  registerIdentity(ctx, { root, herDir: join(root, 'her'), log: () => {} })
+  assert.equal(typeof handlers['session/event'], 'function', '必须监听轮边界')
+
+  const calls = []
+  const agent = {
+    session: { header: { id: 'session-a', cwd: join(root, 'her') } },
+    ctx: { systemPrompt: { section: (o) => calls.push(o) } },
+  }
+  handlers['agent/created']({ agent })
+  const sec = calls[0]
+
+  // 同轮第 2 步：只有工具回执
+  handlers['session/event']({ header: { id: 'session-a' } }, { type: 'tool/result', data: {} })
+  assert.equal(sec.text(), '第一版身份')
+
+  // 文件被重写（同一轮里发生的写盘）
+  fs.writeFileSync(file, '第二版身份', 'utf8')
+  const later = new Date(Date.now() + 2000)
+  fs.utimesSync(file, later, later)
+  handlers['session/event']({ header: { id: 'session-a' } }, { type: 'step/start', data: {} })
+  assert.equal(sec.text(), '第一版身份', '下一步还是同一轮，不能变')
+
+  // turn/end → 下一轮重新读
+  handlers['session/event']({ header: { id: 'session-a' } }, { type: 'turn/end', data: {} })
+  assert.equal(sec.text(), '第二版身份')
+})
+
 test('registerIdentity：只给她那个 agent 挂（按 cwd 判），别人不受影响', () => {
   resetIdentityCache()
   const root = tmp()
@@ -139,7 +217,14 @@ test('registerIdentity：只给她那个 agent 挂（按 cwd 判），别人不�
   fs.writeFileSync(selfDocPath(root), '我是她', 'utf8')
 
   let handler = null
-  const ctx = { on: (evt, fn) => { assert.equal(evt, 'agent/created'); handler = fn; return () => {} } }
+  const ctx = {
+    on: (evt, fn) => {
+      // 1.0.0（issue #110）之后这里多挂了一个 session/event 的轮边界监听；
+      // 这个用例只关心 agent/created。
+      if (evt === 'agent/created') handler = fn
+      return () => {}
+    },
+  }
   const off = registerIdentity(ctx, { root, herDir, log: () => {} })
   assert.equal(typeof off, 'function')
   assert.equal(typeof handler, 'function')
