@@ -15,9 +15,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { registerHerDiary, renderDiary, DIARY_READ_MAX, DIARY_LIST_MAX, DIARY_HIT_MAX } from '../lib/herdiary.js'
+import { registerHerDiary, renderDiary, diaryDayOf, DIARY_READ_MAX, DIARY_LIST_MAX, DIARY_HIT_MAX } from '../lib/herdiary.js'
 import { DIARY_BRIEF } from '../lib/persona.js'
-import { writeDaily } from '../lib/store.js'
+import { writeDaily, appendEvent, readEvents } from '../lib/store.js'
+import { deriveSelf } from '../lib/derive.js'
+import { dateKey } from '../lib/settings.js'
+import { registerCapture } from '../lib/capture.js'
 import { heardLine } from '../lib/use.js'
 
 async function tmpRoot() {
@@ -288,4 +291,102 @@ test('按词找的回执不说「那天没有日记」', async () => {
   assert.equal(heardLine({ keyword: '跟头', found: true, text: '' }, 'her_diary'), '找到了。')
   // 不带 keyword 时口径不变
   assert.equal(heardLine({ found: false, text: '' }, 'her_diary'), '那天没有日记。')
+})
+
+// ---------- 「那天是你自己的第 N 天」的 N 是写那篇日记时的成长日 ----------
+// 上面两条只直接给 renderDiary 传 day，测不到 execute 里这个数是从哪儿来的。
+// execute 以前拿的是此刻的成长日：翻哪一天的日记，说的都是今天第几天。
+
+const DAY_MS = 86_400_000
+
+/** 一条流：第 1 天种下，第 3 天写了一篇（记号的信封里 day=3），今天是第 10 天 */
+async function day3ReadOnDay10(root, { markDay = 3, withMark = true } = {}) {
+  const now = Date.now()
+  const d3 = dateKey(new Date(now - 7 * DAY_MS))
+  const today = dateKey(new Date(now))
+  await appendEvent({ type: 'seed', text: '种子' }, { day: 1, stage: 1, now: now - 9.5 * DAY_MS, source: 'system' }, root)
+  if (withMark) {
+    await appendEvent({ type: 'meta', text: `diary:${d3}` }, { day: markDay, stage: 1, now: now - 7 * DAY_MS, source: 'system' }, root)
+  }
+  await appendEvent({ type: 'meta', text: `diary:${today}` }, { day: 10, stage: 1, now, source: 'system' }, root)
+  await writeDaily('diaryDir', d3, '今天下雨。', root)
+  await writeDaily('diaryDir', today, '今天晴。', root)
+  const { events } = await readEvents(root)
+  assert.equal(deriveSelf(events).day, 10, '这条流的今天是第 10 天')
+  return { d3, today }
+}
+
+test('第 3 天写的日记在第 10 天读：说的是第 3 天，不是今天的第 10 天', async () => {
+  const root = await tmpRoot()
+  try {
+    const { d3, today } = await day3ReadOnDay10(root)
+    const t = toolFor(root)
+    const old = await t.execute({ date: d3 })
+    assert.equal(old.found, true)
+    assert.match(old.text, /今天下雨。/)
+    assert.match(old.text, /那天是你自己的第 3 天/)
+    assert.doesNotMatch(old.text, /第 10 天/)
+    // 今天那篇照旧是今天的天数
+    const latest = await t.execute({})
+    assert.match(latest.text, new RegExp(`^${today} 那天你写的`))
+    assert.match(latest.text, /那天是你自己的第 10 天/)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('那篇日记没有记号、或记号上没有天数：不写「第 N 天」，不拿今天的顶上', async () => {
+  for (const opts of [{ withMark: false }, { markDay: 0 }]) {
+    const root = await tmpRoot()
+    try {
+      const { d3, today } = await day3ReadOnDay10(root, opts)
+      const out = await toolFor(root).execute({ date: d3 })
+      assert.equal(out.found, true)
+      assert.doesNotMatch(out.text, /那天是你自己的第/, JSON.stringify(opts))
+      // 别的坐标照旧
+      assert.match(out.text, /你一共写过 2 篇/)
+      assert.match(out.text, new RegExp(`后一天 ${today} 也写过`))
+      assert.match(out.text, /这些字是你自己交上去的/)
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+    }
+  }
+})
+
+test('diaryDayOf：同一天追加过几次取第一条；带 trip / possess 后缀的记号也认；别的日期不串', () => {
+  const events = [
+    { type: 'seed', text: '种子', day: 1 },
+    { type: 'utterance', text: 'diary:2026-11-02', day: 2 },
+    { type: 'meta', text: 'diary:2026-11-02 trip:abc', day: 4 },
+    { type: 'meta', text: 'diary:2026-11-02', day: 5 },
+    { type: 'meta', text: 'diary:2026-11-03 possess:1700000000000', day: 6 },
+    { type: 'meta', text: 'diary:2026-11-04', day: 0 },
+  ]
+  assert.equal(diaryDayOf(events, '2026-11-02'), 4)
+  assert.equal(diaryDayOf(events, '2026-11-03'), 6)
+  assert.equal(diaryDayOf(events, '2026-11-04'), undefined, '老数据 day=0：不知道就是不知道')
+  assert.equal(diaryDayOf(events, '2026-11-05'), undefined)
+  assert.equal(diaryDayOf(events, ''), undefined)
+  assert.equal(diaryDayOf(null, '2026-11-02'), undefined)
+})
+
+test('growth_commit 写下的日记，her_diary 读回来带的是写下那天的天数', async () => {
+  // 上面几条的记号是手摆的；这条走真的写入口，守住「记号的信封里有 day」这个前提。
+  const root = await tmpRoot()
+  try {
+    // 四天半前种下 ⇒ 今天是第 5 天
+    await appendEvent({ type: 'seed', text: '种子' }, { day: 1, stage: 1, now: Date.now() - 4.5 * DAY_MS, source: 'system' }, root)
+    let commit = null
+    registerCapture({ tools: { register: (d) => { if (d.name === 'growth_commit') commit = d; return d } } }, { root })
+    const wrote = await commit.execute({ type: 'diary', text: '今天在家。' })
+    assert.equal(wrote.ok, true)
+    const { events } = await readEvents(root)
+    const today = deriveSelf(events).day
+    assert.equal(today, 5)
+    const out = await toolFor(root).execute({})
+    assert.match(out.text, /今天在家。/)
+    assert.match(out.text, new RegExp(`那天是你自己的第 ${today} 天`))
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
 })
