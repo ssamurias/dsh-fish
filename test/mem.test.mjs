@@ -263,6 +263,13 @@ test('搬运段在身份文档末尾，且不挤掉黑名单', () => {
   for (const ban of HARD_BANS) assert.ok(doc.includes(ban))
 })
 
+test('身份文档说清：工具调用后的续写不是新的叫醒（issue #110）', () => {
+  const doc = renderSelfDoc(model(), { carry: '' })
+  assert.match(doc, /调用过工具/)
+  assert.match(doc, /不是新的叫醒/)
+  assert.match(doc, /回执不是谁在跟我说话/)
+})
+
 // ---------------------------------------------------------------- 回忆工具
 
 test('中文查询会切二字片段（否则整句匹配全落空）', () => {
@@ -568,11 +575,17 @@ test('rotateAfter=0 表示永不换会话', () => {
   assert.equal(normalizeConfig({ chat: { rotateAfter: 0 } }).chat.rotateAfter, 0)
 })
 
-test('「想一想」的提示词不要求她总结人生', () => {
+test('睡前卡：三个尺度各问一句，不要求她总结人生', () => {
   const p = sleepPrompt(model({ beliefs: [{ id: 'b', text: '判断' }] }))
-  assert.match(p, /这一周/)
+  assert.match(p, /停下来，想一想/)
+  assert.match(p, /哪一句话/)
+  assert.match(p, /两面/)
+  assert.match(p, /哪一点变了/)
   assert.match(p, /不要总结/)
-  assert.match(p, /narration/)
+  assert.match(p, /我没想清楚/)
+  // 0.9.9（S-B）：做法（narration + refs）常驻在身份文档的 SLEEP_BRIEF，
+  // 卡上不再派活——她收到的是问题，不是工单。
+  assert.doesNotMatch(p, /narration/)
 })
 
 // ---- personaBudget：用量口径必须是「字」不是「字节」（第 11 个静默 bug） ----
