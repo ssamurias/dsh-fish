@@ -69,7 +69,7 @@
 node --test
 ```
 
-当前基线 **2260 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **2473 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
@@ -266,6 +266,16 @@ qq_send_message, qq_get_unread_messages, qq_reply
 
 落地位置：家里能用的工具进 `test/toolmap.test.mjs` 的 `MAP`（工具名、所在说明书段、处境句正则）；场景工具进 `SCENE_TOOLS`。两处都没有的新工具，测试不放行。
 
+## 9. 私人插件不写进本仓库
+
+想给自己养的那条鱼加一件只属于你的工具（镜子、专属查询、私人接口），**不要往这个仓库里加 `plugin/`、`user-plugins/`、`extras/` 这类目录**，也不要往 `lib/` 里塞。2026-11-13 收到过这样的 PR（#134），没合并，原因就是下面三条。
+
+- **`lib/` 跟着 npm 包走，升级时整包替换。** 仓库里另开目录也一样：`package.json` 的 `files` 是白名单（`LICENSE`、`lib`、`media`、`cordis.patch.yml`、`README`、`AGENTS`、`CHANGELOG`、`RELEASE-NOTES-*`、`RELEASE.md`、`scripts`），私人目录进不了 npm 包；硬塞进仓库又会被 `git reset --hard` 还原；还会被 `node --test` 算进我们的绿线，基线从此依赖别人的代码和平台。
+- **正确位置是本仓库外面**：一个普通 DSH 插件（`inject = ['tools']` + `ctx.tools.register()`），用 `dsh plugin --profile <profile> add "link:<那个目录>"` 装进来，再把工具名写进 `config.tools.allow`。面向用户的说明在 `README.md` 的「想给她加一件只属于你的工具」。
+- **放行才念，不念就不会用**：白名单只做加法（§7.4），放行后 `toolBrief()` 会把它念进身份文档；不放行她既调不到，也不知道自己有这只手。
+- **要推荐给别人**：写进 `README.md` 那一节，链接到对方仓库，代码留在对方那儿。不要在 `files` 白名单之外偷偷带一份。
+- **想让她能引你工具里的原话**：按 §7.5 的素材契约返回，不要另开通用口。不按契约返回也能用，只是读进来的东西不会被记住、不能引原句、不进八股统计。
+
 ---
 
 ## 提 PR / 提交前自检
@@ -273,10 +283,11 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 三个依赖字段还是 `{}`
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `guard.js`
-- [ ] `node --test` 2260 全绿
+- [ ] `node --test` 2473 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节
+- [ ] 没有往仓库里加 `plugin/` 这类私人插件目录（见 §9）
 - [ ] 动了升级 / 迁移脚本（`scripts/fix-legacy-link.mjs`、`lib/selfupdate.js`）的话，`README.md` 的升级表与 `RELEASE-NOTES-*.md` 同步改了
 
 ---
