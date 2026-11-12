@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 
-import { sleepPromptDue, wakeNow } from '../lib/scheduler.js'
+import { sleepPromptDue, monthlyDue, wakeNow } from '../lib/scheduler.js'
 import { growthDay } from '../lib/derive.js'
 import { validateEvent } from '../lib/schema.js'
 import { appendEvent, readEvents, writeConfig } from '../lib/store.js'
@@ -66,10 +66,13 @@ test('判据要早于判空醒算，且这一天照常把这句推进正文', ()
   const table = src.indexOf('if (staleOn && !sleepDue')
   assert.ok(at >= 0 && table >= 0 && at < table, 'sleepDue 必须先算、table 才判')
   // 0.9.9（S-B）：这一天除了时机句，还要把三个尺度的问句一起递出去。
+  // 1.0（S 线）：月度那一段跟着同一张卡走，加不加由 `monthDue` 决定（不另起一张卡）。
+  assert.match(src, /if \(sleepDue\) \{/)
   assert.match(
     src,
-    /if \(sleepDue\) \{ parts\.push\('', SLEEP_TODAY, sleepPrompt\(model, \{ now: now\.getTime\(\) \}\)\); askedSleep = true \}/,
+    /parts\.push\('', SLEEP_TODAY, sleepPrompt\(model, \{ now: now\.getTime\(\), monthly: monthDue \}\)\)/,
   )
+  assert.match(src, /askedSleep = true/)
 })
 
 // ---- 成长日和本地日期对不齐：同一个成长日跨本地零点只递一次 ----
@@ -101,6 +104,25 @@ test('同一个成长日跨本地零点：零点前递过，零点后不再递�
   // 下一个 7 的倍数那天照常递，第 14 天那一笔不挡它。
   assert.deepEqual(wakeAt(L(2026, 11, 18, 15)), { day: 21, dk: '2026-11-18', due: true })
   assert.equal(events.filter((e) => e.type === 'meta').length, 2)
+})
+
+test('月度自述：一个月只问一次，且必须落在「想一想」那一天', () => {
+  const meta = (text) => ({ type: 'meta', text })
+  // 开关关着——老配置、老行为，一个字都不多问。
+  assert.equal(monthlyDue({ enabled: false, sleepDue: true, dk: '2026-11-11' }), false)
+  // 不是「想一想」的那天不问：它只搭那张卡，不自己排一次醒来。
+  assert.equal(monthlyDue({ enabled: true, sleepDue: false, dk: '2026-11-11' }), false)
+  // 开着 + 到日子 + 这个月还没问过。
+  assert.equal(monthlyDue({ enabled: true, sleepDue: true, dk: '2026-11-11' }), true)
+  // 这个月问过了：同一个自然月里再遇到「想一想」也不问。
+  assert.equal(monthlyDue({ enabled: true, sleepDue: true, dk: '2026-11-18', events: [meta('monthnar:2026-11')] }), false)
+  // 上个月问过的不算这个月的。
+  assert.equal(monthlyDue({ enabled: true, sleepDue: true, dk: '2026-11-11', events: [meta('monthnar:2026-10')] }), true)
+  // 别的前缀不算（比如 `sleep:` 那笔）。
+  assert.equal(monthlyDue({ enabled: true, sleepDue: true, dk: '2026-11-11', events: [meta('sleep:2026-11-11')] }), true)
+  // 日期不成形就不认——宁可这个月不问，也不能拿半个 key 去打听过的账。
+  assert.equal(monthlyDue({ enabled: true, sleepDue: true, dk: '' }), false)
+  assert.equal(monthlyDue({ enabled: true, sleepDue: true, dk: '2026-11-11', events: [{ type: 'utterance', text: 'monthnar:2026-11' }] }), true)
 })
 
 test('信封 day 认数字也认数字串；别的成长日的、不是 sleep: 的不算', () => {
@@ -160,6 +182,76 @@ test('真的叫醒两次（零点前、零点后，同一个成长日）：「�
     const marks = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('sleep:'))
     assert.deepEqual(marks.map((e) => [e.text, e.day]), [['sleep:2026-11-11', 14]])
     assert.equal(events.filter((e) => e.type === 'meta' && /^wake:2026-11-1[12] /.test(String(e.text))).length, 2)
+  } finally {
+    t.mock.timers.reset()
+    clearWakeSection()
+    if (oldHomes === undefined) delete process.env.DSH_FISH_HOMES
+    else process.env.DSH_FISH_HOMES = oldHomes
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+// 1.0（S 线）：月度那一段跟着同一张卡真递出去，并且**递出去之后**才记 `monthnar:`。
+// 只测函数不够：这条的风险在顺序——先记后递，她这个月就永远错过了。
+test('真机叫醒：开了月度自述时多问一段，且递出去之后才记一笔 monthnar', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-month-'))
+  const oldHomes = process.env.DSH_FISH_HOMES
+  process.env.DSH_FISH_HOMES = join(root, 'homes.json')
+  t.mock.timers.enable({ apis: ['Date'], now: SEED_AT })
+  const prompts = []
+  const ctx = {
+    on: () => () => {},
+    sessionController: {
+      create: async () => { throw new Error('exists') },
+      resolveAgent: async () => ({
+        agent: { followup: (message) => { prompts.push([message?.content?.[0]?.text ?? '', getWakeSection()].join('\n')) } },
+      }),
+    },
+  }
+  try {
+    await writeConfig(normalizeConfig({
+      window: ['00:00', '23:59'],
+      browse: { enabled: false },
+      comment: { enabled: false },
+      rules: { offers: false },
+      interest: { enabled: false },
+      memory: { sleepEveryDays: 7, monthlyNarration: true },
+    }), root)
+    await appendEvent({ type: 'seed', text: '种子' }, { day: 1, stage: 1, source: 'system' }, root)
+
+    const wakeAt = async (ms) => {
+      t.mock.timers.setTime(ms)
+      const before = prompts.length
+      const r = await wakeNow(ctx, { root, sessionId: 's-main', log: () => {} })
+      assert.equal(r.ok, true, r.why)
+      assert.equal(prompts.length, before + 1, '这一次要真的递进去')
+      clearWakeSection()
+      return prompts[prompts.length - 1]
+    }
+
+    const first = await wakeAt(L(2026, 11, 11, 15))
+    assert.ok(first.includes(SLEEP_TODAY), '第 14 天头一次叫醒要带这句')
+    assert.match(first, /一个月才说一次/, '开了开关，这个月第一次「想一想」要多问一段')
+
+    // 同一个成长日第二次醒来：整张卡都不再递。
+    const second = await wakeAt(L(2026, 11, 12, 10))
+    assert.ok(!second.includes(SLEEP_TODAY))
+    assert.doesNotMatch(second, /一个月才说一次/)
+
+    const { events } = await readEvents(root)
+    const month = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('monthnar:'))
+    assert.deepEqual(month.map((e) => [e.text, e.day]), [['monthnar:2026-11', 14]])
+
+    // 下一个自然月、下一个「想一想」的日子（第 35 天）再问一次。
+    const third = await wakeAt(L(2026, 12, 2, 15))
+    assert.ok(third.includes(SLEEP_TODAY), '换月后第一个 7 的倍数那天照常是「想一想」')
+    assert.match(third, /一个月才说一次/, '换月了要再问一次')
+    {
+      const { events: after } = await readEvents(root)
+      const marks = after.filter((e) => e.type === 'meta' && String(e.text).startsWith('monthnar:'))
+      assert.ok(marks.some((e) => String(e.text) === 'monthnar:2026-12'), '十二月的这一笔要记下')
+      assert.equal(marks.filter((e) => String(e.text) === 'monthnar:2026-11').length, 1, '上个月那笔不能被改写')
+    }
   } finally {
     t.mock.timers.reset()
     clearWakeSection()

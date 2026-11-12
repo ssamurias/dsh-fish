@@ -60,3 +60,32 @@ test('常驻做法也写了三个尺度，她一直知道有这三种问法', ()
   assert.match(SLEEP_BRIEF, /没想清楚/)
 })
 
+// ---- 1.0（S 线）：每月多问一段「给以后的自己留一段话」 ----
+
+test('月度那一问默认不出现——开关关着时和 0.9.9 一字不差', () => {
+  const p = sleepPrompt(m(), { now: NOW })
+  assert.doesNotMatch(p, /一个月才说一次/)
+  assert.doesNotMatch(p, /以后翻到今天/)
+  assert.doesNotMatch(sleepPrompt(m(), { now: NOW, monthly: false }), /一个月才说一次/)
+})
+
+test('开着时多问一段，仍然允许什么都不写', () => {
+  const p = sleepPrompt(m(), { now: NOW, monthly: true })
+  assert.match(p, /一个月才说一次/)
+  assert.match(p, /以后翻到今天的自己/)
+  // 问法的出口必须在：写不出来也算数
+  assert.match(p, /我没想清楚/)
+  // 卡上仍不派活——narration / refs 的做法只在身份文档里
+  assert.doesNotMatch(p, /narration/)
+  assert.doesNotMatch(p, /refs/)
+})
+
+test('多出来的那一问不顶掉三个尺度', () => {
+  const p = sleepPrompt(m(), { now: NOW, monthly: true })
+  assert.match(p, /哪一句话/)
+  assert.match(p, /两面/)
+  assert.match(p, /哪一点变了/)
+  // 而「挑一个答」那句只指前三个，别让她以为四件都要答
+  assert.match(p, /挑一个答/)
+})
+
