@@ -17,7 +17,7 @@ import { personaLine, buildSections, HARD_BANS } from '../lib/persona.js'
 import { appendEvent, readEvents } from '../lib/store.js'
 import { deriveSelf, consistency, novelty } from '../lib/derive.js'
 import {
-  assess, offerDueDay, offerLimits, pendingOffer, offerHistory, activeGrants, grantableRules, EVIDENCE,
+  assess, offerDueDay, offerLimits, pendingOffer, offerHistory, activeGrants, grantableRules, ruleStatus, EVIDENCE,
 } from '../lib/unlock.js'
 
 const NOW = Date.parse('2026-10-24T12:00:00+08:00')
@@ -181,6 +181,88 @@ test('rules.cooldownDays 真的接上了：驳回冷却跟着设置走（2026-11
   assert.ok(at10 > at3 && at3 > at1, '数值越大，下一次越晚')
   // 不给 limits 时仍旧是默认，老调用点不受影响。
   assert.equal(offerDueDay('learn-affection', m, events), at3)
+})
+
+test('驳回后的冷却从驳回那天起算，不是从申请那天', () => {
+  // 申请可以挂着（默认 3 天内都算在等）。第 9 天提、第 12 天才驳回、cooldownDays=3：
+  // 从申请那天算是 9+3，驳回的第二天（第 13 天）就能再提，「被驳回后至少隔几天」被挂着的那几天吃掉了。
+  const base = baseEvidence(3)
+  const offer = {
+    ...ev('grant_offer', 9, { text: '我想试试' }),
+    id: 'ev_OFFER00000000000000000000D',
+    grant: { rule: 'learn-affection', offerId: '', verdict: null, reason: '' },
+  }
+  const reject = {
+    ...ev('grant', 12),
+    id: 'ev_GRANT00000000000000000000D',
+    grant: { rule: 'learn-affection', offerId: offer.id, verdict: 'reject', reason: '这次不行。' },
+  }
+  const events = [...base, offer, reject]
+  const m = modelOf(events)
+  const h = offerHistory(events).at(-1)
+  assert.equal(h.day, 9, '申请那天')
+  assert.equal(h.decidedDay, 12, '裁决那天')
+  assert.equal(offerHistory([...base, offer]).at(-1).decidedDay, 0, '没裁决 = 0')
+
+  const limits = offerLimits({ rules: { cooldownDays: 3 } })
+  const due = offerDueDay('learn-affection', m, events, limits)
+  assert.ok(due >= 15 && due <= 17, `第 12 天驳回 + 3 天冷却 + 0–2 天偏移 = 第 15–17 天，实际 ${due}`)
+  // 调度器的判断是 model.day < due 就不提：驳回后第 2 天（第 14 天）还不能提。
+  assert.ok(14 < due, '驳回后第 2 天不重提')
+
+  // 同一天申请同一天驳回：和以前一样。
+  const sameDay = [...base, offer, { ...reject, day: 9 }]
+  assert.equal(offerDueDay('learn-affection', modelOf(sameDay), sameDay, limits), due - 3)
+  // 老数据里裁决没带 day：退回申请那天，不会算出比申请还早的日子。
+  const { day: _drop, ...noDay } = reject
+  const legacy = [...base, offer, noDay]
+  assert.equal(offerDueDay('learn-affection', modelOf(legacy), legacy, limits), due - 3)
+})
+
+test('rules.holdDays 真的接上了：一张申请挂几天算搁置跟着设置走', () => {
+  // 这个键和 cooldownDays 一样一直在设置里（默认 3，范围 1–30），但 pendingOffer 读的是写死的 3 天。
+  const offer = { ...ev('grant_offer', 9, { text: '我想试试' }), id: 'ev_OFFER00000000000000000000E', grant: { rule: 'learn-affection', offerId: '', verdict: null, reason: '' } }
+  const events = [...baseEvidence(3), offer]
+  const at = (days) => Date.parse(offer.ts) + days * 86400000
+
+  // 默认值不变：3 天。
+  assert.equal(offerLimits({}).holdDays, 3)
+  assert.equal(offerLimits(undefined).holdDays, 3)
+  assert.equal(offerLimits({ rules: { holdDays: 5 } }).holdDays, 5)
+  // 坏值回默认，越界夹住（和 settings.js 的 1–30 一致）。
+  assert.equal(offerLimits({ rules: { holdDays: 'abc' } }).holdDays, 3)
+  assert.equal(offerLimits({ rules: { holdDays: null } }).holdDays, 3)
+  assert.equal(offerLimits({ rules: { holdDays: 0 } }).holdDays, 1)
+  assert.equal(offerLimits({ rules: { holdDays: 99 } }).holdDays, 30)
+  // 改 holdDays 不动冷却，改冷却不动 holdDays。
+  assert.deepEqual(offerLimits({ rules: { holdDays: 5 } }).retryDays, [3, 7])
+  assert.equal(offerLimits({ rules: { cooldownDays: 10 } }).holdDays, 3)
+
+  // 不传 limits 的老调用点：还是 3 天。
+  assert.ok(pendingOffer(events, at(2.9)))
+  assert.equal(pendingOffer(events, at(4)), null)
+  // holdDays=5：第 4 天还在等，过了 5 天才算搁置。
+  const five = offerLimits({ rules: { holdDays: 5 } })
+  assert.equal(pendingOffer(events, at(4), five)?.id, offer.id, 'holdDays=5 时第 4 天还在等')
+  assert.equal(pendingOffer(events, at(5.1), five), null)
+  // holdDays=1：一天多就搁置。
+  assert.equal(pendingOffer(events, at(1.1), offerLimits({ rules: { holdDays: 1 } })), null)
+
+  // 观测台的规则状态用同一个口径。
+  const m = modelOf(events)
+  const pend = (limits) => ruleStatus(events, m, at(4), limits).find((r) => r.id === 'learn-affection').pending
+  assert.equal(pend(five), offer.id)
+  assert.equal(pend(undefined), null)
+})
+
+test('pendingOffer 的每个调用点都把 config 算出来的 limits 传进去', () => {
+  // 只接一处的话，调度器以为还在等、会话里的卡却答不上（或者反过来）。
+  for (const f of ['scheduler.js', 'grant.js', 'cardanswer.js', 'observe.js']) {
+    const src = readFileSync(new URL(`../lib/${f}`, import.meta.url), 'utf8')
+    const calls = src.match(/pendingOffer\([^\n]*/g) || []
+    assert.ok(calls.length > 0, `${f} 里应该有 pendingOffer 的调用`)
+    for (const c of calls) assert.ok(c.includes('offerLimits('), `${f}：${c}`)
+  }
 })
 
 test('未裁决的申请会挡住新卡', () => {
