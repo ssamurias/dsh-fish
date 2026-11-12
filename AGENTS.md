@@ -272,7 +272,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 
 想给自己养的那条鱼加一件只属于你的工具（镜子、专属查询、私人接口），**不要往这个仓库里加 `plugin/`、`user-plugins/`、`extras/` 这类目录**，也不要往 `lib/` 里塞。2026-11-13 收到过这样的 PR（#134），没合并，原因就是下面三条。
 
-- **`lib/` 跟着 npm 包走，升级时整包替换。** 仓库里另开目录也一样：`package.json` 的 `files` 是白名单（`LICENSE`、`lib`、`media`、`cordis.patch.yml`、`README`、`AGENTS`、`CHANGELOG`、`RELEASE-NOTES-*`、`RELEASE.md`、`scripts`、`tools`），私人目录进不了 npm 包；硬塞进仓库又会被 `git reset --hard` 还原；还会被 `node --test` 算进我们的绿线，基线从此依赖别人的代码和平台。
+- **`lib/` 跟着 npm 包走，升级时整包替换。** 仓库里另开目录也一样：`package.json` 的 `files` 是白名单（`LICENSE`、`lib`、`media`、`cordis.patch.yml`、`README`、`AGENTS`、`CHANGELOG`、`RELEASE-NOTES-*`、`scripts`、`tools`），私人目录进不了 npm 包；硬塞进仓库又会被 `git reset --hard` 还原；还会被 `node --test` 算进我们的绿线，基线从此依赖别人的代码和平台。
 - **正确位置是本仓库外面**：一个普通 DSH 插件（`inject = ['tools']` + `ctx.tools.register()`），用 `dsh plugin --profile <profile> add "link:<那个目录>"` 装进来，再把工具名写进 `config.tools.allow`。面向用户的说明在 `README.md` 的「想给她加一件只属于你的工具」。
 - **放行才念，不念就不会用**：白名单只做加法（§7.4），放行后 `toolBrief()` 会把它念进身份文档；不放行她既调不到，也不知道自己有这只手。
 - **要推荐给别人**：写进 `README.md` 那一节，链接到对方仓库，代码留在对方那儿。不要在 `files` 白名单之外偷偷带一份。
@@ -308,7 +308,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 
 ## 发版
 
-完整步骤（发布前自检、push、npm publish、tag、GitHub Release、发布后验证、回滚）写在 **`RELEASE.md`**，动手前通读一遍。三条不能省的顺序：
+完整步骤（发布前自检、push、npm publish、tag、GitHub Release、发布后验证、回滚）写在维护者本机的 **`D:\deepseekagent\04-小工具\fish-release\RELEASE.md`**（**不进仓库**：里面是本机的路径、账号和踩坑记录，对使用者没有意义），动手前通读一遍。三条不能省的顺序：
 
 1. `node --test` 全绿、`npm pack --dry-run` 清单对（见 §6）。
 2. 先推代码，再发 npm：**npm 成功之后才打 tag / 建 Release**——npm 失败时不留悬空 tag。
