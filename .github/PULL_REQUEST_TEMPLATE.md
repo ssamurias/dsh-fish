@@ -8,7 +8,9 @@
 - [ ] 三个依赖字段还是 `{}`
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `lib/guard.js`
-- [ ] 界面文案没有男字旁的「他」、「四道门」、「三道门」
+- [ ] 加 / 改名 / 删了工具的话，`test/toolmap.test.mjs` 的 `MAP`（或 `lib/toolreg.js` 的 `SCENE_TOOLS`）跟着改了
+- [ ] 界面文案（`lib/client.js`）没有男字旁的「他」、「四道门」、「三道门」
+- [ ] 给她看的文本里指主人的那个字写的是 `{T}`，没有写死「他」（见 `AGENTS.md` §4）
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名（真要动先看 `AGENTS.md` 的「包名与装法」）
 - [ ] 没有往仓库里加 `plugin/` 这类私人插件目录

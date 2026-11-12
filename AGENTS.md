@@ -21,6 +21,7 @@
 - 设置页只放**环境参数**：几点醒、醒几次、一天几条事件、刷不刷 B 站、每天刷几次。这些是「生长环境」，不是她本人。
 - 人格只能**通过事件长出来**。任何让用户直接写「你是一个温柔的…」的入口，等于把产品变回角色扮演，直接违反本项目的立项前提。
 - 判断标准很简单：如果加了之后用户能**直接指定**她是什么样的人，就是错的。
+- **但「怎么称呼用户」不是人格开关（0.9.9 起，issue #127）**：`owner.pronoun`（`他` / `她` / `TA`，默认 `他`）与 `ask_pronoun` 工具只换「给她看的文本里指你的那个字」，不换性格、不影响她怎么说话、不动界面文案。它进 `/config` 白名单、用户能改，都不算违反本节。
 
 **唯一例外：导入别人养过的那一位（0.5.3）**。用户 m03170 明确要「尊重别人的想法」——对方已经在别处养出了样子，接过来是**继承一份既成事实**，不是由用户在这里凭空指定性格。这条通道的三条边界，越界就等于变回角色扮演：
 
@@ -42,17 +43,18 @@
 两条实现原则，改代码时别破坏：
 
 - **物理层与契约层不进提示词。** 写「你不可以读设定」等于告诉她「旁边有份设定，很关键」——那是诱因，不是防线。靠代码不给路径、不给工具来保证。
-- **不要绕过 `lib/guard.js`。** 她是"根本没看见"重塑人格那句话，不是"看见了但被劝住"。任何新的输入口（新工具、新接口、新外部文本源）都必须过 `guard.js`；秘密外发（cookie / token / `sk-` / Bearer / 长 base64）在这里一律拦下。
+- **不要绕过 `lib/guard.js`。** 她是"根本没看见"重塑人格那句话，不是"看见了但被劝住"。任何新的输入口（新工具、新接口、新外部文本源）都必须过 `lib/guard.js`；秘密外发（cookie / token / `sk-` / Bearer / 长 base64）在这里一律拦下。
 
 ## 4. 文案有守门词，改之前先看测试
 
-面向用户的字符串（`lib/client.js` 里的界面文案）有三条硬规矩，全部有测试盯着：
+面向用户的字符串（`lib/client.js` 里的界面文案）有三条硬规矩，全部有测试盯着；另外还有一条管**别的方向**的文本，别混起来：
 
-- **不出现男字旁的「他」**，统一写「你」。`test/p5.test.mjs:187` 逐字扫。例外只有 `其他/其它` 这类词素。她自己的话、引用别人的话不受此限。
+- **不出现男字旁的「他」**，统一写「你」。守着它的是 `test/p5.test.mjs` 里那个逐字扫 `lib/client.js` 字符串字面量的测试（注释不算；不要引用行号，会漂）。例外只有 `其他/其它` 这类词素。她自己的话、引用别人的话不受此限。
+- **给她看的文本里指主人的那个字，写 `{T}`，不要写死「他」（0.9.9 起，issue #127）。** 模板句统一写 `{T}`（`lib/pronoun.js` 的 `OWNER_SLOT`），出口过 `fillOwner(text, pronoun)` 填成 `他` / `她` / `TA`（默认 `他`）；`lib/persona.js` 的 `assemble()` 收尾、`lib/use.js` 的 `description` / `brief` 都已经填过一遍。**上面那条管界面，这条管她读到的文本，两条不冲突**：界面文案永远只写「你」，从不出现第三人称。解析用的正则里写死「他」不算违规（`lib/derive.js` 的 `nameSayRe('称呼你|叫你|称呼他…')` 那类是在认字，不是在称呼）。`test/pronoun.test.mjs` 守着「只认 他/她/TA」「`fillOwner` 只填占位符、不按字替换」。
 - **统一「四个阶段」与「三道瓶颈」**，**禁**「四道门 / 三道门」。`test/principle-zoom.test.mjs` 明确断言 `三道门`/`四道门` 不出现。
 - **立场不是第五关。** 措辞只能是「四个阶段完成之后才会开始有立场」。图上不许再退回「底部一行小字」的表达——立场是独立区块，由 `test/principle.test.mjs`（viewBox 1160 + 含「立场清单」）与 `test/stance.test.mjs`（旧的「纵向长「立场清单」」写法必须不存在）共同守着。
 
-改文案时**先跑这三条**再改别的，否则会来回返工。
+改界面文案时**先跑那三条**再改别的，否则会来回返工。
 
 ## 5. `events.jsonl` 只能追加
 
@@ -60,7 +62,7 @@
 
 - 状态（`state.json`）是派生品，随时可由 `rebuild()` 重算；改它没意义，会被覆盖。
 - 「让她忘」不是删行，是**降低召回**（`lib/persona.js` 的 `foldOlderBeliefs`：更早的判断折成一行「还有 N 条更早的，没摆出来」，疤那类永不折叠），事件原文始终还在 `events.jsonl` 里，她也能用 `her_recall` 翻回去。
-- 重置与恢复都不删数据：`reset.js` 改名前缀封存，`backup.js` 恢复前把旧档搬去 `dsh-fish-backups/pre-restore-*`。
+- 重置与恢复都不删数据：`lib/reset.js` 改名前缀封存，`lib/backup.js` 恢复前把旧档搬去 `dsh-fish-backups/pre-restore-*`。
 - 新增事件类型**不必**改 `lib/schema.js` 的 `EVENT_SCHEMA_VERSION`：旧读者读不认识的 `type` 会跳过（`readEvents` 对未知类型宽容），0.7.6 / 0.8.0 的 `ask`、`answer`、`heard` 都是这样加进去的。但**改字段语义、把可选字段变必填、删字段**必须升 `v` 并写迁移（旧版本遇到新 `v` 要拒，否则静默丢字段）。
 
 ## 6. 改完必须跑全套测试
@@ -142,10 +144,10 @@ GET /dsh-fish/whoami
 ### 7.2 五个配套约定（改桥之后的正确性全押在这五条上）
 
 1. **场次要进事件流**。`validateEvent` 现在接受可选 `scene`（非 `desk` 才落库，纯加法，不升 `EVENT_SCHEMA_VERSION`）。桥注入 `user/message` 时把 `scene` 写进 **`source.scene`**，`classifyMessage` 才会认出来（`lib/turns.js`）。
-2. **外客不动生命体征**。`seen:`、`bumpTurns`、会话轮换只由 desk/private 且非 `guest` 触发；群聊与群友私聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。`heard` 分两种：私聊/书房那条算「他来过」，群聊那条（`scene:'group'`）**不算**——`schema.js` 的 `isContactEvent` 已经把群聊的 `heard` 排除掉了（2026-11-08）。**「他来过」也只认她自己的房间**（2026-11-11）：客户端亲手打的字（`source.kind:'user'` 且带 `clientTimeZone`）只有落在她住的那条会话、或 `channels.json` 里登记过的房间才写 `seen:`；本机别的 DSH 会话里他跟其他 agent 说话，不再清零冷落钟（用户报「好几天没回她还不算冷落」就是这条）。桥注入的消息（`kind` 不是 `user`、或没有 `clientTimeZone`）照旧算——QQ 私聊那条路不能断（issue #18）。
+2. **外客不动生命体征**。`seen:`、`bumpTurns`、会话轮换只由 desk/private 且非 `guest` 触发；群聊与群友私聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。`heard` 分两种：私聊/书房那条算「他来过」，群聊那条（`scene:'group'`）**不算**——`lib/schema.js` 的 `isContactEvent` 已经把群聊的 `heard` 排除掉了（2026-11-08）。**「他来过」也只认她自己的房间**（2026-11-11）：客户端亲手打的字（`source.kind:'user'` 且带 `clientTimeZone`）只有落在她住的那条会话、或 `channels.json` 里登记过的房间才写 `seen:`；本机别的 DSH 会话里他跟其他 agent 说话，不再清零冷落钟（用户报「好几天没回她还不算冷落」就是这条）。桥注入的消息（`kind` 不是 `user`、或没有 `clientTimeZone`）照旧算——QQ 私聊那条路不能断（issue #18）。
 3. **外来场次必须带说话人前缀**。`lib/say.js` 对 `group` 与 `guest` 都用 `speaker` 拼 `某某在群里说：…` / `某某说：…`。不拼的话，群里三个人的话在她看来跟一个人连说三句一模一样，她会把三个人的观点拼成一个"他"。外来文本统一过 `lib/guard.js` 的 `sanitizeForeign`。
 4. **桥不要用宿主的 `source.form`**。`snapshot`、`notice`、`catalog`、`instructions`、`recall` 是宿主前端的保留词表，`classifyMessage` 见到就当上下文，不算人（`MACHINE_FORMS`）。转述人说的话，要么不带 `form`，要么用 `relay`。
-5. **走宿主 prompt 的桥，`rpcId` 就是记号**。`sessionController.prompt()` 把 `kind` 写死成 `user`，把调用方的 `requestId` 写进 `source.rpcId`，桥传不进自己的 `source`；`clientTimeZone` 是可选字段，忘了不会报错。2026-11-08 起 `classifyMessage` 把「带 rpcId 的 user 消息」也认作人：我们自己的 prompt 用 `PLUGIN_RPC` 前缀先挡掉，`possess.js` / `sessionnote.js` 的 append 没有 rpcId，仍留 unknown。桥仍应带 `clientTimeZone`——`dsh-time-context` 只认「kind user + rpcId + 时区」三者齐全的 source。正文末尾的 `[渠道：…]` / `[Channel: …]` 独立段落只影响记账（`lib/turns.js` 的 `stripChannelNote` 会裁掉），会话原文不动；只有提示的那条不算他来过。
+5. **走宿主 prompt 的桥，`rpcId` 就是记号**。`sessionController.prompt()` 把 `kind` 写死成 `user`，把调用方的 `requestId` 写进 `source.rpcId`，桥传不进自己的 `source`；`clientTimeZone` 是可选字段，忘了不会报错。2026-11-08 起 `classifyMessage` 把「带 rpcId 的 user 消息」也认作人：我们自己的 prompt 用 `PLUGIN_RPC` 前缀先挡掉，`lib/possess.js` / `lib/sessionnote.js` 的 append 没有 rpcId，仍留 unknown。桥仍应带 `clientTimeZone`——`dsh-time-context` 只认「kind user + rpcId + 时区」三者齐全的 source。正文末尾的 `[渠道：…]` / `[Channel: …]` 独立段落只影响记账（`lib/turns.js` 的 `stripChannelNote` 会裁掉），会话原文不动；只有提示的那条不算他来过。
 6. **走 `prompt()` 的桥，发之前先登记这一轮是什么**（2026-11-09，issue #96）。上一条的「带 rpcId 就算人」把群聊、群友私聊、桥自己的定时提醒也一起算成了他本人：涨轮数、换会话、写 `seen:`、记「他说」、撤掉叫醒。桥在调 `sessionController.prompt()` 之前发一条即可：
 
    ```js
@@ -282,9 +284,10 @@ qq_send_message, qq_get_unread_messages, qq_reply
 
 - [ ] 三个依赖字段还是 `{}`
 - [ ] 没有新增人格设置入口
-- [ ] 新输入口都过了 `guard.js`
+- [ ] 新输入口都过了 `lib/guard.js`
+- [ ] 加 / 改名 / 删了工具，`test/toolmap.test.mjs` 的 `MAP`（或 `lib/toolreg.js` 的 `SCENE_TOOLS`）跟着改了（见 §8）
 - [ ] `node --test` 2473 全绿
-- [ ] 界面文案没有「他」「四道门」「三道门」
+- [ ] 界面文案没有「他」「四道门」「三道门」；给她看的文本里指主人的字写的是 `{T}` 而不是写死「他」（见 §4）
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节
 - [ ] 没有往仓库里加 `plugin/` 这类私人插件目录（见 §9）
