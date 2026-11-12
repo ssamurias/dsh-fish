@@ -9,10 +9,14 @@
  *   3. 这一次读写碰巧没成（Windows 上别的进程正以不许写的共享方式开着那个文件）。
  * 这里逐条钉住：这三种都不该丢占用权；文件里真写着别的实例时照旧丢、照旧不抢。
  *
- * 后四条用假宿主真的 apply()，把 15 秒的心跳缩成几十毫秒。
+ * 还有一种「声明不在了」不能重新占：设置页的「迁移工作区」搬完以后，老目录改名封存，声明跟着走。
+ * 这时重新占上，她的写工具会照样回成功、东西留在老位置，重启后走指针去新位置就看不到了。
+ * 所以重新占之前先看位置指针（move.js 的 rootMovedAway），搬走了的照旧停写。
+ *
+ * 用假宿主的那几条真的 apply()，把 15 秒的心跳缩成几十毫秒。
  *
  * 心跳缩到 40ms 以后，测试自己做的手脚（读声明、改声明、搬数据目录）很容易正落在某一拍中间，
- * 真的 15 秒一拍时碰上的机会小得多。所以这四条不靠运气：
+ * 真的 15 秒一拍时碰上的机会小得多。所以这几条不靠运气：
  *   - 读盘上的声明：声明不是原子写的，读到空的 / 半截的就再读（claimOnDisk）；
  *   - 要动声明、要搬数据目录之前先让心跳停下，等在途的那一拍走完再动手，做完再放开（pause / resume）；
  *   - 等「过了几拍」是真的数到盘上的 beatAt 变了几次，不是睡一会儿（beats）；
@@ -22,13 +26,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 
 import { claimRoot, beatRoot, beatRootState, releaseRoot, TENANT_FILE, HEARTBEAT_MS } from '../lib/tenant.js'
 import { collectBackup, restoreBackup } from '../lib/backup.js'
 import { appendEvent } from '../lib/store.js'
+import { rootMovedAway } from '../lib/move.js'
+import { invalidateLocation } from '../lib/locate.js'
 import { apply } from '../lib/index.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -49,6 +55,22 @@ async function until(probe, { ms = WAIT_MS, every = 10 } = {}) {
   }
 }
 
+/** dir 下面（连子目录）哪些文件里有这段字；dir 不在回空表。 */
+async function filesWith(dir, needle) {
+  const hits = []
+  const walk = async (d) => {
+    let names = []
+    try { names = await fs.readdir(d, { withFileTypes: true }) } catch { return }
+    for (const e of names) {
+      const p = join(d, e.name)
+      if (e.isDirectory()) await walk(p)
+      else if ((await rawRead.call(fs, p, 'utf8').catch(() => '')).includes(needle)) hits.push(p.slice(dir.length + 1))
+    }
+  }
+  await walk(dir)
+  return hits
+}
+
 /** base 是临时目录，root 是里面的 dsh-fish：重置、恢复会把旧档搬到 root 的旁边，一起收拾。 */
 async function withBase(fn) {
   const base = await fs.mkdtemp(join(tmpdir(), 'fish-heartbeat-'))
@@ -57,11 +79,14 @@ async function withBase(fn) {
   const old = { homes: process.env.DSH_FISH_HOMES, loc: process.env.DSH_FISH_LOCATION }
   process.env.DSH_FISH_HOMES = join(base, 'homes.json')
   process.env.DSH_FISH_LOCATION = join(base, 'location.json')
+  // 位置指针读过以后在进程里缓存 2 秒：换了指针文件就清掉，免得上一条用例的位置漏到下一条
+  invalidateLocation()
   try {
     return await fn(root, base)
   } finally {
     if (old.homes === undefined) delete process.env.DSH_FISH_HOMES; else process.env.DSH_FISH_HOMES = old.homes
     if (old.loc === undefined) delete process.env.DSH_FISH_LOCATION; else process.env.DSH_FISH_LOCATION = old.loc
+    invalidateLocation()
     await fs.rm(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   }
 }
@@ -88,25 +113,29 @@ function fakeCtx() {
 /**
  * 起一个实例，心跳缩成 BEAT 毫秒（别的定时器不动），并在心跳上装一道闸。
  *
- * lib/tenant.js 读写声明走的是 fs.readFile / fs.writeFile。这里把这两个换成带记数的
- * （只管这个实例的那一个声明文件，别的路径原样放过），stop() 时换回去：
+ * lib/tenant.js 读写声明走的是 fs.readFile / fs.writeFile；声明不在了的那一拍还会用 fs.readFile
+ * 读一次位置指针（lib/move.js 的 rootMovedAway）。这里把这两个换成带记数的（只管这个实例的那一个
+ * 声明文件和位置指针，别的路径原样放过），stop() 时换回去：
  *   hb.io      在途的读写个数。pause() 靠它知道在途的那一拍走完了没有
- *   hb.fail    read / write 不为空时，这个实例读 / 写声明直接抛这个错误码（装「别的进程正开着它」）
+ *   hb.fail    read / write 不为空时，这个实例读 / 写声明直接抛这个错误码（装「别的进程正开着它」）；
+ *              pointer 不为空时，读位置指针抛这个错误码
  *   hb.failed  这样抛过几次
  *   hb.ticks   心跳定时器响过几次（停着的时候不算）
  */
 async function boot(root) {
   const f = fakeCtx()
   const file = join(root, TENANT_FILE)
-  const hb = { armed: false, paused: false, ticks: 0, io: 0, fail: { read: '', write: '' }, failed: { read: 0, write: 0 } }
+  const pointer = String(process.env.DSH_FISH_LOCATION ?? '')
+  const hb = { armed: false, paused: false, ticks: 0, io: 0, fail: { read: '', write: '', pointer: '' }, failed: { read: 0, write: 0, pointer: 0 } }
   const real = { readFile: fs.readFile, writeFile: fs.writeFile, setInterval: globalThis.setInterval }
   const WHY = { EBUSY: 'resource busy or locked', EPERM: 'operation not permitted' }
   const gated = (kind, fn) => (p, ...a) => {
-    if (String(p) !== file) return fn.call(fs, p, ...a)
+    const which = String(p) === file ? kind : kind === 'read' && pointer && String(p) === pointer ? 'pointer' : ''
+    if (!which) return fn.call(fs, p, ...a)
     return (async () => {
-      const code = hb.fail[kind]
+      const code = hb.fail[which]
       if (code) {
-        hb.failed[kind]++
+        hb.failed[which]++
         throw Object.assign(new Error(`${code}: ${WHY[code] ?? 'failed'}`), { code })
       }
       hb.io++
@@ -114,7 +143,7 @@ async function boot(root) {
     })()
   }
   const stop = async () => {
-    hb.fail.read = hb.fail.write = ''
+    hb.fail.read = hb.fail.write = hb.fail.pointer = ''
     try {
       await Promise.all(f.cleanups.map((c) => (typeof c === 'function' ? c() : c)))
     } finally {
@@ -149,8 +178,8 @@ async function boot(root) {
    */
   const pause = async () => {
     hb.paused = true
-    // 一拍里的读和写是在同一串微任务里接上的（读回来 → 判断 → 当场写），从定时器回调这边
-    // 看不到「读完了、还没开始写」的那一刻：连着几次看到没有在途的读写，这一拍就是走完了。
+    // 一拍里的几次读写是在同一串微任务里接上的（读回来 → 判断 → 当场读指针 / 当场写），从定时器
+    // 回调这边看不到「上一次读完了、下一次还没开始」的那一刻：连着几次看到没有在途的读写，这一拍就是走完了。
     const end = Date.now() + WAIT_MS
     for (let quiet = 0; quiet < 3;) {
       assert.ok(Date.now() < end, '在途的那一拍心跳一直没走完')
@@ -224,7 +253,12 @@ async function boot(root) {
     }
   }
   const lostLogs = () => f.logs.filter((l) => l.includes('占用权丢了'))
-  return { ...f, hb, file, note, post, postMove, claimOnDisk, pause, resume, beats, stop, lostLogs }
+  /** 等心跳的定时器又响了 n 次（声明不在盘上、数不了 beatAt 的时候用）。到时间还没等到回 false。 */
+  const rings = async (n) => {
+    const from = hb.ticks
+    return until(() => hb.ticks >= from + n)
+  }
+  return { ...f, hb, file, note, post, postMove, claimOnDisk, pause, resume, beats, rings, stop, lostLogs }
 }
 
 test('beatRootState：分得清「是别人」「没有声明」「这次没读成」', async () => {
@@ -299,6 +333,48 @@ test('claimRoot：同一个实例在声明没了之后重新占，bootAt 用带�
     const cur = JSON.parse(await fs.readFile(join(root, TENANT_FILE), 'utf8'))
     assert.equal(cur.bootAt, now)
     assert.equal(cur.beatAt, now + 60_000)
+  })
+})
+
+test('rootMovedAway：只认「这次启动之后、从这个 root 搬走」的指针；这一次没读成是 unknown', async () => {
+  await withBase(async (root, base) => {
+    const loc = process.env.DSH_FISH_LOCATION
+    const to = join(base, 'new-place', 'dsh-fish')
+    const t = 1_800_000_000_000
+    const movedAt = new Date(t).toISOString()
+    const put = (v) => fs.writeFile(loc, typeof v === 'string' ? v : JSON.stringify(v, null, 2), 'utf8')
+
+    assert.deepEqual(await rootMovedAway(root), { state: 'here' }, '没有指针：没搬过')
+
+    // moveRoot 写下的就是这三个字段
+    await put({ root: to, movedAt, from: root })
+    assert.deepEqual(await rootMovedAway(root, { since: t - 1 }), { state: 'moved', to })
+    assert.deepEqual(await rootMovedAway(root + sep, { since: t }), { state: 'moved', to }, '末尾多一个分隔符、同一毫秒，都算')
+    assert.deepEqual(await rootMovedAway(root), { state: 'moved', to }, '不给启动时间就不看早晚')
+    assert.deepEqual(
+      await rootMovedAway(root, { since: t + 1 }),
+      { state: 'here' },
+      '指针是这次启动之前写的：root 被钉在老位置、搬过之后又在这里起来的实例，本来就住在这里',
+    )
+    assert.deepEqual(await rootMovedAway(to, { since: t - 1 }), { state: 'here' }, '问的是新位置自己')
+    assert.deepEqual(await rootMovedAway(join(base, 'another'), { since: t - 1 }), { state: 'here' }, '指针说的不是这个 root')
+
+    await put({ root, movedAt, from: root })
+    assert.deepEqual(await rootMovedAway(root, { since: t - 1 }), { state: 'here' }, '指针指回了这里')
+    await put({ root: to })
+    assert.deepEqual(await rootMovedAway(root, { since: t - 1 }), { state: 'here' }, '手写的指针没有 from：不知道是从哪搬的，不算')
+    await put({ root: to, from: root })
+    assert.deepEqual(await rootMovedAway(root, { since: t - 1 }), { state: 'moved', to }, '没有 movedAt：说不出早晚，按搬走算')
+    await put('{"root": "D:')
+    assert.deepEqual(await rootMovedAway(root, { since: t - 1 }), { state: 'here' }, '读坏了的指针当没有，和 locate.js 一样')
+
+    // 读不成（各平台都能造出来的一种：那个名字是个目录）
+    await fs.rm(loc)
+    await fs.mkdir(loc)
+    const blocked = await rootMovedAway(root, { since: t - 1 })
+    assert.equal(blocked.state, 'unknown')
+    assert.ok(blocked.code, '带上错误码')
+    await fs.rmdir(loc)
   })
 })
 
@@ -484,6 +560,90 @@ test('心跳碰到几次 EBUSY / EPERM：不置只读，之后照常续上；文
       assert.equal(r.body.ok, false)
       assert.equal((await inst.claimOnDisk())?.instanceId, 'OTHER')
       assert.equal(inst.lostLogs().length, 1)
+    } finally {
+      await inst.stop()
+    }
+  })
+})
+
+test('迁移数据目录之后：声明不在了也不重新占；她的写工具被拒，老位置没有新的声明、也没有她搬完以后写的东西', async () => {
+  await withBase(async (root, base) => {
+    const inst = await boot(root)
+    try {
+      assert.equal((await inst.note('搬之前记一笔')).ok, true)
+      assert.ok((await inst.claimOnDisk())?.instanceId, '启动时占上了')
+
+      // 心跳停着的时候搬：老目录要整个改名封存，里面有文件正开着就改不了名
+      await inst.pause()
+      // 搬的那一下正好有文件在变（启动的收尾还在写）会回 409「对不上」「复制到一半失败」，指针没写、
+      // 等于没搬：换一个空文件夹再来。别的结果原样交回。
+      let r = null
+      await until(async () => {
+        r = await inst.post('/dsh-fish/move', { target: await fs.mkdtemp(join(base, 'new-place-')) })
+        return !(r.status === 409 && /对不上|复制到一半失败/.test(String(r.body?.error ?? '')))
+      }, { every: 50 })
+      assert.equal(r.status, 200, JSON.stringify(r.body))
+      assert.equal(r.body.ok, true)
+      if (!r.body.oldDirMoved) {
+        // 没能当场改名（Windows 上别的进程正开着里面的文件，心跳停了也拦不住）：迁移照样算成，
+        // 老目录留在原处。这里要钉的是老目录封存之后「声明不在了」的那条路，替它挪开。
+        const aside = join(base, 'old-left-behind')
+        assert.ok(
+          await until(() => fs.rename(root, aside).then(() => true, () => false), { every: 50 }),
+          '老目录要挪得开',
+        )
+      }
+      assert.equal(await inst.claimOnDisk(), null, '老位置的声明跟着老目录走了')
+
+      // 刚写下的指针这一次读不成（别的进程正开着它）：不猜，这几拍不重新占。
+      // 只看结果、不数读了几次：搬完当场就把实例置成只读的实现，一拍都不会去读指针。
+      inst.hb.fail.pointer = 'EBUSY'
+      inst.resume()
+      assert.ok(await inst.rings(3), '定时器还在响')
+      await inst.pause()
+      assert.equal(await inst.claimOnDisk(), null, '指针没读成的那几拍没有在老位置重新占')
+      inst.hb.fail.pointer = ''
+      inst.resume()
+
+      assert.ok(await inst.rings(3), '搬完以后过几拍心跳')
+      await inst.pause()
+      const n = await inst.note('搬完、过了几拍心跳再记的')
+      assert.equal(n.ok, false, '搬走以后不能照样回成功')
+      assert.match(n.note, /搬到了新位置/)
+      assert.equal(await inst.claimOnDisk(), null, '老位置没有被重新占上')
+      assert.ok(!inst.logs.some((l) => l.includes('占用声明不在了')), '没有走「重新写上」那条路')
+      // 被拒的那一句哪边都没有落下。（老位置这时可能又有了 logs/ 和一行 `use:her_note fail …` 的
+      // 记账，那是写日志、记工具用量时顺手建出来的，不归这里管；她要记的东西不在里面。）
+      assert.deepEqual(await filesWith(root, '搬完、过了几拍心跳再记的'), [], '老位置里没有她搬完以后写的东西')
+      assert.deepEqual(await filesWith(r.body.to, '搬完、过了几拍心跳再记的'), [])
+      assert.ok((await filesWith(r.body.to, '搬之前记一笔')).includes('events.jsonl'), '搬之前记的在新位置的事件流里')
+      inst.resume()
+    } finally {
+      await inst.stop()
+    }
+  })
+})
+
+test('指针是这次启动之前留下的（root 被配置钉在老位置）：声明没了照样重新占', async () => {
+  await withBase(async (root, base) => {
+    // 以前从这个 root 搬走过；配置里的 root 还钉着这里，重启以后这个实例照样在这里起来
+    await fs.writeFile(
+      process.env.DSH_FISH_LOCATION,
+      JSON.stringify({ root: join(base, 'elsewhere', 'dsh-fish'), movedAt: new Date(Date.now() - 60_000).toISOString(), from: root }, null, 2),
+      'utf8',
+    )
+    const inst = await boot(root)
+    try {
+      const before = await inst.claimOnDisk()
+      assert.ok(before?.instanceId, '启动时占上了')
+      await inst.pause()
+      await fs.rm(inst.file, { maxRetries: 20, retryDelay: 50 })
+      assert.equal(await inst.claimOnDisk(), null, '声明删掉了')
+      inst.resume()
+
+      const back = await until(() => inst.claimOnDisk())
+      assert.equal(back?.instanceId, before.instanceId, '老指针不拦着它重新占')
+      assert.equal((await inst.note('声明补上之后')).ok, true)
     } finally {
       await inst.stop()
     }
