@@ -231,6 +231,41 @@ test('白名单仍然挡得住"指向她本人"的键', async () => {
   }
 })
 
+test('/config 收得下主人的代词，取值越界就退回「他」（issue #127）', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-p5p-'))
+  try {
+    const ctx = fakeCtx(root)
+    ctx.cfg.connection = { requestRejection: () => null }
+    registerObserve(ctx, { root })
+    const route = ctx.routes.find((r) => String(r.path || '').endsWith('/config'))
+    let status = 0
+    let payload = null
+    const res = { writeHead: (s) => { status = s }, end: (s) => { payload = JSON.parse(s || '{}') }, setHeader: () => {} }
+    const post = async (obj) => {
+      const body = JSON.stringify(obj)
+      const req = {
+        method: 'POST',
+        url: '/dsh-fish/config',
+        headers: { 'content-type': 'application/json' },
+        on: (ev, fn) => { if (ev === 'data') fn(Buffer.from(body, 'utf8')); if (ev === 'end') fn() },
+      }
+      await route.handler(req, res)
+    }
+    await post({ owner: { pronoun: '她' } })
+    assert.equal(status, 200)
+    assert.equal(payload.config.owner.pronoun, '她')
+    // 界面上的整表提交不会带 owner，回头不能把它抹掉
+    await post({ growthDays: 30 })
+    assert.equal(status, 200)
+    assert.equal(payload.config.owner.pronoun, '她', '整表保存不该把代词重置')
+    // 不认的值不报错，退回默认
+    await post({ owner: { pronoun: '它' } })
+    assert.equal(status, 200)
+    assert.equal(payload.config.owner.pronoun, '他')
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
 test('设置界面面向用户的文案里不出现男字旁的「他」', async () => {
   const src = await readFile(CLIENT, 'utf8')
   // 只扫字符串字面量，注释不算（注释里保留原话便于追溯）。
