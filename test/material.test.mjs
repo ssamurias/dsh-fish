@@ -89,11 +89,13 @@ test('toMaterial：事实是 1 级，别人说的话一律 2 级', () => {
   assert.deepEqual(quotesOf(m, GRADE.OPINION).map((q) => q.text).sort(), ['弹幕一句', '热评', '这是简介'].sort())
 })
 
-test('toMaterial：引文一个字都不改写', () => {
-  const desc = '  原文里的空格、标点：都保留，包括「引号」和 123。  '
+test('toMaterial：引文一个字都不改写（只去首尾空白）', () => {
+  // 里面留一个连续两个空格：证明不是「压空白」，只裁两端。
+  const desc = '  原文里的空格、标点：都保留，包括「引号」和  123。  '
   const m = toMaterial({ video: v(), desc, tags: [], comments: [], danmaku: [] })
   const q = m.quotes.find((x) => x.kind === 'desc')
-  assert.equal(q.text, desc)
+  assert.equal(q.text, desc.trim())
+  assert.ok(q.text.includes('和  123'))
 })
 
 test('toMaterial：没有任何可核对的事实 → canVerify false', () => {
