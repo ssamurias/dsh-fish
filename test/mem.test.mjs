@@ -935,3 +935,61 @@ test('回忆：字面命中相同时，昨天的先于三个月前的（只在�
   assert.equal(searchEvents(events, '评论', { now, weigh: false }).rows[0].id, 'new', '不加权：只按新旧')
   assert.equal(searchEvents(events, '评论', { now }).rows[0].id, 'new')
 })
+
+// ---------------------------------------------------------------- issue #133 之后：按时间翻（2026-11-12）
+
+test('回忆：不给关键词就按时间摆最近的（用户 m00497）', () => {
+  const now = Date.now()
+  const at = (d) => new Date(now - d * DAY).toISOString()
+  const events = [
+    { id: 'a', type: 'utterance', ts: at(3), text: '三天前说的' },
+    { id: 'b', type: 'utterance', ts: at(1), text: '昨天说的' },
+    { id: 'c', type: 'utterance', ts: at(2), text: '前天说的' },
+  ]
+  const out = searchEvents(events, '', { now })
+  assert.equal(out.timeline, true, '空 query 走时间线')
+  assert.deepEqual(out.rows.map((r) => r.id), ['b', 'c', 'a'], '从近到远，不打分')
+  // 给了词还是原来的路：相关度优先，不许被时间线串了味。
+  assert.equal(searchEvents(events, '前天', { now }).timeline, false)
+})
+
+test('回忆：时间线也认 days 与 kind', () => {
+  const now = Date.now()
+  const at = (d) => new Date(now - d * DAY).toISOString()
+  const events = [
+    { id: 'a', type: 'utterance', ts: at(9), text: '很久以前说的' },
+    { id: 'b', type: 'utterance', ts: at(1), text: '昨天说的' },
+    { id: 'c', type: 'revise', ts: at(2), text: '前天改的口' },
+  ]
+  assert.deepEqual(searchEvents(events, '', { now, days: 3 }).rows.map((r) => r.id), ['b', 'c'])
+  assert.deepEqual(searchEvents(events, '', { now, kind: 'revise' }).rows.map((r) => r.id), ['c'])
+})
+
+test('回忆：时间线的头和截断说「最近」，不冒充「最相关」', () => {
+  const now = Date.now()
+  const events = Array.from({ length: 12 }, (_, i) => ({
+    id: `u${i}`, type: 'utterance', ts: new Date(now - i * DAY).toISOString(), text: `第${i}句`,
+  }))
+  const out = searchEvents(events, '', { now })
+  const text = renderRecall(out.rows, { timeline: out.timeline, total: out.total, truncated: out.truncated })
+  assert.match(text, /最近这些（从近到远摆的）/)
+  assert.match(text, /只摆了最近的几条/)
+
+  const kw = searchEvents(events, '第', { now })
+  const kwText = renderRecall(kw.rows, { total: kw.total, truncated: kw.truncated })
+  assert.match(kwText, /你翻到的/)
+  assert.match(kwText, /只摆了最相关的几条/)
+})
+
+test('「更早以前」折的时候带上日期，能按日期翻回去（用户 m00497）', () => {
+  const beliefs = [0, 1, 2, 3].map((i) => ({
+    id: `b${i}`, text: `判断编号${i}`, since: new Date(2026, 10, 1 + i, 12).toISOString(),
+  }))
+  const line = foldOlderBeliefs(beliefs, 1)
+  assert.match(line, /判断编号1」（11-02）/, '折行里要带那条判断的日期')
+  // 身份文档里要说明怎么走回去：原文在事件流里，id 由 her_recall 给。
+  const text = personaLine(model({ beliefs }), { budget: 4000 })
+  const seg = text.slice(text.indexOf('## 更早以前'))
+  assert.match(seg, /her_recall/)
+  assert.match(seg, /按日期或原话/)
+})
