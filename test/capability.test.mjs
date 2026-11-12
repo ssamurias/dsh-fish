@@ -53,8 +53,9 @@ test('② 撞墙：把当时那句话摆回桌上，带天数', () => {
   const walls = gapwallsOf(events, { now: T0 + 2 * 86_400_000 })
   assert.equal(walls.length, 1)
   assert.equal(walls[0].text, '能不能让我看整条视频的画面')
-  assert.equal(walls[0].days, 1)
-  assert.equal(gapwallLine(walls[0]), '- 「能不能让我看整条视频的画面」（这件事你试过，手上没有能用的·1 天前）')
+  // 撞墙在两个日历日之前（差一分钟满 48 小时）：按日历日数是 2 天前，不是 1 天前。
+  assert.equal(walls[0].days, 2)
+  assert.equal(gapwallLine(walls[0]), '- 「能不能让我看整条视频的画面」（这件事你试过，手上没有能用的·2 天前）')
 })
 
 test('② 撞墙：成了的不算，超过七天的不算，没有来路的不算', () => {
