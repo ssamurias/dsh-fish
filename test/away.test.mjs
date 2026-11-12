@@ -17,7 +17,7 @@ function tmpRoot() {
 }
 
 test('flatPath 把反斜杠、大小写、尾斜杠抹平', () => {
-  assert.equal(flatPath('C:'+BS+'Users'+BS+'DANG'+BS+'.dsh-fish'+BS+'home'+BS), 'c:/users/dang/.dsh-fish/home')
+  assert.equal(flatPath('C:'+BS+'Users'+BS+'someone'+BS+'.dsh-fish'+BS+'home'+BS), 'c:/users/someone/.dsh-fish/home')
 })
 
 test('出门时身份段用快照：家里文件后来变了，外面读到的还是走时那份', () => {

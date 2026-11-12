@@ -304,16 +304,3 @@ qq_send_message, qq_get_unread_messages, qq_reply
 3. **别删升级脚本里的 normalize 那一步**（`lib/selfupdate.js` 的 `normalizeScript()`，安装脚本第 5/6 步）。0.8.9 之前装的 profile 里旧键还在，不清掉就会同时有两条鱼、两条 insert 撞一个 id，启动报 `duplicate factory registration`。
 4. **`scripts/fix-legacy-link.mjs` 必须三种依赖写法都认**：源码目录 `link:`、`file:` 装的 tgz、`@ssamurias/dsh-fish@x.y.z` 版本号。版本号那条是 issue #43 的根因——照更新说明用 `dsh plugin add` 升上来的人，profile 里留下的就是版本号；脚本过去只认前两种，一句「没有老依赖，跳过」退出 0，旧键与旧 `bundles` 条目原封不动。改它之前先跑 `test/fix-legacy-link.test.mjs`（`migrateOne()` 是给它直接测的）。
 
----
-
-## 发版
-
-完整步骤（发布前自检、push、npm publish、tag、GitHub Release、发布后验证、回滚）写在维护者本机的 **`D:\deepseekagent\04-小工具\fish-release\RELEASE.md`**（**不进仓库**：里面是本机的路径、账号和踩坑记录，对使用者没有意义），动手前通读一遍。三条不能省的顺序：
-
-1. `node --test` 全绿、`npm pack --dry-run` 清单对（见 §6）。
-2. 先推代码，再发 npm：**npm 成功之后才打 tag / 建 Release**——npm 失败时不留悬空 tag。
-3. 发完核对 `npm view @ssamurias/dsh-fish version dist-tags`，再去回 issue。
-
-本机约束另见 `D:\deepseekagent\避坑指南.md` 第 1 节（profile 的 `bundles` 与 `dependencies` 必须一一对应）与第 3 节（运行中替换已加载包会 `ERR_PNPM_EPERM`、`minimumReleaseAge` 会回滚刚发布的版本、`desktop` profile 被应用独占）。
-
-

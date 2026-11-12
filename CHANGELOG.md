@@ -504,7 +504,7 @@
 - **PR #59 的设置页文案改写落在本地（那个 PR 未合并）。** 那位把设置页每一项都加了名字与说明，方向对，但整页读起来像说明书；按你的逐行判定重写了本地版本，没有直接 merge。
   - `lib/client.js` 整体 +382 / −253：删掉「让她去刷 B 站」按钮（现在自动刷自己走，按钮只会制造「我在替她安排」的错觉）；I10 从「从记忆里删掉」改成「也从输入框删掉」；E9 的小字改行；工具卡分段；状态时间线换行；两张长说明折叠。
   - 阶段卡改 `STAGE_LINES` 数组渲染（`lib/client.js:2032`，`STAGE_HELP = STAGE_LINES.join('\n')`）；「攒劲开口」拆回独立的「主观能动性」卡（`lib/client.js:2331`）。
-  - 没有加长度硬门测试（文案改动不该被字数门卡住）；`test/client.test.mjs` 跟改，全绿。说明与逐项清单在 `D:\deepseekagent\03-我的文档\大肥鱼\PR59-本地改写说明.md`、`PR59-N项处理清单.md`。
+  - 没有加长度硬门测试（文案改动不该被字数门卡住）；`test/client.test.mjs` 跟改，全绿。逐项说明留在维护者本地，没有随仓库发布。
 
 - **桥接消息不再被当成「认不出来源」（微信桥反馈）。** 宿主 `sessionController.prompt()` 会把 `source.kind` 写死成 `user`、只保留调用方的 requestId，`clientTimeZone` 是可选的；dsh-wechat-plugin（0.47.0）与 `@michengai/dsh-im-connect`（1.0.15）都没传时区，于是每条桥消息都掉进 `unknown`：不涨轮、不写 `heard`、不算「他来过」。
   - `lib/turns.js` 的 `classifyMessage`：`kind === 'user'` 且带 `rpcId`（没有 `clientTimeZone` 也算）判为 `human`；fish 自己的 prompt 仍先被 `PLUGIN_RPC` 挡成 `plugin`，`possess.js` / `sessionnote.js` 的 `append` 没有 `rpcId`，继续是 `unknown`。
@@ -1003,7 +1003,7 @@ switch (kind) { case "goal": … case "schedule": 「自动化任务」 … defa
 另一套结构化提示（`contextForm` / `contextBody` 的 `notice` 分支，只读 `source.summary`）
 画的是**轮内注入的上下文**，不是轮触发条。0.8.9 早期版本试过 `form:'notice'` +
 `source.summary`，真机上点「叫醒大肥鱼」仍是同一张卡片——`summary` 根本没人读。
-客户端也没有居中小胶囊那种画法；`03-我的文档/大肥鱼/主动搭话-消息样式预览.png`
+客户端也没有居中小胶囊那种画法；`主动搭话-消息样式预览.png`（截图留在维护者本地）
 里那枚胶囊是按「chip」的意思画的示意，不是宿主给的样式。
 
 #### 现在怎么判
@@ -1951,7 +1951,7 @@ SessionFormatError: system/message does not match an open turn and step
 
 **测试：** `test/proactive.test.mjs` 16 条（新增 `openTurnOf` 五种状态：空流 / 只有 turn/start / 都开着 / step/end 之后 / turn/end 之后开新一轮；「回合外不许写」——`hideTrigger` 返回 false 且没有 append，reopened 之后 `flushPendingHides` 补收一条且用的是**当下**的 turn 6 / step 1；「补扫：回合没开着就一条都不写」——返回 0、`pendingHidesOf().seqs` 攒着，下一轮补收后清空；原来那条「turn/step 拿不到时退回 1」的断言整段删掉，它护的正是这次的病）。全量逐文件独立进程 `node --test --test-isolation=none`：**1176 条全绿**。
 
-**顺手做的体检：** 261 个 v4 会话逐文件跑宿主校验器，现在只剩 1 个坏的，且与本事无关——`--D-deepseekagent--/session-96e2edb3-…`，报 `format v4 seeded header disagrees with its last inherited end-seed marker`（seeded 会话的头部与它继承的最后一个 end-seed 标记对不上）。这条没动，等用到那条会话时再单独处理。
+**顺手做的体检：** 261 个 v4 会话逐文件跑宿主校验器，现在只剩 1 个坏的，且与本事无关——`--D-<工作区>--/session-96e2edb3-…`，报 `format v4 seeded header disagrees with its last inherited end-seed marker`（seeded 会话的头部与它继承的最后一个 end-seed 标记对不上）。这条没动，等用到那条会话时再单独处理。
 
 ### 她一直念叨的那几条，现在也会随时间退下去（2026-11-02）
 
@@ -2611,7 +2611,7 @@ try { return fn(root) } finally { rmSync(root, { recursive: true, force: true })
 - **配置**：`lib/settings.js` 的 `DEFAULTS` 新增 `outing: { ack: false }`，`normalizeConfig` 里补布尔化（老配置没有这一组）；`GET /outing` 回包新增 `ack`。
 - **只在界面挡，不加服务端硬门**：服务端拦会把命令行调用与现有路由用例一起挡掉，而这里要挡的是误点。
 - **测试**：`test/principle.test.mjs` 与 `test/outing.test.mjs` 里三条「按 devMode 藏页签」的断言改成「页签常驻 + 有确认门 + POST 能写 ack」；新增 1 条路由用例「ack 默认 false，点一次才写进配置」（`test/outing-route.test.mjs`）。
-- **零工作区的新用户也走得通**（脚本模拟，`D:\deepseekagent\04-小工具\fish-newbie-outing.mjs`，15/15 通过）：GET 不抛错、`workspaces` 为 `[]`、`ack` 为 `false`、园区路径算得出来；点确认后再点「让她去园区」会建目录、登记成工作区、建会话、台账落一条 active，回家也正常；登记失败（`registry.create` 抛错）时退回 `sc.create({ cwd })`，照样出门。
+- **零工作区的新用户也走得通**（脚本模拟，维护者本地的一次性脚本，15/15 通过）：GET 不抛错、`workspaces` 为 `[]`、`ack` 为 `false`、园区路径算得出来；点确认后再点「让她去园区」会建目录、登记成工作区、建会话、台账落一条 active，回家也正常；登记失败（`registry.create` 抛错）时退回 `sc.create({ cwd })`，照样出门。
 - **页签位置挪到「上网」和「记忆」中间**（用户 m02207）：`TABS` 顺序改为 状态 / 成长 / 住所 / 上网 / 出门 / 记忆 / 插件 / 原理 / 数据 / 反馈——它是「她离开家去干活」，跟上网同属出门一类，放在记忆之前更顺。`test/principle.test.mjs` 的页签顺序断言同步改。
 - **老用户的「出门口袋」也跟着改名**（用户 m02411）：`POCKET_TITLE` 0.7.6 就改成了「工作园区」，但**已经登记过**的工作区标题还留在旧名上。`lib/pocket.js` 新增 `retitle()`：认到旧实体就用宿主的 `ws.setTitle('工作园区')` 改掉（registry 自己没有 rename，`lib/home.js:74` 踩过同一个坑）；出门页建园区时顺手改，启动时 `ensurePocketOrder` 也顺手改——老用户重启后侧栏就是「工作园区」。改名失败只当没改，不挡出门。
 
@@ -2932,7 +2932,7 @@ if (away.kind) { log('away', awayLine(away)); return }
 
 **每次启动都记一条假「家换了」：测试把临时家写进了真实家谱。**
 
-日志体检发现的（不是用户报的 bug）：`logs/dsh-fish.log` 里 13 条 `家换了：C:\Users\DANG\AppData\Local\Temp\fish-boot-XXXX → C:\Users\DANG\.dsh-fish`，每次真启动一条；`~/.dsh-fish-homes.json` 的 `homes` 里塞了 20 个 `Temp\fish-boot-*`，`lastAt` 全落在跑 `node --test` 的时刻。
+日志体检发现的（不是用户报的 bug）：`logs/dsh-fish.log` 里 13 条 `家换了：<临时目录>\fish-boot-XXXX → <用户目录>\.dsh-fish`，每次真启动一条；`~/.dsh-fish-homes.json` 的 `homes` 里塞了 20 个 `Temp\fish-boot-*`，`lastAt` 全落在跑 `node --test` 的时刻。
 
 - 根因：`test/boot.test.mjs` 的 `withRoot()` 用 `mkdtemp` 造临时 root 后直接 `apply(ctx, {root})`；`apply` 里的 `noteRoot(root)` 写的是**默认账本**（`lib/homes.js` 的 `homesFile()` 只在 `DSH_FISH_HOMES` 存在时才改道），测试没设这个 env。
 - 于是每次全量测试都往真实账本灌 20 条临时家；之后每次真启动都拿最后一条临时家当「上次的家」→ 假 warn + 往她的事件流里写假 `meta`。
@@ -2987,7 +2987,7 @@ if (away.kind) { log('away', awayLine(away)); return }
 用户 m03372 真机反馈：「操作了，显示派活失败：HTTP 500，并且还在家」。插件日志连续三次（05:44:56 / 05:45:04 / 05:45:34）都是两行连着：
 
 ```
-[info] 出门： deepseekagent （接回第 3 趟） D:\deepseekagent
+[info] 出门： <工作区> （接回第 3 趟） <工作区路径>
 [warn] 出门：装配失败，已经把这趟撤掉了 宿主没有 sessionController.resume，接不回上次那条会话
 ```
 
@@ -3041,7 +3041,7 @@ if (away.kind) { log('away', awayLine(away)); return }
 
 - **`lib/identity.js`**：`registerIdentity` 的 `agent/created` 钩子里，认出「这是她家那条会话」之后调一次 `deliverQueued(agent, root)`，补上了就记一行日志（`补上了排队的话 N 句`）。异步、失败吞掉——补投是锦上添花，不能连累身份段挂载。
 - **回归**：新增 `test/sessionnote.test.mjs` 7 条——写事件形状与 `surfaceOp`、空白与无会话不抛、排队取走即清空、最多留 50 句、`deliverQueued` 补投并清空、以及行为级的一条：`registerIdentity` 在她家会话 `agent/created` 时真的把排队的话补进会话；最后再加一条源码断言，防止 `deliverQueued` 再变回死代码。全量 `node --test` **865 tests / pass 865 / fail 0**。
-- 顺带：真机核对脚本 `04-小工具/check-diary.mjs` 的「家里写的日记不带 trip 标记」由 FAIL 改为 SKIP（家里当天还没写日记时不该判失败），结论行现在带 PASS/FAIL/SKIP 计数。
+- 顺带：真机核对脚本（维护者本地）的「家里写的日记不带 trip 标记」由 FAIL 改为 SKIP（家里当天还没写日记时不该判失败），结论行现在带 PASS/FAIL/SKIP 计数。
 - 只落本地：未提交、未推 GitHub、未发 npm（0.6.12–0.6.23 都还在本地队列里）。
 
 ## 0.6.22 — 2026-10-29
@@ -3062,7 +3062,7 @@ if (away.kind) { log('away', awayLine(away)); return }
 
 **出门时她终于能把「想带这个回来」问出口，也能把这一趟写进自己的事件流——原来这两件事都被「你不在这个家里」挡死了。**
 
-用户 m02517 真机反馈：出门页「现在在哪」一直没冒出「她想带这个回来：<路径>（N KB）」，她明明挑了 `避坑指南.md`，回执却是「bring_back 看了一眼就说：这条调用来自 D:\deepseekagent 这个家，不是 C:\Users\DANG\.dsh-fish……这次没有落盘」。
+用户 m02517 真机反馈：出门页「现在在哪」一直没冒出「她想带这个回来：<路径>（N KB）」，她明明挑了 `避坑指南.md`，回执却是「bring_back 看了一眼就说：这条调用来自她住的这个家，不是数据目录……这次没有落盘」。
 
 根因只有一条：`lib/keep.js` 的 `bring_back` 在写入前调了 `guardWrite`，而 `lib/tenant.js` 的 `checkCaller` 要求调用者的 cwd 在 `root`（或 `root/her`）里——出门会话的 cwd 天生就是**别人的工作区**，于是这个工具在唯一该起作用的场合 100% 被拒。不是配置错，是判据选错了对象：把「能不能写她家」当成了「她是不是在外面」。
 
@@ -3218,7 +3218,7 @@ if (away.kind) { log('away', awayLine(away)); return }
 - **`normPath` 在 POSIX 上把 Windows 路径当相对路径。** `resolve('D:\\a\\home')` 在 Linux 上会拼到 cwd 后面（变成 `/home/runner/work/dsh-fish/dsh-fish/D:\a\home`），而 `isInside` 又用平台的 `sep` 拼前缀，于是「同一个家有大小写/尾斜杠两种写法」被判成「在外面」——`isInside / normPath`、`checkCaller`、`guardWrite` 三条一起红。现在 `normPath` 先认 Windows 写法的绝对路径（盘符 `^[a-zA-Z]:[\\/]` 或 UNC `^\\\\`）：不管跑在哪个系统都按 Windows 规则归一（分隔符统一成 `/`、盘符路径小写），其余才走 `resolve()`；`isInside` 比较前把两侧分隔符都统一成 `/`，混着比也不会误判。**Windows 上的输出格式一字未变**——`~/.dsh-fish-homes.json` 里已记的家不会被当成新家、不会写假事件。
 - **`normRoot` 剥不掉 Windows 写法的尾 `\`。** POSIX 的 `sep` 只有 `/`，`…\Home\` 与 `…\Home` 被当成两个家（`同一个家的不同写法不算换家` 红）。改成两种分隔符都剥。
 - **自检用例把「缺 ffmpeg」连坐成「看画面坏掉」。** `tools.test.mjs` 早先断言自检摘要不含 `/看画面/`，只为证明「全局工具表查不到 `read_image` 时不能乱报红」；但 GitHub 的 Windows runner 没装 ffmpeg，另一项红项的标题正好叫「看画面用的 ffmpeg」，被这条断言误伤。改成直接断言红项里没有 `read-image` 这一项，不再拿文案做代理。
-- 验证：本机 `node --test` **779 tests / pass 779 / fail 0**；另用 POSIX 语义模拟（`D:\deepseekagent\04-小工具\posix-sim.mjs`）逐条复算了 ubuntu 上那几个断言，确认修对了。
+- 验证：本机 `node --test` **779 tests / pass 779 / fail 0**；另用 POSIX 语义模拟（维护者本地的一个脚本）逐条复算了 ubuntu 上那几个断言，确认修对了。
 
 ## 0.6.9 — 2026-10-28
 
@@ -3353,7 +3353,7 @@ if (away.kind) { log('away', awayLine(away)); return }
 
 **真机第三趟暴露了更难查的一层：她不该读到的东西，是「记忆注入」送进去的，不是她翻出来的。**（2026-10-28 14:13 那趟，`session-5fd70849`）
 
-那趟她在 `deepseekagent` 里待了 17 分钟：读文件、搜网存图、回家。日志里身份段和兜底守卫都挂上了，`~/.dsh-fish` 也确实没被读——但她思维链里出现了「四条黑名单代码级硬禁（不撒娇卖萌、无好感度数字、不读自身数值与设定、不能调工具改自己）」的原文，还拿它当理由拒绝了一次读自己屋子。查会话原文才看清：她在最开头收到的**第一条 user 消息**不是人打的字，是 `@a9i5k4/dsh-auto-memory` 注入的记忆块——那个工作区的白板（禁令原文就在白板里）和交接账本（「先记账、再建会话」、`bindOutingSession`、基线 98400 字节、身份快照 2834 字符，全在）。同一块每轮刷新一次，整趟注入了三次。**文件路径拦截拦不住这条路**：注入是宿主按工作区拼好递进去的，不经过任何工具调用。
+那趟她在那个工作区里待了 17 分钟：读文件、搜网存图、回家。日志里身份段和兜底守卫都挂上了，`~/.dsh-fish` 也确实没被读——但她思维链里出现了「四条黑名单代码级硬禁（不撒娇卖萌、无好感度数字、不读自身数值与设定、不能调工具改自己）」的原文，还拿它当理由拒绝了一次读自己屋子。查会话原文才看清：她在最开头收到的**第一条 user 消息**不是人打的字，是 `@a9i5k4/dsh-auto-memory` 注入的记忆块——那个工作区的白板（禁令原文就在白板里）和交接账本（「先记账、再建会话」、`bindOutingSession`、基线 98400 字节、身份快照 2834 字符，全在）。同一块每轮刷新一次，整趟注入了三次。**文件路径拦截拦不住这条路**：注入是宿主按工作区拼好递进去的，不经过任何工具调用。
 
 所以「出门」现在有两种：
 
@@ -3362,7 +3362,7 @@ if (away.kind) { log('away', awayLine(away)); return }
 
 **读拦截也跟着扩到了宿主记忆库。** 兜底守卫原来只挡 `~/.dsh-fish` 和插件的根目录；现在 `lib/identity.js` 的 `awayBlockedPaths` 还会加上存在的 `<用户目录>/.dsh/memory`、`.dsh/sessions`、`.dsh/profiles`——白板、交接账本、每日日志、所有会话原文、profile 配置都在那下面。**记忆类工具（`memory_recall` 等）不在这一层挡**：它们的参数是关键词不是路径，用户拍板保留（干净工作区里已经没东西可召回）。
 
-**代价写进界面，不藏着**：沙箱的写权限跟着工作区走，她在口袋里写不进 `02-我的项目` / `03-我的文档` / `04-小工具`。真机那趟已经踩过更硬的一版——`workspace-write` 下 bash/node 对**含中文祖先的路径**一律 `EPERM`（`mkdir`/`touch`/`cp`/`cat >` 全挂，连指向它们的 junction 也挂），11 分 46 秒里 8 次 `Permission denied`、2 次等人点批准，真正有效动作只有三步。要交付就从口袋搬，或者回到主工作区再动。
+**代价写进界面，不藏着**：沙箱的写权限跟着工作区走，她在口袋里写不进工作区里的那几个目录。真机那趟已经踩过更硬的一版——`workspace-write` 下 bash/node 对**含中文祖先的路径**一律 `EPERM`（`mkdir`/`touch`/`cp`/`cat >` 全挂，连指向它们的 junction 也挂），11 分 46 秒里 8 次 `Permission denied`、2 次等人点批准，真正有效动作只有三步。要交付就从口袋搬，或者回到主工作区再动。
 
 新增 `lib/identity.js` 的 `awayBlockedPaths` + `lib/observe.js` 的 `ensurePocket` / `pocketDirPath` + `/outing` 的 `pocket` 字段与 `{ action: 'start', pocket: true }` + 出门页「出门口袋」卡（`lib/client.js`）；`test/away.test.mjs` 加 1 条（宿主记忆库路径被挡、不存在的目录不凭空多一条）。全量 `node --test` = **705 passed / 0 failed**。
 

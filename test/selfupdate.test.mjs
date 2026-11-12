@@ -116,7 +116,7 @@ test('spec 与文件名跟着版本走；多余前缀被规范掉', () => {
 })
 
 test('profile 里那条依赖分得清"开发版"和"可升级的安装"', () => {
-  assert.equal(classifySpec('link:D:/deepseekagent/fish-plugin'), 'local')
+  assert.equal(classifySpec('link:D:/work/fish-plugin'), 'local')
   assert.equal(classifySpec('file:../fish'), 'local')
   assert.equal(classifySpec('github:ssamurias/dsh-fish#v0.6.0'), 'github')
   assert.equal(classifySpec('0.6.0'), 'registry')
@@ -126,17 +126,17 @@ test('profile 里那条依赖分得清"开发版"和"可升级的安装"', () =>
 })
 
 test('从模块路径反推 profile 目录：link 安装（真身在源码目录）要识别为"没有 profile"', () => {
-  const winUrl = 'file:///C:/Users/DANG/.dsh/profiles/desktop/node_modules/dsh-fish/lib/selfupdate.js'
+  const winUrl = 'file:///C:/Users/someone/.dsh/profiles/desktop/node_modules/dsh-fish/lib/selfupdate.js'
   const got = profileDirOf(winUrl).split(String.fromCharCode(92)).join('/').replace(/^\/(?=[A-Za-z]:)/, '')
-  assert.equal(got, 'C:/Users/DANG/.dsh/profiles/desktop')
-  const linkUrl = pathToFileURL('D:/deepseekagent/02-我的项目/大肥鱼/plugin/lib/selfupdate.js').href
+  assert.equal(got, 'C:/Users/someone/.dsh/profiles/desktop')
+  const linkUrl = pathToFileURL('D:/work/fish-plugin/lib/selfupdate.js').href
   assert.equal(profileDirOf(linkUrl), '')
 })
 
 test('pnpm 的 isolated 布局也要认得出 profile 根，否则升级按钮永远不出现（issue #43）', () => {
-  const url = 'file:///C:/Users/DANG/.dsh/profiles/desktop/node_modules/.pnpm/@ssamurias+dsh-fish@0.9.1/node_modules/@ssamurias/dsh-fish/lib/selfupdate.js'
+  const url = 'file:///C:/Users/someone/.dsh/profiles/desktop/node_modules/.pnpm/@ssamurias+dsh-fish@0.9.1/node_modules/@ssamurias/dsh-fish/lib/selfupdate.js'
   const got = profileDirOf(url).split(String.fromCharCode(92)).join('/').replace(/^\/(?=[A-Za-z]:)/, '')
-  assert.equal(got, 'C:/Users/DANG/.dsh/profiles/desktop')
+  assert.equal(got, 'C:/Users/someone/.dsh/profiles/desktop')
   // .pnpm 里的老裸名同理（0.8.9 之前用 pnpm 装的人）
   const old = 'file:///C:/u/.dsh/profiles/desktop/node_modules/.pnpm/dsh-fish@0.8.8/node_modules/dsh-fish/lib/selfupdate.js'
   assert.equal(profileDirOf(old).split(String.fromCharCode(92)).join('/').replace(/^\/(?=[A-Za-z]:)/, ''), 'C:/u/.dsh/profiles/desktop')
@@ -335,14 +335,14 @@ test('超时：卡住不回的源会按单源预算放弃，并说"等了 N 秒"
 test('安装脚本：先等宿主退出、备份、装、校验版本、失败回滚、最后重开', () => {
   const script = scriptFor({
     version: '0.6.14',
-    profileDir: 'C:\\Users\\DANG\\.dsh\\profiles\\desktop',
+    profileDir: 'C:\\Users\\someone\\.dsh\\profiles\\desktop',
     exe: 'D:\\DeepSeek Harness\\DeepSeek Harness.exe',
     nodeBin: 'D:\\DeepSeek Harness\\resources\\runtime\\node.exe',
     pnpmScript: 'D:\\DeepSeek Harness\\resources\\runtime\\pnpm.mjs',
-    logFile: 'C:\\Users\\DANG\\.dsh-fish\\updates\\last.log',
-    backupDir: 'C:\\Users\\DANG\\.dsh-fish\\updates\\backup-v0.6.14',
+    logFile: 'C:\\Users\\someone\\.dsh-fish\\updates\\last.log',
+    backupDir: 'C:\\Users\\someone\\.dsh-fish\\updates\\backup-v0.6.14',
     hostName: 'DeepSeek Harness.exe',
-    tarball: 'C:/Users/DANG/.dsh-fish/updates/dsh-fish-v0.6.14.tgz',
+    tarball: 'C:/Users/someone/.dsh-fish/updates/dsh-fish-v0.6.14.tgz',
   })
   // 第一件事就是等 + 杀宿主，不能先动文件
   assert.ok(script.indexOf('timeout /t 2') < script.indexOf('taskkill'), '先等两秒再杀')
