@@ -32,6 +32,7 @@ import {
   SLEEP_BRIEF,
 } from '../lib/persona.js'
 import { LOOK_BRIEF } from '../lib/browse.js'
+import { PRONOUN_ASK_BRIEF } from '../lib/pronounask.js'
 import { SCENE_TOOLS } from '../lib/toolreg.js'
 import { renderSelfDoc } from '../lib/selfdoc.js'
 import { deriveSelf } from '../lib/derive.js'
@@ -122,6 +123,7 @@ const MAP = [
   ['her_note', NOTE_BRIEF, /老在同一个地方绕/],
   ['her_appoint', APPOINT_BRIEF, /什么时候想起它/],
   ['ask_owner', ASK_BRIEF, /什么时候想起它/],
+  ['ask_pronoun', PRONOUN_ASK_BRIEF, /什么时候想起它/],
   ['her_dream', DREAM_BRIEF, /什么时候想起它/],
   ['her_say', PROACTIVE_BRIEF, /什么时候想起它/],
   ['bili_speak', SPEAK_BRIEF, /什么时候想起它/],
