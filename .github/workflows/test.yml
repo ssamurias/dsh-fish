@@ -45,3 +45,19 @@ jobs:
       - name: 跑测试
         run: npm test
         shell: bash
+
+  # 白名单核对：`npm pack` 到底装了哪些文件。
+  # 2026-11-13 的事故——README 三处教用户跑 `node tools/check-install.mjs`，
+  # 但 `tools/` 不在 package.json 的 files 里，装出去的人手里没有这个脚本。
+  # 这种错只有人记得手动跑 `npm pack --dry-run` 才看得见，所以让它在 CI 里变红。
+  pack-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: 核对 npm pack 的内容
+        run: node .github/pack-check.mjs
