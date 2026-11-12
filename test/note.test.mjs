@@ -251,6 +251,8 @@ test('划掉只是改状态：条目还在，别的条目不受影响', async ()
     const done = await closeNote(root, { id: a.id })
     assert.equal(done.ok, true)
     assert.match(done.note, /已划掉/)
+    // issue #133：回执要带上划掉的是哪件事，否则进回忆只剩一句空账
+    assert.equal(done.echo, '已划掉：第一件')
 
     const back = await readNotes(root)
     assert.equal(back.length, 2, '划掉不等于删掉')

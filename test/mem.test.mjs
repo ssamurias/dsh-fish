@@ -345,6 +345,85 @@ test('回忆 brief 档：只报开头，但条数与 id 一个不少（2026-11-0
   assert.ok(renderRecall(full.rows).startsWith('你翻到的：'))
 })
 
+// ------------------------------------------------- issue #133（2026-11-12）
+
+test('issue #133：watched: 翻得到，而且读得出来是「看过画面」', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'e1', type: 'utterance', ts: new Date(now - DAY).toISOString(), text: '示例标题这条卡了两下，没拿到画面。' },
+    { id: 'e2', type: 'meta', ts: new Date(now - DAY).toISOString(), text: 'watched:2026-11-06 BV1xx411c7mD {"title":"示例标题","duration":784}' },
+    { id: 'e3', type: 'utterance', ts: new Date(now).toISOString(), text: '能看了。取到的四帧都清楚。' },
+  ]
+  const { rows } = searchEvents(events, '示例标题', { now })
+  const txt = renderRecall(rows)
+  assert.ok(txt.includes('你那天看过画面：《示例标题》'), '唯一凭证不能翻不到')
+  assert.ok(rows.some((r) => r.id === 'e2'))
+})
+
+test('issue #133：look: 与没带标题的老 looked: 也翻得到，读得出来是「点开过」', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'l1', type: 'meta', ts: new Date(now - DAY).toISOString(), text: 'look:2026-11-06 BV1xx411c7mD {"title":"点开过的","up":"某UP"}' },
+    { id: 'l2', type: 'meta', ts: new Date(now - 2 * DAY).toISOString(), text: 'looked:BV1yy411c7mD' },
+  ]
+  const txt = renderRecall(searchEvents(events, '点开过的', { now }).rows)
+  assert.ok(txt.includes('你那天点开过：《点开过的》'))
+  // 老事件只有编号：照实说没记下标题，不要编一个，也不要把编号藏成「看过」
+  const bare = renderRecall(searchEvents(events, 'BV1yy411c7mD', { now }).rows)
+  assert.ok(bare.includes('你那天看过（BV1yy411c7mD，当时没记下标题）'))
+})
+
+test('issue #133：brief 档先翻成人话再截断，标题不会被 JSON 截坏', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'b1', type: 'meta', ts: new Date(now - DAY).toISOString(), text: 'look:2026-11-06 BV1xx411c7mD {"title":"点开过的","up":"某UP","duration":784,"view":12000,"desc":"很长很长的一段说明"}' },
+  ]
+  const { rows } = searchEvents(events, '点开过的', { now, snippet: RECALL_BRIEF_SNIPPET })
+  // 40 字里塞不下整段 JSON：先截再翻会只剩一个 BV 号，翻到等于没翻
+  assert.ok(rows[0].text.includes('点开过：《点开过的》'), `brief 档也要认得出是哪一条：${rows[0].text}`)
+})
+
+test('issue #133：同一天同一条视频只摆一行，留「看过画面」那份', () => {
+  const now = Date.now()
+  const at = new Date(now - DAY).toISOString()
+  const events = [
+    { id: 'a', type: 'meta', ts: at, text: 'looked:BV1xx411c7mD 看见过的' },
+    { id: 'b', type: 'meta', ts: at, text: 'look:2026-11-06 BV1xx411c7mD {"title":"点开过的"}' },
+    { id: 'c', type: 'meta', ts: at, text: 'watched:2026-11-06 BV1xx411c7mD {"title":"看见过的"}' },
+  ]
+  const { rows } = searchEvents(events, '看见过的 点开过的 BV1xx411c7mD', { now })
+  assert.equal(rows.length, 1, '三行是同一条视频，不是三件事')
+  assert.equal(rows[0].id, 'c')
+  assert.ok(renderRecall(rows).includes('你那天看过画面'))
+})
+
+test('issue #133：截断了就说这不是全部，别让「没翻到」被读成「没有」', () => {
+  const now = Date.now()
+  const events = Array.from({ length: 12 }, (_, i) => ({
+    id: `n${i}`, type: 'utterance', ts: new Date(now - i * DAY).toISOString(), text: `评论 ${i}`,
+  }))
+  const r = searchEvents(events, '评论', { now })
+  assert.equal(r.rows.length, RECALL_LIMIT)
+  assert.equal(r.truncated, true)
+  assert.ok(r.total > RECALL_LIMIT)
+  const txt = renderRecall(r.rows, { truncated: r.truncated })
+  assert.ok(txt.includes('这不是全部'))
+  assert.ok(txt.includes('别把这份当成全集'))
+  // 没截断时不多嘴
+  const few = searchEvents(events.slice(0, 3), '评论', { now })
+  assert.equal(few.truncated, false)
+  assert.ok(!renderRecall(few.rows, { truncated: few.truncated }).includes('这不是全部'))
+})
+
+test('issue #133：划掉的便条在回忆里读成「你那天做完」，不是一句空回执', () => {
+  const now = Date.now()
+  const events = [
+    { id: 'u', type: 'meta', ts: new Date(now - DAY).toISOString(), text: 'use:her_note ok 已划掉：交水费' },
+  ]
+  const txt = renderRecall(searchEvents(events, '水费', { now }).rows)
+  assert.ok(txt.includes('你那天做完：交水费'))
+})
+
 // ------------------------------------------------- 0.8.9 人格连续（m00998）
 
 test('「这些天」是核心段：预算 60 也在，且写的是事实不是评价', async () => {

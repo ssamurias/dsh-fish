@@ -100,11 +100,16 @@ test('回忆里翻得到她看过的那条，读得出来是「看过」不是�
   assert.ok(!txt.includes('BV1xx411c7mD'), '编号不念给她听')
 })
 
-test('没标题的 looked: 与安静刷的 browsed: 都不进回忆', () => {
+test('没标题的 looked: 也进回忆（issue #133），安静刷的 browsed: 仍然不进', () => {
   const evs = [
     { id: 'ev_a', type: 'meta', text: 'looked:BV1xx411c7mD', ts: ago(2) },
     { id: 'ev_b', type: 'meta', text: 'browsed:BV1yy411c7mD 算法推荐', ts: ago(2) },
   ]
+  // 老事件只有编号：按编号翻得到，读出来照实说没记下标题（别藏成「看过」，也别编）
+  const { rows } = searchEvents(evs, 'BV1xx411c7mD', { now: NOW })
+  assert.equal(rows.length, 1)
+  assert.ok(renderRecall(rows).includes('当时没记下标题'))
+  // 安静刷那一趟她没看见，不算经历
   assert.equal(searchEvents(evs, '算法推荐', { now: NOW }).rows.length, 0)
 })
 
