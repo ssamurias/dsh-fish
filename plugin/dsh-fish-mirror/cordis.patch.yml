@@ -1,0 +1,5 @@
+- insert:
+    - id: fish-mirror
+      name: dsh-fish-mirror
+      config:
+        root: /Users/kaede/Documents/dsh-fish
