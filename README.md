@@ -373,6 +373,15 @@ node_modules 里                       没有裸名 dsh-fish 目录
 - **卸载**：设置 → 插件 → 卸载（或 `dsh plugin --profile <profile> remove @ssamurias/dsh-fish`），然后重启。`~/.dsh-fish/` 不会被动，她的记忆留在那儿。
 - **只想让她歇着**：设置 → 大肥鱼 → 把「每天醒几次」设成 0。关掉后定时器不唤她、不刷 B 站、不写任何事件——零后台活动。
 
+## 参与 / 反馈
+
+这个仓库欢迎功能 PR——B 站扫码登录（[PR #17](https://github.com/ssamurias/dsh-fish/pull/17)）就是外部贡献者的作品。下面四件事能让来回少几轮：
+
+- **想改代码**：先读 [CONTRIBUTING.md](https://github.com/ssamurias/dsh-fish/blob/main/CONTRIBUTING.md)，提交前过一遍它列的自检清单。这个插件的硬约束（零依赖、四条黑名单、文案守门词）不在 README 里，在 [AGENTS.md](AGENTS.md)——它是给「要动手改」的人看的，不看就改很容易被门挡回来。
+- **装不上 / 用不了**：先看 [排查手册](https://github.com/ssamurias/dsh-fish/blob/main/docs/troubleshooting.md)，再按 [bug 模板](https://github.com/ssamurias/dsh-fish/issues/new?template=bug_report.yml) 报。三样信息缺一不可：插件版本、DSH 版本、`node tools/check-install.mjs` 的输出。
+- **安全问题**：不要在公开 issue 里写，走 [SECURITY.md](https://github.com/ssamurias/dsh-fish/blob/main/SECURITY.md) 里的私有渠道。
+- **想让自己的工具接进她的成长机制**（写进她的记忆、能被引原话、进八股统计）：按 [素材契约](https://github.com/ssamurias/dsh-fish/blob/main/docs/%E7%B4%A0%E6%9D%90%E5%A5%91%E7%BA%A6.md) 返回 `dshFishMaterial` 对象，不用另开新接口。
+
 ## 鸣谢
 
 这个插件不依赖任何第三方库（`package.json` 的三个依赖字段都是空的），但想法不是一个人想出来的。
