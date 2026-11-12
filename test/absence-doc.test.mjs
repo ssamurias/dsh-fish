@@ -117,7 +117,9 @@ test('issue #77：收窄关着时不说「眼下手边就这些」', async () =>
   const off = toolBrief([], { restricted: false })
   assert.ok(!off.includes('在自己屋里，眼下能碰到的就是这些'), '收窄关着时这句是假的，得摘掉')
   assert.ok(off.includes('跟着我走'), '前后两句照留')
-  assert.ok(off.includes('新东西进来不用重新认识自己'), '不能把「会长」那句一起摘了')
+  // 2026-11-13：说明书总字数有 2400 的硬顶（toolmap），这句的引子「新东西进来
+  // 不用重新认识自己」被压掉了，留下的是真正要做的事——「会长」那层意思还在。
+  assert.ok(off.includes('手上多了一样，就多一样能做的'), '不能把「会长」那句一起摘了')
   // 身份文档按**运行中的**收窄状态判断，不看配置：收窄要等重启才生效。
   const src = await readFile(fileURLToPath(new URL('../lib/selfdoc.js', import.meta.url)), 'utf8')
   assert.match(src, /restricted: currentToolSurface\(\) !== ''/)

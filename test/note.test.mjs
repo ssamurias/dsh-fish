@@ -29,6 +29,8 @@ import {
   isDue,
   daysBetween,
   renderNotes,
+  pickNudge,
+  nudgeSeen,
   addNote,
   closeNote,
   registerNote,
@@ -87,6 +89,66 @@ test('没有到期的一张时，醒来那一段是空串', () => {
     note({ id: 'c', due: '2026-11-01', status: 'done' }),
   ]
   assert.equal(renderNotes(quiet, new Date(2026, 10, 4)), '')
+})
+
+test('没写日子的：满 7 天才提一次，提过记 nshow 再等 7 天', () => {
+  const made = '2026-11-13T09:00:00.000Z'
+  const one = [note({ id: 'n1', text: '去 B 站说一句话', created: made })]
+  assert.equal(pickNudge(one, new Date(2026, 10, 19)), null, '第 6 天还不提')
+  assert.equal(pickNudge(one, new Date(2026, 10, 20))?.id, 'n1', '第 7 天第一次提')
+
+  const seen = new Map([['n1', '2026-11-20']])
+  assert.equal(pickNudge(one, new Date(2026, 10, 26), seen), null, '提过之后 6 天内不再提')
+  assert.equal(pickNudge(one, new Date(2026, 10, 27), seen)?.id, 'n1', '满 7 天再提')
+})
+
+test('一次只提一张：最久没被提过的排前面，都提过就按上次提的先后轮换', () => {
+  const list = [
+    note({ id: 'old', text: '早记的', created: '2026-11-01T00:00:00.000Z' }),
+    note({ id: 'new', text: '晚记的', created: '2026-11-05T00:00:00.000Z' }),
+  ]
+  assert.equal(pickNudge(list, new Date(2026, 10, 20))?.id, 'old')
+  const seen = new Map([['old', '2026-11-10'], ['new', '2026-11-05']])
+  assert.equal(pickNudge(list, new Date(2026, 10, 20), seen)?.id, 'new', '按上次提的先后轮换')
+})
+
+test('醒来的那段会带上没日子的一张，但不会一次摆好几张', () => {
+  const list = [
+    note({ id: 'a', text: '去 B 站说一句话', created: '2026-11-01T00:00:00.000Z' }),
+    note({ id: 'b', text: '把那张图看完', created: '2026-11-02T00:00:00.000Z' }),
+  ]
+  const text = renderNotes(list, new Date(2026, 10, 20))
+  assert.match(text, /便条里有一张没写日子的/)
+  assert.match(text, /11-01 你记着：去 B 站说一句话/)
+  assert.doesNotMatch(text, /把那张图看完/, '一次只提一张')
+  assert.match(text, /隔些天提一次/)
+  assert.doesNotMatch(text, /逾期|请尽快|欠了|还有\d+天/)
+})
+
+test('提过的一张与划掉/放下的不再出现在醒来那段，满 7 天再提', () => {
+  const list = [
+    note({ id: 'a', text: '提过的一张', created: '2026-11-01T00:00:00.000Z' }),
+    note({ id: 'b', text: '划掉的', created: '2026-11-01T00:00:00.000Z', status: 'done' }),
+    note({ id: 'c', text: '放下的', created: '2026-11-01T00:00:00.000Z', status: 'dropped' }),
+  ]
+  const seen = new Map([['a', '2026-11-19']])
+  assert.equal(renderNotes(list, new Date(2026, 10, 20), { seen }), '', '刚提过，且划掉/放下的不提')
+  assert.equal(renderNotes(list, new Date(2026, 10, 25), { seen }), '', '未满 7 天')
+  assert.match(renderNotes(list, new Date(2026, 10, 26), { seen }), /提过的一张/, '满 7 天再提')
+})
+
+test('nudgeSeen 读 nshow 记账，同一张取最后一次', () => {
+  const events = [
+    { type: 'meta', text: 'nshow:n1 2026-11-13' },
+    { type: 'meta', text: 'nshow:n1 2026-11-20' },
+    { type: 'meta', text: 'nshow:n2 2026-11-15 别的东西' },
+    { type: 'meta', text: 'wake:2026-11-20 x' },
+  ]
+  const seen = nudgeSeen(events)
+  assert.equal(seen.get('n1'), '2026-11-20')
+  assert.equal(seen.get('n2'), '2026-11-15')
+  assert.equal(seen.size, 2)
+  assert.equal(nudgeSeen(null).size, 0)
 })
 
 test('到期的摆出来：按日子排，写「晚了几天」，不催人', () => {
