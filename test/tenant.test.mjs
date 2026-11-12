@@ -11,8 +11,10 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { spawn } from 'node:child_process'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   callerOf,
@@ -25,10 +27,12 @@ import {
   normPath,
   withFileLock,
   TENANT_FILE,
+  CLAIM_LOCK_FILE,
   CLAIM_TTL_MS,
 } from '../lib/tenant.js'
 import { validateEvent } from '../lib/schema.js'
 import { writeSelfDoc } from '../lib/selfdoc.js'
+import { collectBackup, restoreBackup } from '../lib/backup.js'
 
 const made = []
 async function tmpRoot() {
@@ -345,4 +349,237 @@ test('withFileLock：EPERM 一直不停时受 timeout 约束，不死循环', as
   } finally {
     fs.open = realOpen
   }
+})
+
+// ---------------------------------------------------------------------------
+// 认领本身的互斥
+//
+// 认领是「读声明 → 判断 → 写声明」三步，以前中间没有锁：两个实例同时启动，
+// 都读到没人占、都写、都返回 ok，盘上留后写的那个；先写的要到自己第一次心跳
+// （15 秒后）才发现。另外三处写声明都是截断式 writeFile，截断和写入之间
+// 别人读到的是空文件，被当成「没有声明」。
+// ---------------------------------------------------------------------------
+
+test('claimRoot：两个实例同时认领，只有一个拿到 ok', async () => {
+  for (let i = 0; i < 5; i++) {
+    const root = await tmpRoot()
+    const [a, b] = await Promise.all([
+      claimRoot(root, { instanceId: 'A', confirmMs: 20 }),
+      claimRoot(root, { instanceId: 'B', confirmMs: 20 }),
+    ])
+    assert.equal([a, b].filter((r) => r.ok).length, 1, `第 ${i + 1} 轮：A.ok=${a.ok} B.ok=${b.ok}`)
+    const winner = a.ok ? 'A' : 'B'
+    const loser = a.ok ? b : a
+    const raw = JSON.parse(await fs.readFile(join(root, TENANT_FILE), 'utf8'))
+    assert.equal(raw.instanceId, winner, '盘上是拿到 ok 的那个')
+    assert.equal(loser.owner.instanceId, winner, '输的那个知道是谁占着')
+    assert.equal(await beatRoot(root, winner), true)
+    assert.equal(await beatRoot(root, loser.instanceId), false)
+    await assert.rejects(fs.stat(join(root, CLAIM_LOCK_FILE)), /ENOENT/, '认领完锁要收掉')
+  }
+})
+
+test('claimRoot：几个进程同时启动，也只有一个拿到 ok', async () => {
+  const root = await tmpRoot()
+  const lib = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'tenant.js')).href
+  // 每个子进程：等到同一个时刻认领，报结果，然后一直活着等父进程关 stdin
+  // （认领完就退出的话 pid 没了，后面的进程接管是对的，测不出东西）。
+  const code = `
+    const { claimRoot } = await import(${JSON.stringify(lib)})
+    const [root, id, at] = process.argv.slice(1)
+    await new Promise((r) => setTimeout(r, Math.max(0, Number(at) - Date.now())))
+    const res = await claimRoot(root, { instanceId: id })
+    process.stdout.write(JSON.stringify({ id, ok: res.ok }) + '\\n')
+    process.stdin.resume()
+    process.stdin.on('end', () => process.exit(0))
+  `
+  const at = Date.now() + 1500
+  const kids = ['P1', 'P2', 'P3', 'P4'].map((id) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code, root, id, String(at)], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    })
+    const said = new Promise((res, rej) => {
+      let buf = ''
+      child.stdout.on('data', (d) => {
+        buf += d
+        if (buf.includes('\n')) res(JSON.parse(buf.slice(0, buf.indexOf('\n'))))
+      })
+      child.on('error', rej)
+      child.on('exit', (c) => rej(new Error(`${id} 没报结果就退出了（${c}）`)))
+    })
+    return { child, said }
+  })
+  try {
+    const results = await Promise.all(kids.map((k) => k.said))
+    const won = results.filter((r) => r.ok)
+    assert.equal(won.length, 1, JSON.stringify(results))
+    const raw = JSON.parse(await fs.readFile(join(root, TENANT_FILE), 'utf8'))
+    assert.equal(raw.instanceId, won[0].id)
+  } finally {
+    await Promise.all(kids.map(({ child }) => new Promise((r) => {
+      if (child.exitCode !== null) return r()
+      child.once('exit', r)
+      child.stdin.end()
+    })))
+  }
+})
+
+test('claimRoot：写完之后被别的实例盖掉 → 确认那一下认输，不再当自己是房主', async () => {
+  const root = await tmpRoot()
+  const file = join(root, TENANT_FILE)
+  const mine = claimRoot(root, { instanceId: 'A', confirmMs: 300 })
+  // A 写完、还没确认的这段时间里，另一个实例（没走锁的老版本、或共享盘上锁没生效）写了自己的声明
+  const deadline = Date.now() + 5000
+  for (;;) {
+    try { if (JSON.parse(await fs.readFile(file, 'utf8')).instanceId === 'A') break } catch { /* 还没写出来 */ }
+    assert.ok(Date.now() < deadline, 'A 的声明一直没写出来')
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  await fs.writeFile(file, JSON.stringify({ instanceId: 'B', version: '9.9.9', pid: process.pid, beatAt: Date.now(), bootAt: Date.now() }))
+  const res = await mine
+  assert.equal(res.ok, false)
+  assert.equal(res.owner.instanceId, 'B')
+  assert.equal(res.owner.version, '9.9.9')
+  assert.match(res.why, /另一个插件实例|已经被/)
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).instanceId, 'B', '认输的不再改文件')
+})
+
+test('claimRoot：确认那一下读不出来不算被占；confirmMs:0 不确认', async () => {
+  const root = await tmpRoot()
+  const file = join(root, TENANT_FILE)
+  const mine = claimRoot(root, { instanceId: 'A', confirmMs: 300 })
+  const deadline = Date.now() + 5000
+  for (;;) {
+    try { await fs.stat(file); break } catch { /* 还没写出来 */ }
+    assert.ok(Date.now() < deadline, 'A 的声明一直没写出来')
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  await fs.rm(file, { force: true })
+  assert.equal((await mine).ok, true, '文件读不到（被删、被占着）不能把自己锁在门外')
+
+  const root2 = await tmpRoot()
+  // 不看钟（机器忙的时候一次改名就能拖上百毫秒）：数声明被读了几次。确认就是多读的那一次。
+  const realRead = fs.readFile
+  let reads = 0
+  fs.readFile = async (f, ...a) => {
+    if (String(f).endsWith(TENANT_FILE)) reads += 1
+    return realRead(f, ...a)
+  }
+  try {
+    assert.equal((await claimRoot(root2, { instanceId: 'A', confirmMs: 0 })).ok, true)
+    assert.equal(reads, 1, 'confirmMs:0 只有认领时读的那一次')
+    reads = 0
+    assert.equal((await claimRoot(await tmpRoot(), { instanceId: 'A', confirmMs: 5 })).ok, true)
+    assert.equal(reads, 2, '带确认的多读一次')
+  } finally {
+    fs.readFile = realRead
+  }
+})
+
+test('claimRoot：锁一直拿不到时照老办法认领，不把自己锁在门外；别人的锁不删', async () => {
+  const root = await tmpRoot()
+  const lock = join(root, CLAIM_LOCK_FILE)
+  let release
+  const holder = withFileLock(lock, () => new Promise((r) => { release = r }))
+  await new Promise((r) => setTimeout(r, 20))
+  try {
+    const res = await claimRoot(root, { instanceId: 'A', confirmMs: 0, lockTimeout: 120 })
+    assert.equal(res.ok, true)
+    assert.equal(JSON.parse(await fs.readFile(join(root, TENANT_FILE), 'utf8')).instanceId, 'A')
+    assert.equal((await fs.stat(lock)).isFile(), true, '超时的那一方不能删别人的锁')
+    // 没锁也还是认得出已经有人住
+    const other = await claimRoot(root, { instanceId: 'B', confirmMs: 0, lockTimeout: 120 })
+    assert.equal(other.ok, false)
+    assert.equal(other.owner.instanceId, 'A')
+  } finally {
+    release('held')
+    await holder
+  }
+})
+
+test('claimRoot：上一个进程死在认领的临界区里（陈旧锁）→ 下一次启动能接手', async () => {
+  const root = await tmpRoot()
+  const lock = join(root, CLAIM_LOCK_FILE)
+  await fs.writeFile(lock, JSON.stringify({ pid: 999999, at: 0 }))
+  const old = (Date.now() - 60_000) / 1000
+  await fs.utimes(lock, old, old)
+  const res = await claimRoot(root, { instanceId: 'A', confirmMs: 0, lockTimeout: 1_000 })
+  assert.equal(res.ok, true)
+  assert.equal(res.why, undefined, '走的是带锁的那条路，声明写成了')
+  await assert.rejects(fs.stat(lock), /ENOENT/)
+})
+
+test('claimRoot：家里写不进去（锁和声明都建不出来）照旧不拦，说明原因', async () => {
+  const dir = await tmpRoot()
+  // 拿一个普通文件当 root：在它下面什么都建不出来
+  const root = join(dir, 'not-a-dir')
+  await fs.writeFile(root, 'x')
+  const res = await claimRoot(root, { instanceId: 'A', lockTimeout: 200 })
+  assert.equal(res.ok, true, '写不进去不等于有别人占着')
+  assert.equal(res.instanceId, 'A')
+  assert.match(res.why, /占用声明没写成/)
+})
+
+test('家目录不在了：认领、心跳、让出都不把它重新建出来', async () => {
+  const dir = await tmpRoot()
+  const root = join(dir, 'gone')
+  const res = await claimRoot(root, { instanceId: 'A', lockTimeout: 200 })
+  assert.equal(res.ok, true, '写不进去不等于有别人占着')
+  assert.match(res.why, /占用声明没写成：ENOENT/)
+  assert.equal(await beatRoot(root, 'A'), false)
+  assert.equal(await releaseRoot(root, 'A'), false)
+  await assert.rejects(fs.stat(root), /ENOENT/, '被删掉或搬走的家不该因为一拍心跳又冒出来')
+})
+
+test('备份不带认领的锁：导出时正好有实例在认领，包里也没有 .instance.lock，老包里有的不放回', async () => {
+  const root = await tmpRoot()
+  await fs.writeFile(join(root, 'events.jsonl'), '', 'utf8')
+  await fs.writeFile(join(root, CLAIM_LOCK_FILE), '{"pid":1,"at":0}', 'utf8')
+  const bundle = JSON.parse(JSON.stringify(await collectBackup(root)))
+  assert.ok(!bundle.files.some((f) => f.path === CLAIM_LOCK_FILE))
+  assert.ok(!bundle.skipped.some((s) => s.includes(CLAIM_LOCK_FILE)), '不算「没装进去」')
+
+  const dest = await tmpRoot()
+  const res = await restoreBackup(
+    { ...bundle, files: [...bundle.files, { path: CLAIM_LOCK_FILE, size: 16, enc: 'utf8', data: '{"pid":1,"at":0}' }] },
+    dest,
+  )
+  assert.equal(res.ok, true, JSON.stringify(res).slice(0, 300))
+  await assert.rejects(fs.stat(join(dest, CLAIM_LOCK_FILE)), /ENOENT/)
+})
+
+test('占用声明是原子写：心跳、让出的同时去读，读不到空文件或半截 JSON', async () => {
+  const root = await tmpRoot()
+  const file = join(root, TENANT_FILE)
+  await claimRoot(root, { instanceId: 'A', confirmMs: 0 })
+  let stop = false
+  let reads = 0
+  const broken = []
+  const reader = (async () => {
+    while (!stop) {
+      let text = null
+      try { text = await fs.readFile(file, 'utf8') } catch { /* Windows 上 rename 的瞬间可能读不开，不是这条要查的 */ }
+      if (text !== null) {
+        reads += 1
+        try { JSON.parse(text) } catch { broken.push(text.slice(0, 40)) }
+      }
+      await new Promise((r) => setTimeout(r, 3))
+    }
+  })()
+  try {
+    for (let i = 0; i < 24; i++) {
+      await beatRoot(root, 'A', { now: Date.now() + i })
+      if (i % 8 === 7) {
+        await releaseRoot(root, 'A')
+        await claimRoot(root, { instanceId: 'A', confirmMs: 0 })
+      }
+    }
+  } finally {
+    stop = true
+    await reader
+  }
+  assert.ok(reads > 0, '读的那一头至少读到过')
+  assert.deepEqual(broken, [], `${reads} 次读里有 ${broken.length} 次是空的或半截的`)
+  const left = (await fs.readdir(root)).filter((n) => n.endsWith('.tmp'))
+  assert.deepEqual(left, [], '临时文件不留在家里')
 })
