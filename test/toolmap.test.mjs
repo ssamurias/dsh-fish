@@ -118,6 +118,7 @@ function definedTools() {
 const MAP = [
   ['growth_commit', TOOL_BRIEF, /有一句话想留下/],
   ['bili_watch', TOOL_BRIEF, /画面里到底是什么/],
+  ['bili_sub', TOOL_BRIEF, /到底说了哪几句/],
   ['her_recall', RECALL_BRIEF, /我记得有一次/],
   ['her_leave', LETTER_BRIEF, /什么时候想起它/],
   ['her_note', NOTE_BRIEF, /老在同一个地方绕/],
