@@ -30,7 +30,7 @@ gh auth status              # 必须是 ssamurias
 - [ ] `RELEASE-NOTES-x.y.z.md` 已写，且与 `CHANGELOG.md` 口径一致（issue 条数、PR 编号、日期）
 - [ ] `README.md` 顶部「当前版本」段已换成这一版
 - [ ] 升级路径有变化时，`README.md`「从旧版升到 0.9.x」表补了行，`AGENTS.md`「包名与装法」补了守门条目
-- [ ] `npm pack --dry-run` 的文件清单对：`lib/`、`media/`、`scripts/`、`cordis.patch.yml`、`README.md`、`AGENTS.md`、`CHANGELOG.md`、`RELEASE-NOTES-*.md`、`RELEASE.md`；**不含 `test/`**
+- [ ] `npm pack --dry-run` 的文件清单对：`lib/`、`media/`、`scripts/`、`tools/`、`cordis.patch.yml`、`README.md`、`AGENTS.md`、`CHANGELOG.md`、`RELEASE-NOTES-*.md`、`RELEASE.md`；**不含 `test/`**
 - [ ] 包里没有敏感文件（`.env`、profile、cookie、备份档）
 
 ```bash

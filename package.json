@@ -20,7 +20,8 @@
     "CHANGELOG.md",
     "RELEASE-NOTES-*.md",
     "RELEASE.md",
-    "scripts"
+    "scripts",
+    "tools"
   ],
   "scripts": {
     "test": "node --test"
