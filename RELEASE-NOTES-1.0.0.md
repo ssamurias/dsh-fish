@@ -176,3 +176,21 @@
 - 「并排」只是把两句话放在一起给她看。她要不要改口、要不要承认，仍然是她自己的事。
 
 全量 `node --test` = **2480 pass / 0 fail**，约 36 秒。
+
+## 怎么更新
+
+装之前先把 DSH 关掉。
+
+设置 → 大肥鱼 → 插件 → 检查更新 → 下载 → 重启安装。
+
+不想点也行，一条命令：
+
+```bash
+dsh plugin --profile desktop add "@ssamurias/dsh-fish@1.0.0"
+```
+
+桌面版写 `desktop`，网页版写 `web`；提示 unknown profile 就换另一个。
+
+**0.8.9 之前装的老版本**：包名从 `dsh-fish` 改成了 `@ssamurias/dsh-fish`，先卸载再装，不然容易「设置页没鱼 / 重启起不来」。
+
+她的记忆在 `~/.dsh-fish/`，升级、卸载都不动它。
