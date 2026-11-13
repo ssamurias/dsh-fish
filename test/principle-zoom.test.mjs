@@ -9,8 +9,8 @@ const read = (p) => readFile(new URL(`../${p}`, import.meta.url), 'utf8')
 const CLIENT = await read('lib/client.js')
 
 test('用户这一轮改过的七句文案已固化进源码', () => {
-  // 1) 图卡说明去掉「图是插件自己画的」，从「第一张讲」起
-  assert.ok(CLIENT.includes('第一张讲「经历怎么变成认知」，第二张讲「记忆怎么被筛、哪些永远不折叠」。'))
+  // 1) 图卡说明去掉「图是插件自己画的」，从「第一张讲」起；2.0 起补了第三张
+  assert.ok(CLIENT.includes('第一张讲「经历怎么变成认知」，第二张讲「记忆怎么被筛、哪些永远不折叠」，第三张讲「她为什么自己开口、自己动手」。'))
   assert.ok(!CLIENT.includes('图是插件自己画的（SVG，不依赖任何外部素材）。'))
   // 2) 三道门 → 三道成长瓶颈；3) 翻回来 → 调用查询；7) 让了 → 妥协了
   assert.ok(CLIENT.includes('底部是四个阶段与三道成长瓶颈'))
@@ -42,9 +42,10 @@ test('两张图可以点开放大：灯箱带缩放与拖动', () => {
   assert.ok(CLIENT.includes('onDoubleClick: () => setZoom'))
   assert.ok(CLIENT.includes("if (e.key === 'Escape') setZoom(null)"))
   assert.ok(CLIENT.includes('滚轮缩放 ${Math.round(zoom.scale * 100)}%'))
-  // 两张图都走 zoomable，不再是裸 img
-  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-loop.svg`'))
-  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-memory.svg`'))
+  // 三张图都走 zoomable，不再是裸 img
+  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-loop.svg?v=20261114`'))
+  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-memory.svg?v=20261114`'))
+  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-drive.svg?v=20261114`'))
 })
 
 test('开发者留言：整页最下面收尾，署名居右', () => {

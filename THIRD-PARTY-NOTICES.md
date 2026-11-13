@@ -11,8 +11,18 @@
 
 ## 思想引用
 
-原理页引用了 Kolb / Piaget / Bowlby / Erikson / Festinger / Bartlett / Dewey / Schön 的理论，
-属思想引用，页底标注了作者与年份；不含他人代码或原文。
+原理页引用的理论分两种，页底与卡片上都标注了作者与年份，属思想引用，不含他人代码或原文。
+
+**设计时就用上的**：Kolb 经验学习圈、Piaget 失衡、Bowlby 依恋理论、Erikson 心理社会发展、
+Festinger 认知失调、Bartlett 重构记忆、Cowan 工作记忆容量、Tulving 线索依赖遗忘、
+Bjork 遗忘的适应功能、Dewey 经验的连续性、Schön 反思性实践、Vygotsky 最近发展区、
+Bloom 掌握学习、Metzinger 自我模型；Horvitz 的打扰成本（0.8.9 写 `lib/drive.js` 时用于
+「上次开口没人接，下一次攒得慢」）。
+
+**机制做完之后才补的对照**（不是设计来源，原理页标了「事后能对上」）：
+Deci & Ryan 的自我决定论、White 的效能动机；Domhoff 与 Wamsley 的梦研究；
+Roediger & Karpicke 的提取练习、Cepeda 的间隔效应；
+Hidi & Renninger 的兴趣发展、Zajonc 的单纯曝光；Thaler & Shefrin 的计划者-行动者模型。
 
 - 主观能动性的攒劲机制灵感来自交流群 2 群的群友「无」；落进本插件时全部重新实现，没有代码或文本的直接搬运。
 - 兴趣与好奇的判据为自研实现（`lib/interest.js`、`lib/curiosity.js`），未移植任何第三方插件代码；概念上参考了 Loewenstein 的信息缺口理论（1994）、Generative Agents 的记忆时间衰减排序（2023）与 Oudeyer 关于内在动机中「新奇会失效」的论述（2007）。
@@ -20,5 +30,5 @@
 ## 美术资源
 
 - `media/fish.jpg`：作者提供的大肥鱼原图经 AI 生成，随本仓库以同一许可（MIT）授权。
-- `media/principle-loop.svg`、`media/principle-memory.svg`：本项目自绘。
+- `media/principle-loop.svg`、`media/principle-memory.svg`、`media/principle-drive.svg`：本项目自绘。
 - 除此之外不含第三方美术资源——头像由用户自行上传（存在 `~/.dsh-fish/avatar.<ext>`）。

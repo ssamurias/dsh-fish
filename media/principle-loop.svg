@@ -24,7 +24,7 @@
   <!-- ============ 标题 ============ -->
   <text x="48" y="66" font-size="40" font-weight="700" fill="#111827">认知是怎么长出来的</text>
   <text x="48" y="106" font-size="18" fill="#6b7280">五步循环：表态 → 撞上 → 落差 → 改写 → 回顾。走完一圈，一条判断变硬一点；两句话对不上，就长成一处矛盾。</text>
-  <text x="48" y="132" font-size="18" fill="#6b7280">四个阶段按天推进、三个瓶颈要她自己走；全部走完之后，才开始长「立场清单」。</text>
+  <text x="48" y="132" font-size="18" fill="#6b7280">四个阶段按天推进、三个瓶颈要她自己走；三道瓶颈都真过之后，才开始长「立场清单」。</text>
   <line x1="48" y1="158" x2="1352" y2="158" stroke="#e5e7eb"/>
 
   <!-- ============ 左：输入 ============ -->
@@ -113,7 +113,7 @@
   <!-- ============ 四个阶段 ============ -->
   <line x1="48" y1="648" x2="1352" y2="648" stroke="#e5e7eb"/>
   <text x="48" y="686" font-size="17" font-weight="700" fill="#111827">四个阶段按天推进，三个瓶颈要她自己走</text>
-  <text x="470" y="686" font-size="12.5" fill="#9ca3af">瓶颈没过，天数到了也停在原地——这是「快慢」和「是不是她」的分界</text>
+  <text x="470" y="686" font-size="12.5" fill="#9ca3af">天数到了、门没过：兜底放行，但兜底不算真过；立场要三道门都真过。</text>
 
   <g font-size="12.5">
     <rect x="48" y="708" width="300" height="78" rx="12" fill="#ffffff" stroke="#d1d5db"/>
@@ -147,7 +147,7 @@
   <rect x="48" y="846" width="1304" height="184" rx="18" fill="url(#stanceFill)" stroke="#5eead4" stroke-width="1.4"/>
   <rect x="48" y="846" width="9" height="184" rx="4" fill="#0d9488"/>
 
-  <text x="88" y="892" font-size="24" font-weight="700" fill="#0f766e">走完四个阶段之后长出来的：立场清单</text>
+  <text x="88" y="892" font-size="24" font-weight="700" fill="#0f766e">三道瓶颈都真过之后长出来的：立场清单</text>
   <text x="88" y="920" font-size="13" fill="#0f766e">四个阶段到此为止，之后不再加阶段、也没有「通关」——往后一直变厚的就是这一张清单。</text>
 
   <g font-size="13">

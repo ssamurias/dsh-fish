@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" width="1400" height="900" font-family="'Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0f766e"/>
+    </marker>
+    <marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b45309"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="900" fill="#faf9f7"/>
+
+  <text x="56" y="82" font-size="40" font-weight="700" fill="#1c1917">她为什么会自己动起来</text>
+  <text x="56" y="120" font-size="17" fill="#57534e">不是定时器推的：先慢慢攒出一股劲，再看桌上有没有真事；开口和动手是两个出口，都有刹车。</text>
+  <text x="56" y="146" font-size="15" fill="#9ca3af">下面每个数字都是代码里的初始值，不是心理学结论；改之前先看它原来在补什么。</text>
+
+  <!-- 左：劲从哪来 -->
+  <g>
+    <rect x="56" y="176" width="360" height="600" rx="16" fill="#ffffff" stroke="#d6d3d1"/>
+    <text x="80" y="212" font-size="22" font-weight="700" fill="#0f766e">劲从哪来</text>
+    <text x="80" y="238" font-size="14" fill="#78716c">从事件流现算，不落盘；只回答「开不开」</text>
+
+    <rect x="80" y="262" width="312" height="92" rx="10" fill="#f0fdfa" stroke="#99f6e4"/>
+    <text x="96" y="288" font-size="15" font-weight="700" fill="#0f766e">底噪</text>
+    <text x="96" y="312" font-size="14" fill="#44403c">每小时 +0.12，几周不动也会自己涨</text>
+    <text x="96" y="336" font-size="13" fill="#78716c">保证她不会因为「没素材」永远沉默</text>
+
+    <text x="80" y="384" font-size="15" font-weight="700" fill="#1c1917">桌上真有东西时，再加一笔</text>
+    <g font-size="13.5" fill="#44403c">
+      <rect x="80" y="398" width="312" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="94" y="420">旧句子又被想起（7–30 天前，之后再没提过）</text>
+      <rect x="80" y="440" width="312" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="94" y="462">她问过、但一直没答案的问题</text>
+      <rect x="80" y="482" width="312" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="94" y="504">你回了她留的话 / 你提到了她记着的事</text>
+      <rect x="80" y="524" width="312" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="94" y="546">够不着的事、撞过的墙</text>
+    </g>
+
+    <rect x="80" y="580" width="312" height="84" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+    <text x="96" y="606" font-size="15" font-weight="700" fill="#b45309">上次开口，没人接</text>
+    <text x="96" y="630" font-size="13.5" fill="#44403c">下一次攒得慢（×0.7）</text>
+    <text x="96" y="650" font-size="13" fill="#78716c">打扰是有成本的，不是想说话就该说</text>
+
+    <text x="80" y="700" font-size="13" fill="#78716c">门槛 0.8，约 6.7 小时底噪攒满；</text>
+    <text x="80" y="722" font-size="13" fill="#78716c">攒满只说明「可以开」，不说明「必须说」。</text>
+  </g>
+
+  <!-- 中：这一轮开不开 -->
+  <g>
+    <rect x="452" y="176" width="440" height="600" rx="16" fill="#ffffff" stroke="#d6d3d1"/>
+    <text x="476" y="212" font-size="22" font-weight="700" fill="#0f766e">这一轮开不开</text>
+    <text x="476" y="238" font-size="14" fill="#78716c">四个条件同时成立，才开一轮；开不开 ≠ 说什么</text>
+
+    <g font-size="14" fill="#44403c">
+      <rect x="476" y="258" width="392" height="36" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
+      <text x="492" y="281">① 在她的醒着时段里</text>
+      <rect x="476" y="302" width="392" height="36" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
+      <text x="492" y="325">② 今天还有额度（默认 0–6 次）</text>
+      <rect x="476" y="346" width="392" height="36" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
+      <text x="492" y="369">③ 确实有一阵没说话（默认 6 小时）</text>
+      <rect x="476" y="390" width="392" height="36" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
+      <text x="492" y="413">④ 桌上至少有一件真能说 / 能做的事</text>
+    </g>
+
+    <rect x="476" y="448" width="392" height="52" rx="10" fill="#f5f5f4" stroke="#d6d3d1"/>
+    <text x="492" y="480" font-size="14" fill="#57534e">空桌不醒：宁可这一轮不叫她，也不拿废话凑数。</text>
+
+    <line x1="672" y1="500" x2="672" y2="514" stroke="#0f766e" stroke-width="2"/>
+    <line x1="569" y1="514" x2="775" y2="514" stroke="#0f766e" stroke-width="2"/>
+    <line x1="569" y1="514" x2="569" y2="540" stroke="#0f766e" stroke-width="2" marker-end="url(#ar)"/>
+    <line x1="775" y1="514" x2="775" y2="540" stroke="#0f766e" stroke-width="2" marker-end="url(#ar)"/>
+
+    <rect x="476" y="548" width="186" height="98" rx="12" fill="#ecfdf5" stroke="#6ee7b7"/>
+    <text x="494" y="578" font-size="18" font-weight="700" fill="#0f766e">开口</text>
+    <text x="494" y="602" font-size="13" fill="#44403c">说一句、留一句话</text>
+    <text x="494" y="622" font-size="13" fill="#44403c">或者什么都不说</text>
+
+    <rect x="682" y="548" width="186" height="98" rx="12" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="700" y="578" font-size="18" font-weight="700" fill="#b45309">动手</text>
+    <text x="700" y="602" font-size="13" fill="#44403c">手边有工具能做，</text>
+    <text x="700" y="622" font-size="13" fill="#44403c">就做一件，做完就收</text>
+
+    <text x="476" y="678" font-size="13" fill="#78716c">「动手」不是新定时器：只在这一轮多一个形态，</text>
+    <text x="476" y="700" font-size="13" fill="#78716c">不占搭话额度，也不改变「一天最多几次」。</text>
+    <text x="476" y="728" font-size="13" fill="#78716c">两个出口都可以选「什么都不做」。</text>
+  </g>
+
+  <!-- 右：桌上摆什么 / 什么拦着 -->
+  <g>
+    <rect x="920" y="176" width="424" height="600" rx="16" fill="#ffffff" stroke="#d6d3d1"/>
+    <text x="944" y="212" font-size="22" font-weight="700" fill="#0f766e">桌上摆什么</text>
+    <text x="944" y="238" font-size="14" fill="#78716c">只摆事实，不派活；不出现分数、次数</text>
+
+    <g font-size="13.5" fill="#44403c">
+      <rect x="944" y="256" width="376" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="958" y="278">最近说过的话（原话，60 字以内）</text>
+      <rect x="944" y="298" width="376" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="958" y="320">没答案的问题 / 悬着的事</text>
+      <rect x="944" y="340" width="376" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="958" y="362">旧句子（她自己写的，7–30 天前）</text>
+      <rect x="944" y="382" width="376" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="958" y="404">她自己记下的便条（最多两张，不催）</text>
+      <rect x="944" y="424" width="376" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
+      <text x="958" y="446">兴趣只排序：先摆最近总回到的那件事</text>
+    </g>
+
+    <text x="944" y="496" font-size="22" font-weight="700" fill="#b45309">什么拦着</text>
+    <g font-size="13.5" fill="#44403c">
+      <rect x="944" y="512" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="958" y="534">一天 0–6 次；两次至少隔 45 分钟</text>
+      <rect x="944" y="554" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="958" y="576">消耗类一天 1 次；同一件 3 天内不重复</text>
+      <rect x="944" y="596" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="958" y="618">连着三次同类 → 停一周</text>
+      <rect x="944" y="638" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="958" y="660">一轮只做一件；第二次直接拦下</text>
+    </g>
+    <text x="944" y="700" font-size="13" fill="#78716c">额度是环境的边界，不写进人格；</text>
+    <text x="944" y="722" font-size="13" fill="#78716c">额度用完，只能来问你（1 天 1 次）。</text>
+  </g>
+
+  <!-- 底部 -->
+  <g>
+    <rect x="56" y="786" width="1288" height="78" rx="12" fill="#f0fdfa" stroke="#99f6e4"/>
+    <text x="76" y="812" font-size="14" fill="#0f766e">做过的会留下：</text>
+    <text x="196" y="812" font-size="14" fill="#44403c">did:&lt;类别&gt;:&lt;工具&gt;:ok|fail:&lt;那件事&gt; —— 下一轮 her_recall 翻得到，读成「你用 X 做成了一件事」或「试过，没成」。</text>
+    <text x="76" y="836" font-size="12.5" fill="#57534e">理论出处：自我决定论（Deci &amp; Ryan, 1985）＋ 效能动机（White, 1959）＋ 中断成本（Horvitz, 2007）；前瞻记忆（Einstein &amp; McDaniel, 1990）</text>
+    <text x="76" y="854" font-size="12.5" fill="#57534e">＋ 实施意图（Gollwitzer, 1999）；计划者-行动者（Thaler &amp; Shefrin, 1981）。</text>
+  </g>
+</svg>

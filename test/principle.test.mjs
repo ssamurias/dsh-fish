@@ -21,13 +21,16 @@ const CLIENT = join(ROOT, 'lib', 'client.js')
 const OBSERVE = join(ROOT, 'lib', 'observe.js')
 const LOOP = join(ROOT, 'media', 'principle-loop.svg')
 const MEMORY = join(ROOT, 'media', 'principle-memory.svg')
+const DRIVE = join(ROOT, 'media', 'principle-drive.svg')
 const PKG = join(ROOT, 'package.json')
 
-test('两张原理图在包里，而且是完整的 svg', async () => {
+test('三张原理图在包里，而且是完整的 svg', async () => {
   for (const [file, viewBox, must] of [
     // 图一 2026-10-25 重做：立场从底部一行字改成独立区块，画布 980 → 1160
     [LOOP, 'viewBox="0 0 1400 1160"', ['认知是怎么长出来的', '五步循环', '表态', '撞上', '落差', '改写', '回顾', '1 信任', '4 整合', '立场清单']],
     [MEMORY, 'viewBox="0 0 1400 980"', ['遗忘是怎么发生的', '记得很牢', '折叠 ≠ 删除', 'events.jsonl', 'her_recall']],
+    // 图三 2026-11-14（1.0.1）：主动性的劲儿、桌子与两个出口
+    [DRIVE, 'viewBox="0 0 1400 900"', ['她为什么会自己动起来', '劲从哪来', '这一轮开不开', '开口', '动手', '什么拦着', 'did:']],
   ]) {
     const svg = await readFile(file, 'utf8')
     assert.ok(svg.startsWith('<svg'), `${file} 必须以 <svg 开头`)
@@ -48,15 +51,19 @@ test('出图走服务端白名单路由，客户端不内联图', async () => {
   const ob = await readFile(OBSERVE, 'utf8')
   assert.ok(ob.includes("['/media', async (req, res)"), '必须有 /media 路由')
   // 2026-10-28：反馈页的交流群二维码也走这条白名单路由（只多放一个文件名，仍不做通用文件服务）。
-  assert.ok(ob.includes('/^\\/dsh-fish\\/media\\/((?:principle-[a-z]+\\.svg)|(?:feedback-qr\\.jpg))$/'), '文件名必须白名单匹配')
+  // 2026-11-14：原理页图片带 ?v= 版本号做缓存失效，路由要允许查询串。
+  assert.ok(ob.includes('/^\\/dsh-fish\\/media\\/((?:principle-[a-z]+\\.svg)|(?:feedback-qr\\.jpg))'),
+    '文件名必须白名单匹配')
+  assert.ok(ob.includes('(?:\\?[^#]*)?$/'), '图片路由要放行 ?v= 查询串')
   // 2026-10-28 起同一条路由既出 svg 也出 jpg，类型按扩展名给，不再是一句写死的常量。
   assert.ok(ob.includes("'image/svg+xml; charset=utf-8'"), '必须声明 svg 类型')
   assert.ok(ob.includes("'image/jpeg'"), '二维码那张必须声明 jpeg 类型')
   assert.ok(ob.includes('fileURLToPath(new URL(`../media/'), '必须从包内 media/ 读文件')
 
   const cl = await readFile(CLIENT, 'utf8')
-  assert.ok(cl.includes('`${API}/media/principle-loop.svg`'), '图一必须走 /media 路由')
-  assert.ok(cl.includes('`${API}/media/principle-memory.svg`'), '图二必须走 /media 路由')
+  assert.ok(cl.includes('`${API}/media/principle-loop.svg?v=20261114`'), '图一必须走 /media 路由')
+  assert.ok(cl.includes('`${API}/media/principle-memory.svg?v=20261114`'), '图二必须走 /media 路由')
+  assert.ok(cl.includes('`${API}/media/principle-drive.svg?v=20261114`'), '图三必须走 /media 路由')
   assert.ok(cl.includes('`${API}/media/feedback-qr.jpg`'), '反馈页二维码必须走 /media 路由，不引外链')
   assert.ok(!cl.includes('<svg'), '客户端里不许内联 SVG（会让 bundle 无谓变大）')
 })
@@ -94,6 +101,11 @@ test('原理页把理论出处写全了', async () => {
     'Festinger 认知失调', 'Bartlett 重构记忆', 'Cowan 工作记忆容量', 'Tulving 线索依赖遗忘',
     'Bjork 遗忘的适应功能', 'Dewey 经验连续性', 'Schön 反思性实践', 'Vygotsky 最近发展区',
     'Bloom 掌握学习', 'Metzinger 自我模型',
+    'Deci & Ryan 自我决定论', 'White 效能动机', 'Horvitz 中断成本',
+    'Domhoff 梦的连续性假设', 'Wamsley 离线重组',
+    'Roediger & Karpicke 提取练习', 'Cepeda 间隔效应',
+    'Hidi & Renninger 兴趣发展', 'Zajonc 单纯曝光',
+    'Thaler & Shefrin 计划者-行动者',
   ]) {
     assert.ok(cl.includes(name), `原理页必须提到「${name}」`)
   }

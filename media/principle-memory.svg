@@ -96,7 +96,7 @@
   <g>
     <rect x="764" y="238" width="572" height="486" rx="16" fill="#ffffff" stroke="#e5e7eb" filter="url(#soft2)"/>
     <text x="792" y="274" font-size="16" font-weight="700" fill="#111827">这一次真正摆在她眼前的</text>
-    <text x="792" y="298" font-size="12.5" fill="#6b7280">身份文档：默认 1200 字预算，超了就按下面的顺序摆</text>
+    <text x="792" y="298" font-size="12.5" fill="#6b7280">身份文档：默认 2400 字预算，超了就按下面的顺序摆</text>
 
     <!-- 核心段 -->
     <rect x="792" y="314" width="516" height="112" rx="10" fill="#fef2f2" stroke="#fecaca"/>
