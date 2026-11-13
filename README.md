@@ -251,7 +251,7 @@ npm 装的话脚本在 `node_modules/@ssamurias/dsh-fish/tools/check-install.mjs
 lib/        插件本体，125 个模块。入口是 index.js，她看到的那段提示词在 persona.js，
             她唯一的写入口是 capture.js，四条禁令在 rules.js，默认值只在 settings.js；
             浏览器那半边（设置 → 大肥鱼）在同目录的 client.js
-test/       173 个测试文件，node --test 直接跑，全量 2473 条
+test/       173 个测试文件，node --test 直接跑，全量 2480 条
 media/      README 与设置页用到的图
 scripts/    安装与迁移脚本（fix-legacy-link.mjs）
 tools/      命令行自检（check-install.mjs，零依赖，插件没加载也能跑）
