@@ -24,6 +24,7 @@ import { join } from 'node:path'
 
 import { attachIdentity, IDENTITY_SECTION, TOOLS_SECTION } from '../lib/identity.js'
 import { registerToolRestrict, currentToolSurface } from '../lib/restrict.js'
+import { fillOwner } from '../lib/pronoun.js'
 import { resetIdentityCache } from '../lib/identity.js'
 
 const tmp = () => fs.mkdtempSync(join(os.tmpdir(), 'fish-outside-'))
@@ -139,7 +140,8 @@ test('没传 herDir 的老调用点：退回家里那份（行为不变）', () 
   const { agent, calls } = sectionsAgent('D:/work/y', { visibleNames: ['bash'] })
   attachIdentity(agent, root) // 不传 herDir
   const txt = calls.find((c) => c.name === TOOLS_SECTION).text()
-  assert.equal(txt, currentToolSurface(), '没给判据就只能按原来的说法来')
+  // 2026-11-14（issue #137）：身份段现在自己填代词，这里按同一个口径比。
+  assert.equal(txt, fillOwner(currentToolSurface(), '他'), '没给判据就只能按原来的说法来')
 })
 
 test('出门收窄这件事本来就不该发生：isHerAgent 为假时 restrict 一次都不下', () => {

@@ -48,6 +48,7 @@ import {
   trimToolDocs,
 } from '../lib/identity.js'
 import { legacySelfDocPath, selfDocPath } from '../lib/selfdoc.js'
+import { paths } from '../lib/store.js'
 import { DEFAULTS } from '../lib/settings.js'
 import { BELIEF_SHOWN, SELF_DOC_BUDGET } from '../lib/persona.js'
 
@@ -123,6 +124,36 @@ test('attachIdentity：挂三段——身份 + 这一次的处境（平时空）
   assert.match(txt, /growth_commit/, '要把真放行的工具念出来')
   assert.match(txt, /ops_/, '要点名那些挡不掉、会混进工具表的')
   assert.match(txt, /这件事我做不到/, '和兜底守卫同一句话术')
+})
+
+test('attachIdentity：手边有什么这一段不能漏字面量 {T}（issue #137，2026-11-14）', () => {
+  resetIdentityCache()
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  fs.writeFileSync(selfDocPath(root), '我是她', 'utf8')
+
+  const calls = []
+  const agent = { ctx: { systemPrompt: { section: (o) => calls.push(o) } } }
+  assert.equal(attachIdentity(agent, root).ok, true)
+  const tools = calls.find((c) => c.name === TOOLS_SECTION)
+  const text = tools.text()
+  assert.ok(!text.includes('{T}'), '这一段是独立挂载的，不经过 persona.assemble 的出口')
+  assert.doesNotMatch(text, /\{[A-Z][A-Za-z0-9_]*\}/, '渲染出来的身份里不许留没填的占位符')
+  assert.match(text, /他随时能再添几样进来/, '默认称呼仍是「他」')
+
+  // 代词换了她就得跟着换，而且不用重建会话（text 是函数，每轮现算）
+  const cfg = paths(root).config
+  fs.writeFileSync(cfg, JSON.stringify({ owner: { pronoun: '她' } }), 'utf8')
+  const later = new Date(Date.now() + 5000)
+  fs.utimesSync(cfg, later, later)
+  const again = tools.text()
+  assert.match(again, /她随时能再添几样进来/)
+  assert.ok(!again.includes('{T}'))
+
+  // 代词是模块级「上次读到的值」，别把它留给后面的用例
+  fs.writeFileSync(cfg, JSON.stringify({ owner: { pronoun: '他' } }), 'utf8')
+  const back = new Date(Date.now() + 10000)
+  fs.utimesSync(cfg, back, back)
 })
 
 test('attachIdentity：没有 systemPrompt 时返回 ok:false，不抛', () => {
