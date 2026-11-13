@@ -120,6 +120,39 @@ test('她认下了才叫回声：三日内说了一句意思相近的话', () =>
   assert.equal(m.freshVoice, null, '认下了就不再摆在眼前')
 })
 
+test('反话不算认下：「我不觉得…值得买」不是附和「…根本不值得买」（2026-11-13 外部反例）', () => {
+  // Codex 离线复现：字面相似度 0.82 > 0.7，但两句意思相反。
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种'),
+    ev('ev_v', 'voice', 2, '这个游戏根本不值得买'),
+    { ...ev('ev_u', 'utterance', 2, '我不觉得这个游戏根本不值得买。'), source: 'tool' },
+  ]
+  const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
+  assert.equal(m.facts.voicesEchoed, 0)
+  assert.equal(m.voices[0].echoed, false)
+  assert.equal(m.freshVoice?.text, '这个游戏根本不值得买', '没认下，那条评论还得摆在她眼前')
+  assert.equal(findEcho({ at: evs[1].ts, text: evs[1].text }, evs), null)
+})
+
+test('否定层一样才继续比相似度：都说「不值得买」照样算回声', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种'),
+    ev('ev_v', 'voice', 2, '这游戏不值得买'),
+    { ...ev('ev_u', 'utterance', 2, '这游戏真不值得买。'), source: 'tool' },
+  ]
+  const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
+  assert.equal(m.facts.voicesEchoed, 1)
+})
+
+test('一正一反也不认：评论说「值得买」、她说「我不觉得值得买」', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种'),
+    ev('ev_v', 'voice', 2, '这游戏值得买'),
+    { ...ev('ev_u', 'utterance', 2, '我不觉得这游戏值得买。'), source: 'tool' },
+  ]
+  assert.equal(findEcho({ at: evs[1].ts, text: evs[1].text }, evs), null)
+})
+
 test('聊天里没认领的复述不算认下：那条评论还摆在她眼前', () => {
   const evs = [
     ev('ev_seed', 'seed', 1, '种'),
