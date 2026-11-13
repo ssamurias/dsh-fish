@@ -212,7 +212,7 @@ test('主观能动性：劲儿按时间攒，只在醒的时段里看，桌上�
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
   const note = card(render(), '主观能动性').note
   assert.doesNotMatch(note, /桌上越有可说的东西，攒得越快/, '桌上的东西是一次性加一点，不是越攒越快')
-  assert.match(note, /每天几点醒/, '要说只在醒的时段里看')
+  assert.match(note, /她醒着的时间段/, '要说只在醒的时段里看')
   assert.match(note, /半小时/, '要说多久看一次')
   assert.match(note, /桌上也有东西，才自己开一轮/, '空桌不开要写出来')
 })
@@ -249,11 +249,20 @@ test('字数上限只加在事件卡和 /say 递进来的话上', async () => {
   assert.match(hint, /主动搭话那一轮不带/)
 })
 
-test('醒的时段：起止填成同一时刻会被换回默认，界面要先说', async () => {
+test('醒的时段：说清哪些会自己醒、过了结束时间不再醒、哪些随时能叫醒', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'grow' })
-  const hint = hintOf(render(), '每天几点醒')
-  assert.match(hint, /起止不能是同一时刻/, `说明：${hint}`)
-  assert.match(hint, /20:00–23:00/)
+  const hint = hintOf(render(), '她醒着的时间段')
+  assert.match(hint, /定时醒来、空醒、主动搭话/, `说明：${hint}`)
+  assert.match(hint, /过了结束时间，她不会再自己醒/)
+  assert.match(hint, /任何时间都能把她叫醒/)
+  assert.doesNotMatch(hint, /20:00–23:00/, '不再说会被静默换回默认值')
+})
+
+test('醒的时段：起止填成同一时刻就地报错，并告诉用户全天怎么写', async () => {
+  const { render } = await mount({ state: stateWith(), tab: 'grow', wakeFrom: '08:00', wakeTo: '08:00' })
+  const box = text(field(render(), '她醒着的时间段'))
+  assert.match(box, /开始和结束不能是同一时刻/)
+  assert.match(box, /要全天，请设 00:00–23:59/)
 })
 
 // ---------------------------------------------------------------------------

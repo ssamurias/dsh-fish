@@ -181,6 +181,47 @@ test('/config 白名单收下观测台提交的全部环境键（含 chat 与 me
   }
 })
 
+test('/config 拒收起止相同的时段，并把是哪一段说清楚', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-p5c-bad-'))
+  try {
+    const ctx = fakeCtx(root)
+    ctx.cfg.connection = { requestRejection: () => null }
+    registerObserve(ctx, { root })
+    const route = ctx.routes.find((r) => String(r.path || '').endsWith('/config'))
+    const post = async (patch) => {
+      const body = JSON.stringify(patch)
+      const req = {
+        method: 'POST',
+        url: '/dsh-fish/config',
+        headers: { 'content-type': 'application/json' },
+        on: (ev, fn) => { if (ev === 'data') fn(Buffer.from(body, 'utf8')); if (ev === 'end') fn() },
+      }
+      let status = 0
+      let payload = null
+      const res = {
+        writeHead: (s) => { status = s },
+        end: (s) => { payload = JSON.parse(s || '{}') },
+        setHeader: () => {},
+      }
+      await route.handler(req, res)
+      return { status, payload }
+    }
+
+    for (const [label, patch] of [
+      ['她醒着的时间段', { window: ['08:00', '08:00'] }],
+      ['上网时段', { browse: { window: ['18:00', '18:00'] } }],
+      ['评论时段', { comment: { window: ['20:00', '20:00'] } }],
+    ]) {
+      const { status, payload } = await post(patch)
+      assert.equal(status, 400, `${label} 起止相同该被拒`)
+      assert.match(payload.error, new RegExp(`^${label}：`))
+      assert.match(payload.error, /00:00–23:59/)
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 test('观测台提交的每个顶层键都在 /config 白名单里（防漂移）', async () => {
   // 2026-10-29 用户真机报「没保存：不允许修改：bili」：0.6.5 加了 bili 两个设置项，
   // 客户端整表提交带着它，服务端白名单没登记 → **每一项设置都存不进去**。

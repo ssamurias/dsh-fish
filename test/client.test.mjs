@@ -873,7 +873,7 @@ test('时段控件下面补一行 24 小时制：00:00 不会被读成中午十�
   const txt = textOf(exports.FishSection()).join(' ')
   // 原生 time 控件跟随系统 12 小时制，00:00 会显示成「上午 12:00」；
   // 用户看到窗口 00:00–23:00 里凌晨五点醒来，很容易当成 bug（2026-11-06 反馈）。
-  assert.ok(txt.includes('每天几点醒'), '生长页得真的渲染出来（tab 下标漂了就改这里）')
+  assert.ok(txt.includes('她醒着的时间段'), '生长页得真的渲染出来（tab 下标漂了就改这里）')
   assert.ok(txt.includes('24 小时制：20:00 → 23:00'), '默认时段要按 24 小时写出来')
 })
 
@@ -885,8 +885,8 @@ test('数字框的范围跟 settings.js 的 LIMITS 对齐：事件/问题能到 
   const src = await readFile(CLIENT, 'utf8')
 
   // 0–5 会把用户选的「6」判成非法：保存按钮一直红着，却说不出是哪一项。
-  assert.ok(src.includes("['每天最多几条事件', eventsPerDay, 0, 6]"), '事件条数上限是 6')
-  assert.ok(src.includes("['每天最多几个问题', questionsPerDay, 0, 6]"), '问题条数上限是 6')
+  assert.ok(src.includes("['每天几张事件卡', eventsPerDay, 0, 6]"), '事件条数上限是 6')
+  assert.ok(src.includes("['每天问题卡数', questionsPerDay, 0, 6]"), '问题条数上限是 6')
 
   // 这个框一直有（growPage 里那行），但不在 NUM_BOUNDS 里 —— 清空或越界时不会被拦。
   assert.ok(src.includes("['每几轮记一句', hearEvery, 0, 50]"), '旁听间隔要参与范围校验')

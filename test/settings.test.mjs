@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeConfig, DEFAULTS, inWindow, dateKey, pickWakeTime, updateConfig, loadConfig, biliOn, CARRY_MAX } from '../lib/settings.js'
+import { normalizeConfig, DEFAULTS, inWindow, dateKey, wakeDayKey, windowProblem, pickWakeTime, updateConfig, loadConfig, biliOn, CARRY_MAX } from '../lib/settings.js'
 import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -79,6 +79,30 @@ test('pickWakeTime 落在窗内', () => {
     const t = pickWakeTime(cfg, s)
     assert.ok(t >= 20 * 60 && t <= 23 * 60, `${t}`)
   }
+})
+
+test('windowProblem：合法时段返回空，起止相同说清要全天怎么写', () => {
+  assert.equal(windowProblem(['20:00', '23:00']), '')
+  assert.equal(windowProblem(['22:00', '02:00']), '')
+  assert.match(windowProblem(['08:00', '08:00']), /同一时刻/)
+  assert.match(windowProblem(['08:00', '08:00']), /00:00–23:59/)
+  assert.match(windowProblem(['8:00', '22:00']), /HH:MM/)
+  assert.match(windowProblem(['20:00']), /两个时间/)
+  assert.match(windowProblem('20:00–23:00'), /两个时间/)
+})
+
+test('wakeDayKey：普通窗口按当天，跨零点的凌晨归前一天', () => {
+  const day = { window: ['20:00', '23:00'] }
+  assert.equal(wakeDayKey(day, new Date(2026, 9, 22, 22, 0)), '2026-10-22')
+  assert.equal(wakeDayKey(day, new Date(2026, 9, 23, 0, 30)), '2026-10-23')
+
+  const night = { window: ['22:00', '02:00'] }
+  assert.equal(wakeDayKey(night, new Date(2026, 9, 22, 23, 0)), '2026-10-22')
+  assert.equal(wakeDayKey(night, new Date(2026, 9, 23, 1, 30)), '2026-10-22', '凌晨这一段属于前一天')
+  assert.equal(wakeDayKey(night, new Date(2026, 9, 23, 2, 0)), '2026-10-22', '结束点也算前一天')
+  assert.equal(wakeDayKey(night, new Date(2026, 9, 23, 12, 0)), '2026-10-23')
+
+  assert.equal(wakeDayKey({ window: ['bad'] }, new Date(2026, 9, 23, 1, 30)), '2026-10-23', '坏窗口回退到日历日')
 })
 
 test('dateKey 用本地时区', () => {
