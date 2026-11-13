@@ -47,7 +47,7 @@ function mkFetch({ player, subFails = false } = {}) {
     if (u.includes('/x/frontend/finger/spi')) return reply(SPI)
     if (u.includes('/x/web-interface/nav')) return reply(NAV)
     if (u.includes('/x/player/wbi/v2')) return reply(nextPlayer())
-    if (u.includes('aisubtitle.hdslb.com')) {
+    if (u.includes('aisubtitle.hdslb.com') || u.includes('subtitle.bilibili.com')) {
       if (subFails) throw new Error('boom')
       return reply(BODY)
     }
@@ -165,3 +165,47 @@ test('没有登录凭据时不重问（重问也不会突然给）', async () =>
   assert.equal(r.code, 'NEED_LOGIN')
   assert.equal(f.count('/x/player/wbi/v2'), 1)
 })
+
+// ---------------------------------------------------------------------------
+// issue #138（2026-11-14）：空列表重问、subtitle_url_v2 兜底、人工轨优先
+// ---------------------------------------------------------------------------
+
+test('带凭据、第一次轨道空（偶发）：换钥匙重问一次，第二次有轨就照常读（issue #138）', async () => {
+  resetRisk()
+  const f = mkFetch({
+    player: [
+      playerWith([]), // need_login_subtitle 不存在 = 不是登录问题，就是偶发空
+      playerWith([{ lan: 'zh-CN', subtitle_url: '//aisubtitle.hdslb.com/bfs/subtitle/cc.json' }]),
+    ],
+  })
+  const c = createClient(base(f, { cookie: 'SESSDATA=x; buvid3=U3; buvid4=U4' }))
+  const r = await c.subtitle('BV1xx411c7mD', 43549657310)
+  assert.equal(r.ok, true, '偶发空不该被当成「这条没有字幕」')
+  assert.equal(f.count('/x/player/wbi/v2'), 2, '只重问一次')
+})
+
+test('subtitle_url 取不到时退 subtitle_url_v2（issue #138）', async () => {
+  resetRisk()
+  const f = mkFetch({
+    player: playerWith([{ lan: 'ai-zh', subtitle_url_v2: '//subtitle.bilibili.com/bfs/ai_subtitle/v2.json' }]),
+  })
+  const c = createClient(base(f))
+  const r = await c.subtitle('BV1xx411c7mD', 43549657310)
+  assert.equal(r.ok, true)
+  assert.ok(f.find('subtitle.bilibili.com'), 'fallback 地址真的去取了')
+})
+
+test('人工字幕排在 AI 前面：机器识别的错字不进她引用的原文（issue #138）', async () => {
+  resetRisk()
+  const f = mkFetch({
+    player: playerWith([
+      { lan: 'ai-zh', subtitle_url: '//aisubtitle.hdslb.com/bfs/subtitle/ai.json' },
+      { lan: 'zh-CN', subtitle_url: '//aisubtitle.hdslb.com/bfs/subtitle/cc.json' },
+    ]),
+  })
+  const c = createClient(base(f))
+  const r = await c.subtitle('BV1xx411c7mD', 43549657310)
+  assert.equal(r.ok, true)
+  assert.match(f.find('aisubtitle.hdslb.com').url, /cc\.json$/, '人工轨优先，AI 轨不再默认先读')
+})
+
