@@ -387,11 +387,11 @@ test('trimToolDocs：她手上一个搜索工具都没有 → 摘掉那段搜索
     ],
     tools: [{ name: 'her_recall' }, { name: 'bili_look' }],
   })
-  assert.deepEqual(out.sections.map((s) => s.name), ['fish:identity', 'harness:identity'])
+  assert.deepEqual(out.sections.map((s) => s.name), ['fish:identity'])
   const rep = lastTrimReport()
-  assert.equal(rep.dropped.length, 1)
-  assert.equal(rep.dropped[0].name, 'free-search:engines')
-  assert.equal(rep.saved, SEARCH_DOC.length)
+  assert.equal(rep.dropped.length, 2, '搜索说明 + 宿主身份行，都是讲别人的')
+  assert.deepEqual(rep.dropped.map((d) => d.name), ['free-search:engines', 'harness:identity'])
+  assert.equal(rep.saved, SEARCH_DOC.length + '你是 coding agent'.length)
 })
 
 test('trimToolDocs：她手上有其中一个工具 → 整段留着（讲的是她够得着的东西）', () => {
@@ -447,14 +447,14 @@ test('trimToolDocs：名字认得出的「别的插件的说明」短也照摘�
         { name: 'tool:beauticode', order: 160, text: 'beautiCode 可以把本机图片设为 Harness 页面背景。' },
         { name: 'genui:fence', order: 300, text: '用 dsh-ui 围栏渲染界面，组件名见 genui skill。'.repeat(50) },
         { name: 'dsh:auto-memory-pre-rules', order: 320, text: '记忆系统固定纪律：每轮必须 memory_log。'.repeat(30) },
-        { name: 'harness:identity', order: 0, text: 'You are an AI agent.' },
+        { name: 'harness:identity', order: 0, text: 'You are an AI agent powered by DeepSeek Harness.' },
       ],
     },
     { tools: ['her_recall'] },
   )
-  assert.deepEqual(out.sections.map((s) => s.name), ['harness:identity'], '宿主那一行身份声明永远留着')
+  assert.deepEqual(out.sections, [], '宿主那一行身份声明也不再进她的提示词（2026-11-14 用户要求）')
   const names = lastTrimReport().dropped.map((d) => d.name).sort()
-  assert.deepEqual(names, ['dsh:auto-memory-pre-rules', 'genui:fence', 'tool:beauticode'])
+  assert.deepEqual(names, ['dsh:auto-memory-pre-rules', 'genui:fence', 'harness:identity', 'tool:beauticode'])
   assert.ok(lastTrimReport().saved > 2000)
 })
 
@@ -534,10 +534,11 @@ test('reorderForHer 连带摘段：同一份 assembly，工具表不同结果不
   assert.deepEqual(noTools.sections.map((s) => s.name),
     ['harness:identity', 'fish:identity', 'free-search:engines'])
   const otherTools = reorderForHer(make([{ name: 'her_recall' }]))
-  assert.deepEqual(otherTools.sections.map((s) => s.name), ['harness:identity', 'fish:identity'])
+  // 2026-11-14：harness:identity 那一行是宿主的产品介绍，不是她的自我陈述，按名字一律摘掉
+  assert.deepEqual(otherTools.sections.map((s) => s.name), ['fish:identity'])
   const withTools = reorderForHer(make([{ name: 'web_fetch' }]))
   assert.deepEqual(withTools.sections.map((s) => s.name),
-    ['harness:identity', 'fish:identity', 'free-search:engines'])
+    ['fish:identity', 'free-search:engines'])
 })
 
 test('attachAssembleFix：挂在 agent.ctx 上（不是全局），拿到 next() 的结果再整改', async () => {
