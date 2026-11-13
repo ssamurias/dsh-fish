@@ -71,3 +71,33 @@ test('拿 buvid 失败：请求照发，10 分钟内不再重试 spi（不让请
   await c.view('BV1xx411c7mD')
   assert.equal(f.count('/x/frontend/finger/spi'), 2)
 })
+
+test('签名接口不会把同一个 buvid3 发两遍（重复的会被服务端当成匿名设备）', async () => {
+  resetRisk()
+  const calls = []
+  const f = async (url, init = {}) => {
+    const u = String(url)
+    calls.push({ url: u, cookie: init.headers?.cookie ?? '' })
+    const body = u.includes('/x/frontend/finger/spi')
+      ? SPI
+      : u.includes('/x/web-interface/nav')
+        ? {
+            code: 0,
+            data: {
+              wbi_img: {
+                img_url: 'https://i0.hdslb.com/bfs/wbi/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png',
+                sub_url: 'https://i0.hdslb.com/bfs/wbi/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png',
+              },
+            },
+          }
+        : { code: 0, data: { subtitle: { subtitles: [] } } }
+    const text = JSON.stringify(body)
+    return { status: 200, text: async () => text, json: async () => body }
+  }
+  const c = createClient(base(f, { cookie: 'buvid3=MINE; buvid4=MY4; SESSDATA=x' }))
+  await c.subtitle('BV1xx411c7mD', 2)
+  const player = calls.find((x) => x.url.includes('/x/player/wbi/v2'))
+  assert.equal((String(player.cookie).match(/buvid3=/g) ?? []).length, 1)
+  assert.match(player.cookie, /buvid3=MINE/)
+  assert.doesNotMatch(player.cookie, /BUVID3-TEST/)
+})

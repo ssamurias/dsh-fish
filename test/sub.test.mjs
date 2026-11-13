@@ -304,3 +304,40 @@ test('登录过期的提示要把字幕也算进去（网页文案）', async ()
   assert.match(src, /查不了字幕/)
   assert.match(src, /AI 字幕要登录/)
 })
+
+test('字幕要登录才给、而登录还有效：说清是接口没给轨道，不赖用户', async () => {
+  await withRoot(async (root) => {
+    const client = fakeClient({
+      subtitle: async () => ({ ok: false, code: 'NEED_LOGIN', data: [] }),
+      whoami: async () => ({ ok: true, isLogin: true, uname: 'u', mid: 1 }),
+    })
+    const r = await subOnce({ bvid: BVID, client, root, cfg: {} })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /没把这条的字幕轨给这次请求/)
+    assert.doesNotMatch(r.note, /登录过期/)
+  })
+})
+
+test('字幕要登录才给、登录已经过期：直说 cookie 过期了', async () => {
+  await withRoot(async (root) => {
+    const client = fakeClient({
+      subtitle: async () => ({ ok: false, code: 'NEED_LOGIN', data: [] }),
+      whoami: async () => ({ ok: true, isLogin: false, uname: '', mid: 0 }),
+    })
+    const r = await subOnce({ bvid: BVID, client, root, cfg: {} })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /登录过期/)
+  })
+})
+
+test('轨道有、正文没拉下来：说清是正文没拉到，不是没有字幕', async () => {
+  await withRoot(async (root) => {
+    const client = fakeClient({
+      subtitle: async () => ({ ok: false, code: 'SUB_FETCH', data: [] }),
+    })
+    const r = await subOnce({ bvid: BVID, client, root, cfg: {} })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /正文没拉下来/)
+    assert.doesNotMatch(r.note, /本来就没有字幕轨/)
+  })
+})

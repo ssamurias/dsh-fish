@@ -1,5 +1,38 @@
-## 1.0.0 — 2026-11-13
+## 1.0.1 — 2026-11-13
 
+- **`bili_sub` 不再把「没登进去」「风控没放行」「真没字幕」都说成同一句（外部反馈，2026-11-13；真机 dsh-fish 1.0.0）。** 反馈里六条视频（含 BV18mWw6HE79）全都回「没取到字幕：这条可能本来没有字幕，也可能 B 站登录过期了」；对方 `whoami` 是 `isLogin: true`、`bili_look` 也正常，说明不是 cookie 过期。真机上 `/x/player/wbi/v2` 返回的是 `code: 0` 加 `data.subtitle.subtitles: []`，而同一个响应里 `need_login_subtitle: true`——B 站是「静默降级」：既不给轨道，也不报错，`code: 0` 让旧的 `-412` 重签逻辑根本轮不到。于是三件事分开说：
+  - **失败码分三种**：`NEED_LOGIN`（接口明确说这条要登录才给字幕轨）/ `NO_SUB`（登录着、但这条真没有轨道）/ `SUB_FETCH`（轨道地址拿到了，正文没拉下来）。`lib/bili.js` 的 `subtitle()` 先看 `need_login_subtitle`，再看轨道数组；`lib/sub.js` 新增 `subtitleFailNote(s, { loggedIn })`，只有 NEED_LOGIN 时才多问一句 `whoami()`，区分「cookie 还在但不认了」和「登录有效、这次请求没被认成登录（设备指纹/风控没放行）」。三条话都不一样，她也不会再把风控问题说成「这条没有」。
+  - **请求改成浏览器播放器的样子**：`/x/player/wbi/v2` 与字幕正文都带 `referer: https://www.bilibili.com/video/<bvid>`；原来发给 `www.bilibili.com/` 首页，和播放器现场不一致，容易被降级。
+  - **协议相对地址补齐**：`subtitle_url` 是 `//aisubtitle.hdslb.com/...` 时原来因为 `!startsWith('http')` 被当成「没有地址」丢掉，现在 `absSubUrl()` 补成 `https://` 再取。
+  - **同一份 `buvid3` 不重复发**：`cookieHeader()` 原来把自己拿的匿名 `buvid3`/`buvid4` 排在用户 cookie 前面，用户 cookie 里也带 `buvid3` 时请求里就有两个，服务端按第一个（匿名设备）认人——登录态等于白挂。现在用户 cookie 已有同名项时不重复追加；`ensureBuvid()` 也先看一眼用户 cookie，**`buvid3` 和 `buvid4` 缺哪个补哪个**（浏览器两个都发，只补一个仍和现场不一致）。**2026-11-13 本机实测：登录态小号下，「两个 `buvid3`」与「一个 `buvid3`」拿到的轨道完全一样（6 条里 4 条有 `ai-zh`，正文都拉得下来），所以它不是这次反馈的根因，只是请求头卫生。**
+  - **带登录凭据却被说「要登录」时，换一把 wbi 钥匙再问一次**：`subtitle()` 只在「手里有 cookie + `need_login_subtitle: true` + 轨道为空」时强制刷新 wbi 密钥重问，第二次还空才报 `NEED_LOGIN`。换钥匙不会让风控放行，但请求签名跟钥匙绑着，旧钥匙是这条路上唯一可能「看起来不对」的东西，代价只有一次请求。
+  - **参考了谁、学没学到东西**：yt-dlp、`bilibili-api-python`（`dsh-bili-scroll` 用的就是它）、`bilibili-subtitle-downloader` 走的都是同一个 `/x/player/wbi/v2`，没有第二条能拿到 AI 字幕的端点；真正的差别只有三处——**cookie 完整度**（扫码登录要给全量 cookie，而不是手抄六个名字）、**账号新鲜度**、以及**拿不到字幕时改用本地转写**（`dsh-bili-scroll` 装 Whisper，约 1GB）而不是换接口。前两处这版已经对齐，第三处不做：大肥鱼零依赖，也不该为了字幕把宿主拖进一个模型。
+  - **反馈者的响应说明了真正的问题在哪**：他那边同一条视频（BV18mWw6HE79）在本机登录态下有 `ai-zh`、1446 句，而他拿到的是空数组 + `need_login_subtitle: true`——也就是说，那次请求在 B 站眼里**不是登录状态**，尽管 `whoami` 是 `isLogin: true`。`whoami` 走 `/x/web-interface/nav`，字幕走 `/x/player/wbi/v2`，两条路对 cookie 的要求不一样；1.0.1 起至少会把这种情况明确说成「登录有效但没被放行」，不再说成「这条没有字幕」。
+  - **本机核对的旁证**：反馈里六条视频，登录态下 4 条有 `ai-zh`（BV18mWw6HE79 / BV1xoWi6VEQi / BV1V7WY6VEWg / BV1GsWv6jErZ），2 条确实没有轨道（BV1ETWv6ZEHi / BV1ZhWo6DEvt）。所以「全部都没有」这件事本身就指向请求侧，而不是视频侧。
+  - **不做的事**：不用未签名的 `/x/player/v2` 兜底。社区脚本记过它被风控时会返回「合法但属于另一条视频」的字幕——拿错内容比拿不到更糟。
+  - 测试：新增 `test/bili-subtitle.test.mjs` 8 条（协议相对地址、两处 referer、`en` 排在前面也先读 `ai-zh`、空轨道 + `need_login_subtitle` → `NEED_LOGIN`、空轨道 + false → `NO_SUB`、正文拉不下来 → `SUB_FETCH`、有凭据时换钥匙重问一次并成功、没凭据时不重问），`test/sub.test.mjs` 补 3 条（登录过期 / 登录有效但被风控 / 正文没拉下来，话不混），`test/bili-buvid.test.mjs` 补 1 条（签名接口只发一个 `buvid3`）；全量 **2492 pass / 0 fail**。
+
+- **主人 @ 她的正文现在先递进会话、再叫醒；「便条」那句话也不再指向 `her_note` 那叠（issue #136 A，2026-11-13；真机 dsh-fish 1.0.0，`at.ownerWake=true`）。** 真机现场：14:15:53 消息中心那条 @ 记进了 `heard`，同一秒日志说「已经叫醒」，可正文一直排在 `session-notes.json` 里，两分钟后仍未投递；她醒来第一句是「没找到那句话」，还照着「便条」二字去翻了 `notes.json`（她自己那叠纸条），里面只有一张 12-09 的旧纸条。
+  - **根因是顺序**：`lib/scheduler.js` 的 @ 那条路先 `queueNote`、再 `wakeForMentions`，`woke.ok` 为真就跳过 `deliverQueued`——正文要等这条会话重开才补进去，而叫醒消息已经把「那句话放在便条里」说出口了。同一套 `queueNote` + `deliverQueued` 在「别人回她」那条路上是「递完再叫」，只有 @ 这条路漏。
+  - **改法**：抽出 `deliverMentions({...})`：先投递、再判要不要叫醒；她正忙 / 非主人 @ / 设置里关掉 `at.ownerWake` 时仍只递不叫；投递抛错不挡叫醒（正文还在队列里，下次补）。
+  - **话术改掉**：叫醒文案不再说「便条」，改成「那句话就在你上面那条消息里」——插件里「便条」专指 `her_note`，用它指 `session-notes.json` 就是让她翻错地方。
+  - 测试：`test/mentions-deliver.test.mjs` 5 条（先递后叫且叫醒成功不跳过投递 / 忙时只递 / 关掉叫醒与非主人 @ 只递 / 没开会话什么都不做 / 投递抛错照常叫醒）。
+
+- **`bili_look(what=replies)` 不再把「没人回」「没发过评论」「查不成」合成一句 -412（issue #136 B，2026-11-13）。** 真机现场：日志里当天一次 -412 都没有，`at.backoffUntil` 是空串，她却拿到「你最近没在谁的评论下面被人回过——也可能是我这边还查不到（B 站这会儿回了个 -412）」。她自己的说明比报告更准：「同一句话既可能意思是「没人回你」，也可能是「查不成」……我会把这种话读成「确实没有」，然后据此下结论——今晚这么干过一次，错了两天。」
+  - **根因两处**：`lib/look.js` 只要结果为空就缀上 -412；`lib/comment.js` 的 `readMyReplies` 里 `if (!r.ok) continue` 把 `-412 / -352 / -509 / NOT_LOGIN / NETWORK` 全变成空列表，上层拿不到任何依据。
+  - **`readMyReplies` 增加可选 `diag` 输出口**（`{ off, days, roots, failed, unresolved }`）：不传就一点不多算，老调用方行为不变；注释里也写明它**只翻她自己发过的评论楼**，不是消息中心。
+  - **`lib/look.js` 新增 `repliesMissNote(diag, { bvid })`**，按事实分句：关网 / 真收到风控码（-412、-352、-509）/ `NOT_LOGIN` / `NETWORK` / 最近没发过评论 / 有几条没查成 / 视频详情没打开（分不清）——最后一种直说「分不清」，不再替她说「没有人回你」。
+  - **工具描述补一句**：「别人在 B 站 @ 你，不在这个工具里——那时候那条内容会直接递进你的会话。」省得她拿「看回复」去找一条 @，再把找不到归给风控。
+  - 测试：`test/look-video.test.mjs` 4 条（没发过评论不编 -412 / 真没人回 / 真 -412 / 分不清时直说分不清）。
+
+- **评论区的顺序不再糊弄：`[热评 N]` 改成 `[评论 N 赞]` 并写明是热度序，置顶评论也读进来了，「不同意见」真按赞挑（issue #135，2026-11-13）。** 真机现场：13:38 的素材里 `[热评 28]` 后面跟着 `[热评 54]`，13:39 她说「热评第一句是『我求求了，别整这个技术了』」——那是第二条，也不是赞最多的那条。实测 `/x/v2/reply?...&sort=2` 的赞数是 `30 / 55 / 44 / 348 / 14 / 6 / 7 / 27 / 234 / 55`：`sort=2` 是 B 站**热度序**，赞数并不单调，而代码注释从 0.9.8 起就写着「按赞排」。
+  - **标签改成陈述而不是排序**：`lib/browse.js` 渲染成 `[评论 55 赞]`，并在评论下面补一行「（这些评论按 B 站的热度排，不是按赞数排）」；置顶那条单独一行 `[置顶评论 N 赞]`。
+  - **置顶真的去读了**：`lib/bili.js` 的 `replies()` 现在同时看 `data.top` / `data.upper.top`（返回 `top`，带 `pinned: true`，已经出现在 `replies` 里的不重复），`absorb` 把它们放进 `pinned`，`renderItem` 单独标出来——原来她看到的评论区比网页少一条。
+  - **反例取法不再靠位置**：`pickDisputes` 真的按点赞降序排（注释里从 0.9.8 就写了这句，代码一直是照顺序取）；`absorb` 从「还没摆到她眼前的那些」里挑，不再按 `slice(nComments)` 切尾部——位置在热度序里没有含义。
+  - 两处写错的注释（`lib/browse.js` 顶部与深读那里）一并改成热度序。
+  - 测试：`test/browse.test.mjs` 新增 1 条（置顶单独读出来 + `[置顶评论 400 赞]` + 顺序说明），`test/material.test.mjs` 新增 1 条（传进来乱序也按赞数挑）；全量 **2502 pass / 0 fail**。
+
+## 1.0.0 — 2026-11-13
 - **QQ 桥上说的话不会再被悄悄吞掉：桥登记过的 requestId 现在先于插件前缀认（外部反馈，2026-11-13；真机 dsh-fish 0.9.9 + QQ 桥）。** 真机现象：11-10 起在 QQ 上跟她说的话既没进 `heard`、也没涨轮数、也没算「他来过」——她那边看，他像是整周没露面。根因是一条判据的先后：`lib/turns.js` 的 `classifyMessage` 里，`PLUGIN_RPC` 前缀表（`wake|say|boot|…|sys|…`，其中 `sys` 是 0.9.1 为挡宿主机器回合加的）排在「桥有没有登记过这个 rpcId」前面，而那个桥给消息编的 id 恰好是 `sys-` 开头。于是桥前一步刚登记的来历永远轮不到，消息被判成 `'plugin'`，在 `session/event` 监听里被 `cls !== 'human'` 直接 return——连一行「认不出来源」的日志都没有（那条日志只发给 `'unknown'`）。`sys-` 当初是为了不让群友的话被当成他说，方向是对的，代价落在记忆上。
   - **改法**：`declaredFor(rid)` 提到前缀判断**之前**。登记是更窄的判据（里面只有桥自己报上来的 id），不会把宿主的机器回合放进来；没登记的 `sys-…` 仍按插件消息丢掉。
   - 判据顺序现在是：场次 → guest → 机器 kind/form → **登记** → 插件前缀 → `kind:'user'` → 默认人。

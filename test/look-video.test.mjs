@@ -273,11 +273,52 @@ test('what=replies：读她自己评论下面的回复，并给出回楼中楼�
   })
 })
 
-test('what=replies：没人回时给一句人话，不吐堆栈', async () => {
+test('what=replies：没发过评论时说「没发过评论」，不编一个 -412', async () => {
   await withRoot(async (root) => {
     const r = await lookOnce({ what: 'replies', root, client: fakeClient(), cfg: normalizeConfig({}), events: [] })
     assert.equal(r.ok, false)
-    assert.match(r.note, /没在谁的评论下面被人回过/)
+    // 2026-11-13（issue #136 B）：原来这里不分青红皂白缀一句 -412，日志里一次都没有。
+    assert.match(r.note, /没在 B 站发过评论/)
+    assert.doesNotMatch(r.note, /-412/)
     assert.deepEqual(r.picks, [])
+  })
+})
+
+test('what=replies：发过评论但下面没人说话，就直说没人回', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    const { appendEvent } = await import('../lib/store.js')
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1xx411c7mD 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    const c = fakeClient({ subReplies: async () => ({ ok: true, data: [] }) })
+    const r = await lookOnce({ what: 'replies', root, client: c, cfg: normalizeConfig({}) })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /还没有人说话/)
+    assert.doesNotMatch(r.note, /-412/)
+  })
+})
+
+test('what=replies：分不清时不硬说「没人回」，直说这次没查成', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    const { appendEvent } = await import('../lib/store.js')
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1xx411c7mD 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    // 详情拿不到 aid → 这条根本没查成
+    const c = fakeClient({ view: async () => ({ ok: false, code: -404, data: null }) })
+    const r = await lookOnce({ what: 'replies', root, client: c, cfg: normalizeConfig({}) })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /分不清/)
+    assert.doesNotMatch(r.note, /还没有人说话/)
+  })
+})
+
+test('what=replies：真被风控回 -412 时才提 -412', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    const { appendEvent } = await import('../lib/store.js')
+    await appendEvent({ type: 'meta', text: `comment:${dk} BV1xx411c7mD 111` }, { day: 1, stage: 1, source: 'system' }, root)
+    const c = fakeClient({ subReplies: async () => ({ ok: false, code: -412, message: '风控校验失败' }) })
+    const r = await lookOnce({ what: 'replies', root, client: c, cfg: normalizeConfig({}) })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /-412/)
   })
 })

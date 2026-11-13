@@ -113,6 +113,31 @@ test('absorb：详情/标签/热评/弹幕各取各的，一项失败不影响�
   assert.equal(p.blocked, undefined)
 })
 
+test('absorb：置顶评论单独读出来、标成置顶，顺序说明也跟着给出', async () => {
+  // 2026-11-13（issue #135）：置顶在 data.top / data.upper.top，不跟 replies 一起回来。
+  // 不读的话，她看到的评论区和网页上不是同一组。
+  const cfg = normalizeConfig({ browse: { deepRead: 2, danmaku: 0 } })
+  const c = fakeClient({
+    replies: async () => ({
+      ok: true,
+      data: [
+        { text: '普通一', like: 30 },
+        { text: '普通二', like: 55 },
+        { text: '我不同意，这里说错了', like: 4 },
+      ],
+      top: [{ text: 'UP 主把置顶写在这里', like: 400 }],
+    }),
+  })
+  const p = await absorb(c, v(), cfg)
+  assert.deepEqual(p.comments.map((x) => x.text), ['普通一', '普通二'])
+  assert.deepEqual(p.pinned.map((x) => x.text), ['UP 主把置顶写在这里'])
+  assert.equal(p.pinned[0].pinned, true)
+  const s = renderItem(p, 0)
+  assert.match(s, /\[置顶评论 400 赞\] UP 主把置顶写在这里/)
+  assert.match(s, /\[评论 30 赞\] 普通一/)
+  assert.match(s, /不是按赞数排/)
+})
+
 test('absorb：标签命中黑名单 → blocked（第二次过滤）', async () => {
   const cfg = normalizeConfig({ avoid: { keywords: ['鬼畜'] } })
   const c = fakeClient({ tags: async () => ({ ok: true, data: ['鬼畜', '音乐'] }) })
@@ -129,7 +154,7 @@ test('renderItem 只有事实，没有评价词', () => {
   assert.match(s, /〔1〕BV1xx411c7mD/)
   assert.match(s, /2分05秒/)
   assert.match(s, /标签：标签A/)
-  assert.match(s, /热评 9/)
+  assert.match(s, /评论 9 赞/)
   assert.match(s, /1:05 弹幕/)
   for (const w of ['好看', '推荐', '值得', '有意思']) assert.ok(!s.includes(w), `不该出现评价词：${w}`)
 })

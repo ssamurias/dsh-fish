@@ -62,6 +62,18 @@ test('pickDisputes：按序取、最多两条、同一句不重复', () => {
   assert.equal(pickDisputes([]).length, 0)
 })
 
+test('pickDisputes：真的按赞数排，不是照传进来的顺序取', () => {
+  // 2026-11-13（issue #135）：传进来的是 B 站热度序（赞数不单调），
+  // 注释从 0.9.8 起就说「按点赞降序」，代码却照顺序取。
+  const hotOrder = [
+    { text: '我不同意这个说法', like: 5 },
+    { text: '这不靠谱', like: 300 },
+    { text: '其实还行', like: 900 },
+  ]
+  const got = pickDisputes(hotOrder, { max: 2 })
+  assert.deepEqual(got.map((x) => x.text), ['这不靠谱', '我不同意这个说法'])
+})
+
 test('toMaterial：一条素材就是 source / key / at / 原话 / 能不能核对', () => {
   const m = toMaterial({
     video: v(), desc: '这是简介', pubdate: 1700000000000,
@@ -140,7 +152,7 @@ test('renderItem：简介标明是 UP 主自己写的，不同意见单独一行
     danmaku: [{ t: 65, text: '弹幕' }],
   }, 0)
   assert.match(s, /简介（UP 主自己写的）：简介文字/)
-  assert.match(s, /\[热评 9\] 热评/)
+  assert.match(s, /\[评论 9 赞\] 热评/)
   assert.match(s, /\[不同意见 3\] 我不同意这个说法/)
   for (const w of ['好看', '推荐', '值得', '有意思']) assert.ok(!s.includes(w))
 })
