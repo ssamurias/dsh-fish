@@ -8,6 +8,13 @@
   - **升级自愈**：0.9.9 及以前的 `home.json` 没有 `rotatedTo`。`bootstrapHome` 在就绪后补一次：有 `rotatedAt`、没有 `rotatedTo`、而 `wokeFor` 仍指着轮换建出来的那条（`≠ sessionId`）时，把 `rotatedTo` 补上并记一行日志；已有 `rotatedTo` 的安装什么都不做。只补记录、不搬屋子——他可能还坐在旧窗口里。
   - 测试：`test/turns.test.mjs` 新增 2 条（真机时间线重放：先回旧窗口、再搬新房间，家跟到新房间且轮数 1→2；`rotatedTo` 隔三小时说话仍认、carry 不丢），`test/home.test.mjs` 新增 1 条（升级自愈只补 `rotatedTo`、不搬屋子、补过的不被后来的唤醒改掉），`test/rotate-race.test.mjs` 补 `rotatedTo` 落盘与 `homeStatus` 暴露的断言；全量 **2476 pass / 0 fail**。
 
+- **会话刚建出来那 17 毫秒里不再写便条：写了会把整条会话的历史弄坏（外部事故报告，2026-11-13；真机 dsh-fish 0.9.9 + 宿主 0.2.2-rc.1）。** 真机事故：01:30:52.658 会话 `session-d3881b6b…` 建出来，**17 毫秒后**插件的便条就 append 了一条 `user/message`；01:30:54.803 宿主才写系统头 `system/message`。之后这条会话再也打不开——`历史加载失败：stored session "…" is corrupt: … SessionFormatError: system/message requires a protected first surface head`。宿主 0.2.x 的 v4 格式要求 **surface 的第一个节点必须是系统头**（那条头要等第一轮开始才由宿主写），便条抢在它前面，读盘校验就一路拒。
+  - **根因在调用时机，不在便条内容**：`lib/identity.js` 在 `agent/created` 里调 `deliverQueued`——会话刚建、第一轮还没跑就投递。而**宿主的写入侧根本不拦这条**（`Session.append()` 没有保护头检查，只有 v4 读取校验会拒），所以坏日志是静默写进去的，要等下一次打开才炸。
+  - **`lib/sessionnote.js` 新增 `headWritten(session)`，`appendNote` 先问一句**：按 `session.log` → `session.snapshotEvents()` → `session.surface.nodes.length > 0` 的顺序看系统头写过没有；**没写过就不写**，回 `{ok:false, why:'这条对话还没跑过第一轮，先不写（写了会让整条历史打不开）'}`。便条原样留在 `session-notes.json`，等这条会话跑过一轮、或下次打开时 `deliverQueued` 再补（投进去了才删，不丢）。
+  - **看不出来时放行**：三样都读不到就返回 `null`、照写。v4 的保护头要求是 0.2.x 才有的，读不到事件流的宿主基本更早，那时先写 `user/message` 不算坏——旧宿主与测试里的老 agent 形状不受影响。
+  - **只动 `appendNote`**：`lib/compact.js` 的重排只作用于已有 surface 区段，`lib/possess.js` 的归还便条只在她有历史的会话里出现，都不在这个竞态里。
+  - 测试：`test/sessionnote.test.mjs` 新增 3 条（没有系统头时不写、surface 空/非空两条判据；会话形状看不出来时照写；`deliverQueued` 新会话先不投、跑完一轮再补上且文件清空），`fakeAgent` 默认带一条 `system/message`（真机上第一轮之后的会话就是这样）；真机损坏的那条历史由报告者用宿主 `restoreReleasedV4Artifact` 校验后已修复（1610→1608 事件、137 轮完好），**本次改动只防再犯，不碰已存盘的历史**。全量 **2479 pass / 0 fail**。
+
 - **她看过的视频里那几句原话，现在能翻到了（用户 m05089，2026-11-13）。** 以前看过就只剩一行标题：她知道「看过这条」，但视频里谁说了哪一句，第二天翻不到。现在每次真正看见的那一趟（`looked`，安静刷那趟不算）会多落一行 `mat:bili:<bvid> {"t":标题,"d":日期,"q":[{谁,哪句}]}`——**只记原话，最多三句，每条截到 120 字**；不记简介全文、不记弹幕、不记整页字幕。同一视频只记一次；`her_recall` 翻得到，读出来是「你在 11 月 13 日看过《…》，里面有一句：「…」」，不念机器写法。60 天内的进 `model.materials`（最多 30 条），「纠正鱼八股」的素材池里也多一档「你看过的一句话」——比标题更能被引。
   - 为什么只存原话：正文进事件流会让 `events.jsonl` 变成第二个素材库，噪声也大；而她要引的本来就只有「谁说的、哪一句」。
   - 测试：新增 `test/material-index.test.mjs` 5 条；全量 **2473 pass / 0 fail**。

@@ -15,8 +15,13 @@ function tmp() {
   return mkdtempSync(join(tmpdir(), 'fish-note-'))
 }
 
-/** 一条活着的会话：append 记下来，别的不管。 */
-function fakeAgent({ id = 'session-home', cwd = '' } = {}) {
+/**
+ * 一条活着的会话：append 记下来，别的不管。
+ *
+ * 默认带一条 `system/message`（第一条消息写进来之后会话就是这样：系统头已经在位）；
+ * 传 `events: []` 就是「刚建出来、第一轮还没跑」——见文件末尾那两条。
+ */
+function fakeAgent({ id = 'session-home', cwd = '', events = [{ type: 'system/message' }] } = {}) {
   const written = []
   return {
     written,
@@ -26,7 +31,7 @@ function fakeAgent({ id = 'session-home', cwd = '' } = {}) {
         written.push({ type, data, opts })
         return { ok: true }
       },
-      snapshotEvents: () => [],
+      snapshotEvents: () => events,
     },
     ctx: {
       systemPrompt: { section: () => () => {} },
@@ -287,6 +292,65 @@ test('queueNote：同时排几句、排的时候正好在投，一句都不丢',
     ])
     assert.equal(d.delivered, 6)
     assert.deepEqual(queuedTexts(root), ['投的时候才排进来的一句'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ── 2026-11-13：会话刚建出来、第一轮还没跑就往里写 user/message，会把整条历史弄坏 ──
+// 宿主 0.2.x 的 v4 格式要求第一个 surface 节点是 system/message（那条系统头要等第一轮
+// 开始才写）；便条抢在它前面写进去，之后读盘就抛
+// `SessionFormatError: system/message requires a protected first surface head`，
+// 整条会话打不开。真机事故见 CHANGELOG 1.0.0。
+
+test('appendNote：会话还没有第一轮（没有系统头）时不写，留着以后补', () => {
+  // ① 能读到事件流：一条 system/message 都没有
+  const blank = fakeAgent({ events: [] })
+  const r = appendNote(blank, '这条对话还给你。')
+  assert.equal(r.ok, false)
+  assert.match(r.why, /第一轮/)
+  assert.equal(blank.written.length, 0)
+
+  // ② 读不到事件流、只有 surface：nodes 为空同样说明头还没写
+  const said = []
+  const viaSurface = {
+    session: { header: { id: 'x' }, append: (...a) => said.push(a), surface: { nodes: [] } },
+  }
+  assert.equal(appendNote(viaSurface, '还给你。').ok, false)
+  assert.equal(said.length, 0)
+
+  // ③ 头写过之后照常写（nodes 非空就是「头已经是第一个节点」）
+  const done = {
+    session: { header: { id: 'x' }, append: (...a) => said.push(a), surface: { nodes: [1] } },
+  }
+  assert.equal(appendNote(done, '还给你。').ok, true)
+  assert.equal(said.length, 1)
+})
+
+test('appendNote：会话形状看不出来时照写（老宿主没有这条规矩）', () => {
+  const said = []
+  const unknown = { session: { header: { id: 'x' }, append: (...a) => said.push(a) } }
+  assert.equal(appendNote(unknown, '还给你。').ok, true)
+  assert.equal(said.length, 1)
+})
+
+test('deliverQueued：新会话还没跑第一轮时先不投，跑完再补上（不丢）', async () => {
+  const root = tmp()
+  try {
+    await queueNote(root, '这趟里我不认这几条：…')
+    const blank = fakeAgent({ events: [] })
+    const d1 = await deliverQueued(blank, root, { home: true })
+    assert.equal(d1.delivered, 0)
+    assert.equal(blank.written.length, 0)
+    assert.equal(queuedTexts(root).length, 1, '没投进去就还留着')
+
+    // 跑过一轮了：系统头在位，这句补上，文件清空
+    const alive = fakeAgent()
+    const d2 = await deliverQueued(alive, root, { home: true })
+    assert.equal(d2.delivered, 1)
+    assert.equal(alive.written.length, 1)
+    assert.match(alive.written[0].data.content[0].text, /不认这几条/)
+    assert.deepEqual(queuedTexts(root), [])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
