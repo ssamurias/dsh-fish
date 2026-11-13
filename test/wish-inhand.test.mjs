@@ -32,6 +32,16 @@ const READ_IMAGE_WISH = '想要一个能看图的工具'
 const IMAGE_GEN_WISH = '想要一个能画图的工具'
 const SEARCH_WISH = '想要一个能上网搜东西的工具'
 
+/**
+ * 冷会话的 tick 不该被「定时醒来」抢戏：这个文件关心的是「劲儿」和「桌子」。
+ * 把当天落点钉在 23:58（测试钟 21:00），ensureSchedule 就会沿用，不会当场醒。
+ */
+const pinFutureSchedule = (root) => appendEvent(
+  { type: 'meta', text: `sched:2026-11-07 ${new Date('2026-11-07T23:58:00+08:00').toISOString()}` },
+  { day: 0, stage: 1, source: 'timer' },
+  root,
+)
+
 /** 插件 ctx：只要 agent/created 能挂、能发。 */
 function pluginCtx() {
   const ls = []
@@ -226,6 +236,7 @@ test('只有这一张还没到手的卡：劲儿照算，主动回合照开，�
   await withHer({ host: OWN_ONLY }, async (root) => {
     // 十个小时前开的卡，之后一直安静
     await wish(root, { text: READ_IMAGE_WISH, subject: 'read_image', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
+    await pinFutureSchedule(root)
     const h = fakeHost()
     const logs = []
     const s = startScheduler(h.ctx, { root, log: (...a) => logs.push(a.join(' ')) })
@@ -248,6 +259,7 @@ test('冷会话：已经到手的那张卡不单独推她开主动回合（issue
   await withHer({ allow: ['web_search'], host: [...HER_TOOLS, 'web_search'], cold: true }, async (root, { warm, sent }) => {
     await wish(root, { text: SEARCH_WISH, subject: 'web_search', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
     assert.equal(sent.length, 0, '前提：她的 agent 还没建，收窄还没下')
+    await pinFutureSchedule(root)
     const h = fakeHost({ onResolve: warm })
     const logs = []
     const s = startScheduler(h.ctx, { root, log: (...a) => logs.push(a.join(' ')) })
@@ -277,6 +289,7 @@ test('冷会话、宿主上没有 read_image：叫醒的桌上照摆；核实之
   await withHer({ host: OWN_ONLY, cold: true }, async (root, { warm, sent }) => {
     await wish(root, { text: READ_IMAGE_WISH, subject: 'read_image', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
     assert.equal(sent.length, 0, '前提：她的 agent 还没建，收窄还没下')
+    await pinFutureSchedule(root)
 
     // 劲儿算在会话接上之前：这时只有配置里的白名单可看，read_image 在里面，先当到手。
     // 这样已经到手的卡（上一条）不会把她推起来；代价是这张也要等她醒着时才算数。
@@ -309,6 +322,7 @@ test('冷会话：主动回合的处境等会话接上再拼，已经到手的�
     // 这张要的东西家里已经有了，可要等会话接上才核实得了
     await wish(root, { text: SEARCH_WISH, subject: 'web_search', ts: new Date(Date.now() - 9 * HOUR).toISOString() })
     assert.equal(sent.length, 0, '前提：她的 agent 还没建，收窄还没下')
+    await pinFutureSchedule(root)
     const h = fakeHost({ onResolve: warm })
     const logs = []
     const s = startScheduler(h.ctx, { root, log: (...a) => logs.push(a.join(' ')) })
@@ -335,6 +349,7 @@ test('冷会话、群房先活着：劲儿不拿群房的工具表算，家里�
     assert.equal(room.sent.length, 1, '前提：群房也是她，照样收窄')
     assert.equal(sent.length, 0, '前提：家里那条还冷着')
     await wish(root, { text: SEARCH_WISH, subject: 'web_search', ts: new Date(Date.now() - 10 * HOUR).toISOString() })
+    await pinFutureSchedule(root)
     const h = fakeHost({ onResolve: warm })
     const logs = []
     const s = startScheduler(h.ctx, { root, log: (...a) => logs.push(a.join(' ')) })

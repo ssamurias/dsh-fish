@@ -38,11 +38,32 @@ test('今天还没到点：还没醒', () => {
   assert.ok(st.detail.includes('22:00'), 'detail 要告诉人几点会醒')
 })
 
-test('过了窗口还没醒：睡着，且说清今天不会再醒', () => {
+test('过了窗口还没醒：睡着，且说清现在不在醒着的时间段', () => {
   const st = deriveStatus({ events: [], config: cfg, now: new Date(2026, 9, 23, 23, 30, 0) })
   assert.equal(st.phase, 'asleep')
   assert.equal(st.label, '沉在水底')
-  assert.equal(st.detail, '虽然什么都没干，但是累了，不会再醒了')
+  assert.match(st.detail, /现在不在她醒着的时间段/)
+})
+
+test('窗口外醒过、现在没动静：算睡着，不能一直显示「在吃大白饭」', () => {
+  const st = deriveStatus({
+    events: [{ id: 'ev_wake_noon', ts: new Date(2026, 9, 23, 21, 0, 0).toISOString(), type: 'meta', text: `wake:${DK} nightly` }],
+    config: cfg,
+    now: new Date(2026, 9, 23, 23, 30, 0),
+  })
+  assert.equal(st.phase, 'asleep')
+  assert.match(st.detail, /现在不在她醒着的时间段/)
+})
+
+test('跨零点：凌晨 01:30 还属于前一天 22:00–02:00 的那一段', () => {
+  const night = { window: ['22:00', '02:00'] }
+  const st = deriveStatus({
+    events: [{ id: 'ev_wake_night', ts: new Date(2026, 9, 22, 23, 0, 0).toISOString(), type: 'meta', text: 'wake:2026-10-22 nightly' }],
+    config: night,
+    now: new Date(2026, 9, 23, 1, 30, 0),
+  })
+  assert.equal(st.phase, 'awake-idle')
+  assert.equal(st.label, '在吃大白饭')
 })
 
 test('刚醒、还没来得及做事 → 醒着但没做什么（不能算睡着）', () => {

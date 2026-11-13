@@ -84,14 +84,16 @@ function fakeHost(onCreate) {
   return { ctx, prompts, emit, listeners }
 }
 
-async function withRoot(fn) {
+async function withRoot(fn, baseNow = null) {
   const root = await mkdtemp(join(tmpdir(), 'fish-wake-'))
   const oldHomes = process.env.DSH_FISH_HOMES
   process.env.DSH_FISH_HOMES = join(root, 'homes.json')
   const realNow = Date.now
   const realST = globalThis.setTimeout
   let offset = 0
-  Date.now = () => realNow() + offset
+  // 钟固定在中午：贴着午夜跑时，10 分钟前的落点会掉到前一天，换日/配额一重算就整组红。
+  const base = baseNow ?? at(12, 0)
+  Date.now = () => base + offset
   // 等她说完的轮询（2s）、兜底重试（30s）、兜底（90s）压成几毫秒，其余定时器不动
   globalThis.setTimeout = (f, ms, ...a) => realST(f, [2000, 30_000, 90_000].includes(ms) ? 5 : ms, ...a)
   try {
@@ -105,7 +107,7 @@ async function withRoot(fn) {
       memory: { sleepEveryDays: 0 },
     }), root)
     // 今天的落点挪到 10 分钟前
-    await appendEvent({ type: 'meta', text: `sched:${dateKey()} ${new Date(realNow() - 10 * 60_000).toISOString()}` }, { day: 0, stage: 1, source: 'timer' }, root)
+    await appendEvent({ type: 'meta', text: `sched:${dateKey(new Date(Date.now()))} ${new Date(Date.now() - 10 * 60_000).toISOString()}` }, { day: 0, stage: 1, source: 'timer' }, root)
     return await fn(root, { advance: (ms) => { offset += ms }, sleep: (ms) => new Promise((r) => realST(r, ms)) })
   } finally {
     Date.now = realNow
@@ -160,6 +162,7 @@ test('叫醒一直失败：不再每分钟试一次、写一行', async () => {
 })
 
 test('落点之后不再一分钟一个地连着叫；第二次等时间到、也等她说完', async () => {
+  // 固定在中午跑：这个用例要跨过「第二次落点」，贴着午夜跑会撞上换日、配额重算。
   await withRoot(async (root, { advance, sleep }) => {
     const h = fakeHost()
     const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: () => {} })
@@ -174,7 +177,7 @@ test('落点之后不再一分钟一个地连着叫；第二次等时间到、�
       assert.equal(h.prompts.length, 1, '一分钟后不该再叫（修之前这里会醒第二次）')
 
       const { events } = await readEvents(root)
-      const due = nextWakeAt(events, { window: ['00:00', '23:59'], daily: { events: 2 }, wakesPerDay: 4 }, dateKey())
+      const due = nextWakeAt(events, { window: ['00:00', '23:59'], daily: { events: 2 }, wakesPerDay: 4 }, dateKey(new Date(Date.now())))
       assert.ok(due >= Date.now() + 40 * 60_000, '第二次至少隔开几十分钟')
 
       advance(due - Date.now() + 1000)
@@ -199,7 +202,7 @@ test('落点之后不再一分钟一个地连着叫；第二次等时间到、�
       s.dispose()
     }
     assert.equal(h.listeners.length, 0, 'dispose 摘掉忙闲监听')
-  })
+  }, at(12, 0))
 })
 
 test('叫醒准备的几秒里她刚好开始了别的一轮：等那一轮说完再挂处境', async () => {
