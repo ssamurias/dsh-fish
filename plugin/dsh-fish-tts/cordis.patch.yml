@@ -1,0 +1,10 @@
+# 插件包本身不写死任何本机路径：root 缺省时用 DSH_FISH_HOME，再退到 ~/.dsh-fish。
+# 数据目录不在默认位置的人，在自己的 profile 的 cordis.patch.yml 里覆盖：
+#
+#   - id: fish-tts
+#     name: dsh-fish-tts
+#     config:
+#       root: <你的数据目录>
+- insert:
+    - id: fish-tts
+      name: dsh-fish-tts
