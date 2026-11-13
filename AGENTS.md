@@ -71,7 +71,7 @@
 node --test
 ```
 
-当前基线 **2490 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **2521 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
@@ -83,6 +83,8 @@ node --test
 - **`test/media.test.mjs` 的 `detectFfmpeg` 依赖 spawn**，在禁 spawn 的环境里会红（`spawnSync ... EPERM`）。这是环境限制，不是代码问题——但**不许**为了让它变绿而删掉那条断言。
 
 CI 也跑同一套（`.github/workflows/test.yml`，Node 20 / 22 / 24 各跑一遍）。
+
+**动人格段之后，先看 `test/persona-golden.test.mjs`。** 它把 `persona.assemble()` 的产出在 14 个固定场景（刚醒、有称呼、三条判断、被打脸、想不起来、两面并排、有疤、六天没出现、换成「她」、开了八股锚、第四阶段、换过房、紧预算、带任务）下存成快照，跑测试会逐字比对。这里红**不一定**是错——但一定要停下看清「她对自己的说法被换成了什么」再决定。确认这次就是要改，`$env:UPDATE_GOLDEN='1'; node --test test/persona-golden.test.mjs` 重生成，然后 review 一遍 diff 再提交；**不许为了让快照变绿去改断言**。
 
 ## 7. 桥接不内置，靠 HTTP 投递 + 白名单放行
 
@@ -286,7 +288,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `lib/guard.js`
 - [ ] 加 / 改名 / 删了工具，`test/toolmap.test.mjs` 的 `MAP`（或 `lib/toolreg.js` 的 `SCENE_TOOLS`）跟着改了（见 §8）
-- [ ] `node --test` 2490 全绿
+- [ ] `node --test` 2521 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」；给她看的文本里指主人的字写的是 `{T}` 而不是写死「他」（见 §4）
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节
