@@ -1145,6 +1145,78 @@ test('认不出来源：同一个 kind 连着丢十条，日志也只留一行',
   }
 })
 
+test('别的插件往自己的会话里塞 prompt：不算他来过（2026-11-13 用户报）', async () => {
+  const root = await tmpRoot()
+  const lines = []
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: (...a) => lines.push(a.join(' ')) })
+    try {
+      // 真机形态：dsh-auto-memory 建「记忆中枢」会话，prompt() 写死 kind:'user'，
+      // rpcId 是宿主的 UUID，没有 clientTimeZone。
+      const injected = {
+        type: 'user/message',
+        data: {
+          id: 'm-init',
+          role: 'user',
+          content: [{ type: 'text', text: '【记忆中枢 · 初始化】这是插件后台的记忆工作台会话。' }],
+          source: { kind: 'user', rpcId: '6873f6ca-8f7b-48a1-b470-bc3a4192e40f' },
+        },
+      }
+      ctx.emit('session/event', session('s-auto-memory'), injected)
+      ctx.emit('session/event', session('s-auto-memory'), TURN_END)
+      await settled()
+
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 0, '插件注入的 prompt 不是他来过：一写 seen，冷落钟就从 0 重新数')
+
+      assert.ok(
+        lines.some((l) => l.includes('有插件往别的会话里塞了 prompt')),
+        '只丢不说话也不行：留一行日志，下次报「为什么没算我」时有据可查',
+      )
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('桥登记过的 prompt 照旧算他来过（登记表不能退化成摆设）', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      clearDeclaredSources()
+      declareSource({ rpcId: 'qq-seen-1', scene: 'private' })
+      const msg = {
+        type: 'user/message',
+        data: {
+          id: 'm-qq-1',
+          role: 'user',
+          content: [{ type: 'text', text: '在吗' }],
+          // 桥走 prompt()：kind 被宿主写死成 'user'，没有时区，只有 rpcId
+          source: { kind: 'user', rpcId: 'qq-seen-1' },
+        },
+      }
+      ctx.emit('session/event', session('s-qq'), msg)
+      ctx.emit('session/event', session('s-qq'), TURN_END)
+      await settled()
+
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 1, '桥在 prompt() 之前登记过这一轮，冷落钟就该清零')
+    } finally {
+      off()
+      clearDeclaredSources()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
 test('满 rotateAfter 就换会话，事件流里留一条 meta', async () => {
   const root = await tmpRoot()
   try {
