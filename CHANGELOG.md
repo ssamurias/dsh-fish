@@ -1,3 +1,15 @@
+## 1.0.3 — 2026-11-14
+
+- **自动备份的时机改成「按启动算」，不再依赖「每天几点」（用户 m00597）。** 1.0.2 的判据是「距上次成功过了 N 天」，它默认了 DSH 一直开着、并且下次还会再开。但没人知道自己哪一次打开是最后一次，也没人保证它全天运行——「每天一份」在最要紧的场景里正好交不上货：用了一下午、晚上关掉，这几个小时里的东西一份都没落盘。
+  - **改成两条腿**：① 「最新的」那份 `backups/大肥鱼-自动-最新.json`，滚动覆盖，永远一份；**启动后第一拍无条件刷**、运行中「有新东西且距上刷满 `CATCHUP_GAP_MS`（30 分钟）」再刷、shutdown 时抢刷一次。② 「带日子的」那批 `backups/大肥鱼-自动-YYYYMMDD-HHMMSS.json` 照旧按 `backup.everyDays` 攒、留 `backup.keep` 份，负责「往回退得远」。
+  - **半小时那个闸是刻意的**：每次启动都写一份更像样，但一个下午重启五六次会把默认 7 份挤光，真正值钱的「上周那份」反而被清掉。第一拍与退出那两次走 `force`，不受这个闸限制。
+  - **「有新东西」只看 `events.jsonl` 的 mtime**，不解析 json；**刻意不把 `config.json` 算进去**——`lastAt` 写完配置就变了，把它算进「脏」里会永远脏、一刻不停地白存。
+  - **两条腿的计数器分开**：兜底档**不写 `lastAt`、不占 `keep`**。它每半小时刷一次，若也写 `lastAt`，「一天一份」的历史档就永远不会到点。`pruneAutoBackups` 只数带日子的那批（`isAutoBackupName` 不认「最新」，另加 `isAutoBackupFile` 给读回的白名单用）。
+  - **新导出**（`lib/autobackup.js`）：`CATCHUP_GAP_MS`、`LATEST_NAME`、`isAutoBackupFile`、`latestBackupInfo`、`newestDataAt`、`catchupDue`（纯函数，可单测）、`runLatestBackup`、`catchupBackup`；`autoBackupStatus` 多一个 `latest` 字段，`autoBackupSizeText` 在只有兜底档时说「只有兜底那一份，X」。
+  - **接线**：`lib/scheduler.js` 的 tick 先 `catchupBackup(..., { force: firstTick })` 再判历史档，返回值多 `flushBackup()`；`lib/index.js` 的 `shutdown()` 在跑完 disposers 后与 `released` 一起 `Promise.race`（仍是 2 秒上限）；`lib/observe.js` 的 `POST /backup/auto` 成功后两条腿一起刷，否则用户会以为没生效。
+  - **界面**：数据页自动备份卡补一句「另外还有一份『最新的』……所以你最后关掉的那一次，最新的样子一定留着」，状态句按「只有兜底 / 也有历史 / 一份都没有」三种情形说人话，「留几份」提示注明「最新的那份不算在里头」。
+  - `test/autobackup.test.mjs` 21 → 27 条（新增兜底名白名单、`catchupDue` 矩阵、`runLatestBackup` 不写 `lastAt`、`catchupBackup` 的跳过与 `force`）。全量 **2604 pass / 0 fail**。
+
 ## 1.0.2 — 2026-11-14
 
 - **自动备份：人不用记得，到点自己存一份（用户 m00002）。** 手动那颗「备份成一份文件」走浏览器下载，落在当时随手选的目录里；真出事那天，人不会先想起来点它。这一版加的是「人不用记得」的那一层。

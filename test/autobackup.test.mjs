@@ -18,13 +18,19 @@ import { join } from 'node:path'
 
 import {
   AUTO_PREFIX,
+  CATCHUP_GAP_MS,
+  LATEST_NAME,
   autoBackupDir,
   autoBackupName,
   isAutoBackupName,
+  isAutoBackupFile,
   autoBackupDue,
+  catchupDue,
   listAutoBackups,
   pruneAutoBackups,
   runAutoBackup,
+  runLatestBackup,
+  catchupBackup,
   readAutoBackup,
   autoBackupStatus,
   autoBackupSizeText,
@@ -297,4 +303,119 @@ test('没攒过的时候给人的那句是「还没有」', () => {
   // 大小的写法跟手动备份那颗同一个（sizeText），别在这里另立一套单位。
   assert.match(autoBackupSizeText({ count: 3, bytes: 2_000_000 }), /^3 份，一共 \d+(\.\d)?MB$/)
   assert.match(autoBackupSizeText({ count: 1, bytes: 40_000 }), /^1 份，一共 \d+KB$/)
+})
+
+// ---- 兜底那份（用户 m00597：谁也不知道哪次启动是最后一次）----
+
+test('兜底那份的名字固定，不随时间变，也不会被当成历史档去清理', () => {
+  assert.equal(LATEST_NAME, '大肥鱼-自动-最新.json')
+  // 它必须能读回来（恢复要它），但不能进「攒了几份」那批。
+  assert.equal(isAutoBackupFile(LATEST_NAME), true)
+  assert.equal(isAutoBackupName(LATEST_NAME), false)
+  assert.equal(isAutoBackupFile('大肥鱼-自动-20261114-065309.json'), true)
+  assert.equal(isAutoBackupFile('../config.json'), false)
+})
+
+test('该不该刷兜底那份：只看「有没有新东西」和半小时节流', () => {
+  const now = new Date('2026-11-14T08:00:00.000Z')
+  const at = now.getTime()
+  const cfg = cfgOf({})
+  // 关着就什么都不做
+  assert.deepEqual(catchupDue(cfgOf({ enabled: false }), now, { latestAt: 0, dataAt: 1 }), { due: false, why: '关着' })
+  // 还一份都没有：立刻刷（这条保证「每次启动至少落一份」）
+  const first = catchupDue(cfg, now, { latestAt: 0, dataAt: 0 })
+  assert.equal(first.due, true)
+  assert.match(first.why, /还没有/)
+  // 事件流没比那份更新：什么都不用做（哪怕过了很久）
+  assert.deepEqual(catchupDue(cfg, now, { latestAt: at, dataAt: at }), { due: false, why: '没有新东西' })
+  // 有新东西但刚刷过：等节流
+  const soon = catchupDue(cfg, new Date(at + 60_000), { latestAt: at, dataAt: at + 1 })
+  assert.equal(soon.due, false)
+  assert.match(soon.why, /分钟后再看/)
+  // 有新东西、也过了半小时：刷
+  assert.equal(catchupDue(cfg, new Date(at + CATCHUP_GAP_MS), { latestAt: at, dataAt: at + 1 }).due, true)
+  // 启动第一拍 / 退出前要的是「这次一定有一份」，不受节流挡
+  assert.equal(catchupDue(cfg, new Date(at + 60_000), { latestAt: at, dataAt: at + 1, force: true }).due, true)
+})
+
+test('刷兜底那份：落在 backups/、能被恢复吃回去，且不写 lastAt、不占 keep', async () => {
+  const root = await makeRoot()
+  try {
+    const now = new Date(2026, 10, 14, 7, 3, 0)
+    const r = await runLatestBackup(root, { now, config: cfgOf({}) })
+    assert.equal(r.ok, true, r.why)
+    assert.equal(r.name, LATEST_NAME)
+
+    const bundle = JSON.parse(await readFile(join(autoBackupDir(root), LATEST_NAME), 'utf8'))
+    assert.equal(bundle.format, BACKUP_FORMAT)
+    assert.equal(bundle.fileName, LATEST_NAME)
+    assert.equal(checkBundle(bundle).ok, true, checkBundle(bundle).why)
+
+    // 两条腿互相不干扰：刷兜底不该把「每 N 天一份」的计时重置，
+    // 否则天天开机就永远攒不出一份带日子的历史档。
+    // （readConfig 读的是盘上的原样字节，不是补过默认值的那份——所以这里就是 undefined。）
+    const cfg = await readConfig(root)
+    assert.equal(cfg?.backup?.lastAt, undefined)
+
+    // 它不算进「攒了几份」，也不会被 prune 删掉
+    for (let i = 1; i <= 3; i++) await writeFile(join(autoBackupDir(root), `大肥鱼-自动-2026110${i}-060000.json`), '{}')
+    const { removed } = await pruneAutoBackups(root, 1)
+    assert.equal(removed.length, 2)
+    const left = await readdir(autoBackupDir(root))
+    assert.ok(left.includes(LATEST_NAME), '兜底那份不能被清理波及')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('catchupBackup：该刷就刷，不该刷就什么都不写', async () => {
+  const root = await makeRoot()
+  try {
+    const now = new Date()
+    const first = await catchupBackup(root, { now, config: cfgOf({}) })
+    assert.equal(first.ok, true, first.skipped || first.why)
+    assert.equal(first.name, LATEST_NAME)
+
+    // 刚刷完、库里也没新东西：不动
+    const again = await catchupBackup(root, { now: new Date(now.getTime() + 60_000), config: cfgOf({}) })
+    assert.equal(again.ok, false)
+    assert.equal(again.skipped, '没有新东西')
+
+    // 关掉之后连 force 都不刷
+    const off = await catchupBackup(root, { now, config: cfgOf({ enabled: false }), force: true })
+    assert.equal(off.ok, false)
+    assert.equal(off.skipped, '关着')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('兜底那份也能读回来（设置页那张列表里点「从这份恢复」走得通）', async () => {
+  const root = await makeRoot()
+  try {
+    await runLatestBackup(root, { now: new Date(), config: cfgOf({}) })
+    const r = await readAutoBackup(LATEST_NAME, root)
+    assert.equal(r.ok, true, r.why)
+    assert.equal(r.bundle.format, BACKUP_FORMAT)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('状态里能看出「只有最新那一份」——这时候不该说「还没有」', async () => {
+  const root = await makeRoot()
+  try {
+    await runLatestBackup(root, { now: new Date(), config: cfgOf({}) })
+    const st = await autoBackupStatus(root, { config: cfgOf({}) })
+    assert.equal(st.count, 0, 'count 说的是历史档的份数')
+    assert.ok(st.latest, '兜底那份要在状态里露出来')
+    assert.ok(st.bytes > 0)
+    assert.match(autoBackupSizeText(st), /^只有兜底那一份，/)
+    // 攒出历史档之后回到原来的说法
+    await runAutoBackup(root, { now: new Date(), config: cfgOf({}) })
+    const st2 = await autoBackupStatus(root, { config: cfgOf({}) })
+    assert.match(autoBackupSizeText(st2), /^1 份，一共 /)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
