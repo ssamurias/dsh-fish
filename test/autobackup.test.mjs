@@ -18,6 +18,7 @@ import { join } from 'node:path'
 
 import {
   AUTO_PREFIX,
+  AUTO_SKIP,
   CATCHUP_GAP_MS,
   LATEST_NAME,
   autoBackupDir,
@@ -35,7 +36,7 @@ import {
   autoBackupStatus,
   autoBackupSizeText,
 } from '../lib/autobackup.js'
-import { checkBundle, BACKUP_FORMAT } from '../lib/backup.js'
+import { checkBundle, collectBackup, BACKUP_FORMAT } from '../lib/backup.js'
 import { readConfig } from '../lib/store.js'
 
 const DAY = 86_400_000
@@ -415,6 +416,65 @@ test('状态里能看出「只有最新那一份」——这时候不该说「�
     await runAutoBackup(root, { now: new Date(), config: cfgOf({}) })
     const st2 = await autoBackupStatus(root, { config: cfgOf({}) })
     assert.match(autoBackupSizeText(st2), /^1 份，一共 /)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+// ---- 不带封面缓存（2026-11-14 用户 m00862）----
+
+test('自动备份不带 out/covers/：省下那三十来兆，别的照旧一个不少', async () => {
+  const root = await makeRoot()
+  try {
+    // 造一份「封面缓存 + 同一层别的文件」：只有 covers 该被跳过
+    await mkdir(join(root, 'out', 'covers'), { recursive: true })
+    await writeFile(join(root, 'out', 'covers', 'BV1xx411c7mD.jpg'), Buffer.alloc(64 * 1024, 7))
+    await writeFile(join(root, 'out', 'covers', 'BV1yy411c7mE.jpg'), Buffer.alloc(64 * 1024, 7))
+    await writeFile(join(root, 'out', 'watch-log.json'), '{"days":3}')
+    await mkdir(join(root, 'out', 'reports'), { recursive: true })
+    await writeFile(join(root, 'out', 'reports', '2026-11-14.md'), '# 日报\n')
+
+    const r = await runAutoBackup(root, { now: new Date(2026, 10, 14, 6, 53, 9), config: cfgOf({}) })
+    assert.equal(r.ok, true, r.why)
+    const bundle = JSON.parse(await readFile(join(autoBackupDir(root), r.name), 'utf8'))
+    const paths = bundle.files.map((f) => f.path)
+
+    assert.ok(!paths.some((p) => p.startsWith('out/covers/')), '封面缓存不该进自动备份')
+    assert.ok(paths.includes('out/watch-log.json'), '同一层别的文件还要在')
+    assert.ok(paths.includes('out/reports/2026-11-14.md'), '别的子目录也要在')
+    // 少了什么要照实说，恢复的人才知道封面得重新下
+    assert.ok(bundle.excluded.includes('out/covers/'), `excluded 要写明少了封面缓存，实际是 ${bundle.excluded}`)
+    // 少了这些以后仍然是一份能被恢复吃回去的包
+    assert.equal(checkBundle(bundle).ok, true, checkBundle(bundle).why)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('手动「备份成一份文件」不受影响：那一份仍然是全量，封面也在', async () => {
+  const root = await makeRoot()
+  try {
+    await mkdir(join(root, 'out', 'covers'), { recursive: true })
+    await writeFile(join(root, 'out', 'covers', 'BV1xx411c7mD.jpg'), Buffer.alloc(8 * 1024, 7))
+    // 手动备份走的是 collectBackup 的默认参数（observe.js 的 /backup 没传 alsoSkip）
+    const bundle = await collectBackup(root, { now: new Date(2026, 10, 14, 6, 53, 9) })
+    const paths = bundle.files.map((f) => f.path)
+    assert.ok(paths.includes('out/covers/BV1xx411c7mD.jpg'), '手动备份要带全量，封面不能少')
+    assert.ok(!bundle.excluded.includes('out/covers/'))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('AUTO_SKIP 只写相对路径，不写盘上绝对路径；传空数组就等于什么都不跳', async () => {
+  assert.deepEqual(AUTO_SKIP, ['out/covers'])
+  const root = await makeRoot()
+  try {
+    await mkdir(join(root, 'out', 'covers'), { recursive: true })
+    await writeFile(join(root, 'out', 'covers', 'BV1xx411c7mD.jpg'), Buffer.alloc(2 * 1024, 7))
+    // 显式传空：口径与手动备份一致
+    const bundle = await collectBackup(root, { alsoSkip: [] })
+    assert.ok(bundle.files.some((f) => f.path === 'out/covers/BV1xx411c7mD.jpg'))
   } finally {
     await rm(root, { recursive: true, force: true })
   }
