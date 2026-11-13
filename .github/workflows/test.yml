@@ -61,3 +61,19 @@ jobs:
 
       - name: 核对 npm pack 的内容
         run: node .github/pack-check.mjs
+
+  # 文档里的基线数字核对：README / AGENTS / CONTRIBUTING / PR 模板里写死的
+  # 「全量 N 条」「基线 N」「N 个测试文件」必须等于实际跑出来的条数。
+  # 2026-11-13 的教训——README 里 1674、1512 两处陈年错挂了快十个版本，
+  # 因为没有任何东西会因为它们过时而变红。这类数字一旦手写就会漂，只能靠 CI 兜。
+  doc-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: 核对文档里的基线数字
+        run: node .github/doc-check.mjs
