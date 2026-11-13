@@ -4,12 +4,13 @@
   - **存在哪、存什么**：`<数据文件夹>/backups/大肥鱼-自动-YYYYMMDD-HHMMSS.json`。用同一个 `collectBackup`，所以内容与手动备份逐字一致，`从备份恢复` 直接吃得回来（测试里存完立刻 `checkBundle` 一遍钉住这条）。目录跟着数据文件夹走，「搬到别的盘」之后旧的也跟着搬。
   - **不会自己把自己撑爆**：`backups/` 本来就在 `SKIP_DIRS` 里，自动备份里不会裹着旧备份。
   - **三个设置项**（设置 → 数据 →「自动备份」，默认开 / 1 天 / 留 7 份）：`backup.enabled`、`backup.everyDays`（1–30）、`backup.keep`（1–60）。写进 `config.json` 的 `backup` 组，`normalizeConfig` 做布尔与区间兜底，`lastAt` 只收字符串。
+  - **`/config` 白名单同步登记 `backup`**：三个旋钮走数据页单独 patch，不挤进 `buildConfig()` 整表——所以 p5 那条「反查 buildConfig」的防漂移用例管不到它，另补一条真发 POST 的用例（含越界夹取、`lastAt` 不被一次改间隔抹掉）。不登记的话，用户会看到「这一版还不支持保存：backup」，开关看着像没生效。
   - **计时不靠内存**：上次成功的时间记在 `backup.lastAt`，所以重启 DSH 不会重置成「又来一份」；`lastAt` 是坏值就当没备份过（不能永远不备），比现在还晚（时钟回拨）也照样备，不干等。
   - **删文件只删自己那批**：清理按 `大肥鱼-自动-\d{8}-\d{6}\.json` 认人，用户自己放的手动备份、别的 json 一个都不碰（有测试守）。
   - **读回来只认白名单**：`GET /backup/auto/file?name=` 先过名字正则再读，`../`、绝对路径这类一律拒——这条路由是能 GET 的，不能让它变成任意文件读取。
   - **挂在 tick 里、且挂在出门判断之前**：出门/请神只是「家里的日程暂停」，数据还在长，备份要照做。整段自己 try/catch，存不下来只记一行日志，不让她当天叫不醒。
   - **新文件** `lib/autobackup.js`（判断 / 存 / 清理 / 列表 / 读回 / 状态）；`lib/observe.js` 加 `GET|POST /backup/auto` 与 `GET /backup/auto/file`；`lib/client.js` 数据页多一张「自动备份」小卡（开关 + 多久一份 + 留几份 + 最近 5 份「从这份恢复」+ 现在存一份），三项走 `patchGroup('backup', …)` 单独提交，不挤进自动保存那张整表。
-  - 新增 `test/autobackup.test.mjs` 21 条；全量 **2597 pass / 0 fail**。
+  - 新增 `test/autobackup.test.mjs` 21 条、`test/p5.test.mjs` 补 1 条 `/config` 收得下 `backup` 组的用例；全量 **2598 pass / 0 fail**。
 
 ## 1.0.1 — 2026-11-13
 

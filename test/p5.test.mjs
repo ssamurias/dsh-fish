@@ -307,6 +307,51 @@ test('/config 收得下主人的代词，取值越界就退回「他」（issue 
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
+test('/config 收得下自动备份的三个设置项（用户 m00002）', async () => {
+  // 自动备份的三个旋钮走数据页单独 patch 提交，不挤进 buildConfig() 整表——
+  // 所以 p5 那条「反查 buildConfig」的防漂移用例**管不到它**。
+  // 这里补一条真发一次 POST 的用例：白名单漏登记时，界面上会看到
+  // 「这一版还不支持保存：backup」，而开关看起来像是没生效。
+  const root = await mkdtemp(join(tmpdir(), 'fish-p5b-'))
+  try {
+    const ctx = fakeCtx(root)
+    ctx.cfg.connection = { requestRejection: () => null }
+    registerObserve(ctx, { root })
+    const route = ctx.routes.find((r) => String(r.path || '').endsWith('/config'))
+    let status = 0
+    let payload = null
+    const res = { writeHead: (s) => { status = s }, end: (s) => { payload = JSON.parse(s || '{}') }, setHeader: () => {} }
+    const body = JSON.stringify({ backup: { enabled: false, everyDays: 3, keep: 5 } })
+    const req = {
+      method: 'POST',
+      url: '/dsh-fish/config',
+      headers: { 'content-type': 'application/json' },
+      on: (ev, fn) => { if (ev === 'data') fn(Buffer.from(body, 'utf8')); if (ev === 'end') fn() },
+    }
+    await route.handler(req, res)
+    assert.equal(status, 200, `保存不该被挡回来：${JSON.stringify(payload)}`)
+    assert.equal(payload.config.backup.enabled, false)
+    assert.equal(payload.config.backup.everyDays, 3)
+    assert.equal(payload.config.backup.keep, 5)
+    // 越界由 LIMITS 夹住，不是拒收（1–30 / 1–60）
+    const body2 = JSON.stringify({ backup: { everyDays: 999, keep: 0 } })
+    const req2 = {
+      method: 'POST',
+      url: '/dsh-fish/config',
+      headers: { 'content-type': 'application/json' },
+      on: (ev, fn) => { if (ev === 'data') fn(Buffer.from(body2, 'utf8')); if (ev === 'end') fn() },
+    }
+    await route.handler(req2, res)
+    assert.equal(status, 200)
+    assert.equal(payload.config.backup.everyDays, 30)
+    assert.equal(payload.config.backup.keep, 1)
+    // lastAt 是计时用的，不该被一次「改间隔」抹掉
+    assert.equal(typeof payload.config.backup.lastAt, 'string')
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 test('设置界面面向用户的文案里不出现男字旁的「他」', async () => {
   const src = await readFile(CLIENT, 'utf8')
   // 只扫字符串字面量，注释不算（注释里保留原话便于追溯）。
