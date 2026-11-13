@@ -429,6 +429,48 @@ test('trimToolDocs：拿不到工具表（缺失/空）就一段都不动——�
   assert.equal(lastTrimReport().saved, 0)
 })
 
+test('trimToolDocs：宿主的组装结果里没有 tools 时，用调用方传进来的工具表（2026-11-14 实测 0.2.x）', () => {
+  // 0.2.x 的 assemble() 把 tools 挂在瀑布返回之后，所以 assembly.tools 恒为 undefined；
+  // 她的工具表改由 attachAssembleFix 从 visibleToolsOf(agent) 现取后传进来。
+  const out = trimToolDocs(
+    { sections: [{ name: 'free-search:engines', order: 500, text: SEARCH_DOC }] },
+    { tools: ['her_recall', 'bili_look'] },
+  )
+  assert.equal(out.sections.length, 0, '工具表从参数来，判据不能空转')
+  assert.equal(lastTrimReport().dropped[0].name, 'free-search:engines')
+})
+
+test('trimToolDocs：名字认得出的「别的插件的说明」短也照摘（tool:beauticode 192 字，启发式抓不到）', () => {
+  const out = trimToolDocs(
+    {
+      sections: [
+        { name: 'tool:beauticode', order: 160, text: 'beautiCode 可以把本机图片设为 Harness 页面背景。' },
+        { name: 'genui:fence', order: 300, text: '用 dsh-ui 围栏渲染界面，组件名见 genui skill。'.repeat(50) },
+        { name: 'dsh:auto-memory-pre-rules', order: 320, text: '记忆系统固定纪律：每轮必须 memory_log。'.repeat(30) },
+        { name: 'harness:identity', order: 0, text: 'You are an AI agent.' },
+      ],
+    },
+    { tools: ['her_recall'] },
+  )
+  assert.deepEqual(out.sections.map((s) => s.name), ['harness:identity'], '宿主那一行身份声明永远留着')
+  const names = lastTrimReport().dropped.map((d) => d.name).sort()
+  assert.deepEqual(names, ['dsh:auto-memory-pre-rules', 'genui:fence', 'tool:beauticode'])
+  assert.ok(lastTrimReport().saved > 2000)
+})
+
+test('trimToolDocs：名字表里的段，只要段里提到的工具她真握着就留（判据先看她够不够得着）', () => {
+  const mine = trimToolDocs(
+    { sections: [{ name: 'tool:jobs', order: 160, text: '用 job_output 看后台任务。' }] },
+    { tools: ['job_output', 'her_recall'] },
+  )
+  assert.equal(mine.sections.length, 1, '她真有这个工具 → 这段讲的就是她能做的事')
+  const theirs = trimToolDocs(
+    { sections: [{ name: 'tool:jobs', order: 160, text: '用 job_output 看后台任务。' }] },
+    { tools: ['her_recall'] },
+  )
+  assert.equal(theirs.sections.length, 0, '她没有 → 按名字摘掉')
+})
+
 test('trimToolDocs：她的段（fish: 开头）永不参与这条判据', () => {
   const out = trimToolDocs({
     sections: [{ name: 'fish:tools', order: 8600, text: SEARCH_DOC }],
