@@ -244,6 +244,15 @@ test('来源判据：桥先登记过的那一轮，按登记走（issue #96）',
       classifyMessage({ source: { kind: 'user', rpcId: 'b-pg', scene: 'private', guest: true } }),
       'group',
     )
+    // 2026-11-13（外部反馈，QQ 真机）：桥给消息加的 rpcId 是 `sys-` 开头，而
+    // PLUGIN_RPC 里也有 sys（0.9.1 加进去挡宿主机器回合）。先扫前缀的话，桥前一步
+    // 刚登记的 rpcId 永远轮不到，那条消息连一行日志都没有地消失——既不算他来过，
+    // 也不进 heard。登记比前缀窄（只有桥自己报上来的 id 才在里面），所以先看登记。
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'sys-qq-1' } }), 'plugin')
+    declareSource({ rpcId: 'sys-qq-1', scene: 'private' })
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'sys-qq-1' } }), 'human')
+    declareSource({ rpcId: 'sys-qq-2', scene: 'group' })
+    assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'sys-qq-2' } }), 'group')
   } finally {
     clearDeclaredSources()
   }

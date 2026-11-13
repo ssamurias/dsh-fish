@@ -13,7 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { HER_TOOLS, currentToolSurface, currentAllowTools, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, blockedTools, forgetBlockedTools, recheckToolRestrict } from '../lib/restrict.js'
+import { HER_TOOLS, currentToolSurface, currentAllowTools, isHerAgent, knownToolNames, ownLayerNames, registerToolRestrict, rememberFromView, rememberKnownTools, readRestrictState, describeRestrict, toolSurfaceText, toolSurfaceFor, outsideSurfaceText, visibleToolsOf, foldedRecallNote, blockedTools, forgetBlockedTools, recheckToolRestrict } from '../lib/restrict.js'
 import * as restrictMod from '../lib/restrict.js'
 import { wishesOf } from '../lib/wish.js'
 
@@ -1242,4 +1242,26 @@ test('一个名字都没认得：不下空刀，宁可全开也不把她焊死�
   await until(() => seen.at(-1)?.why === 'deferred', '等不齐就如实报 deferred')
   assert.ok(calls.length > 0, '试过才知道等不齐')
   assert.ok(calls.every((a) => a.length > 0), '一个都认不得时绝不下空刀（C 方案，用户明确不要）')
+})
+
+test('旧话被压成摘要了去哪儿翻：宿主真给了 search_context 才挂这一段（2026-11-13）', () => {
+  // 外部真机反馈：长对话被 billion-context 压成摘要后，原话只剩 search_context /
+  // decompress 能捞回来，而我们从来没跟她说过这两件工具（16 天里她只碰过 2 次）。
+  // 但这两件是宿主插件注册的，不是我们的：没装、或装了没放行，念了就是空话——
+  // 她会照着去做，然后撞在「没有这个工具」上。
+  const agentWith = (names) => ({
+    session: { header: { cwd: 'C:\\h' } },
+    ctx: { tools: { view: () => ({ visible: new Map(names.map((n) => [n, {}])) }) } },
+  })
+  assert.equal(foldedRecallNote(agentWith([])), '', '一件都没有：一个字都不说')
+  assert.equal(foldedRecallNote(agentWith(['her_note', 'web_search'])), '', '有别的工具不等于有它')
+  assert.equal(foldedRecallNote({}), '', '工具表读不出来（老宿主）：宁缺勿错')
+  assert.equal(foldedRecallNote(null), '')
+  const onlySearch = foldedRecallNote(agentWith(['search_context']))
+  assert.match(onlySearch, /search_context/)
+  assert.doesNotMatch(onlySearch, /decompress/, '没有 decompress 就别教她取原文')
+  const both = foldedRecallNote(agentWith(['search_context', 'decompress']))
+  assert.match(both, /search_context/)
+  assert.match(both, /decompress/)
+  assert.match(both, /搜不到不等于没发生过/, '别让她把「搜不到」当成「没发生过」')
 })
