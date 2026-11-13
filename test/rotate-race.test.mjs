@@ -86,6 +86,10 @@ test('同一刻两条入口都要换：只建一条新会话（0.8.8 房间分�
   assert.equal(st.turns, 0)
   const raw = JSON.parse(await readFile(homeFile, 'utf8'))
   assert.equal(raw.rotatedFrom, 'sess-old')
+  // 2026-11-13：对称记下建出来的那条。只记 rotatedFrom 时，「换房那一刻他还在旧窗口」
+  // 这一支把家认回旧会话后，他再搬进新房间就没有依据跟过去（自动醒落回旧对话）。
+  assert.equal(raw.rotatedTo, a.sessionId)
+  assert.equal(st.rotatedTo, a.sessionId, '观测台 / 排查要看得到这一对')
 }))
 
 test('另一条入口先换完了：后到的那次直接跳过，不再建会话', () => withRoot(async (root) => {

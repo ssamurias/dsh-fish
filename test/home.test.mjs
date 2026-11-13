@@ -24,6 +24,7 @@ import {
 } from '../lib/home.js'
 import { writeSelfDoc, selfDocPath, selfDocStatus } from '../lib/selfdoc.js'
 import { appendEvent } from '../lib/store.js'
+import { paths } from '../lib/store.js'
 import { updateConfig } from '../lib/settings.js'
 
 async function tmpRoot() {
@@ -113,6 +114,44 @@ test('幂等：重复 bootstrap 不会再建一个会话', async () => {
     assert.equal(a.sessionId, b.sessionId, '第二次必须复用同一个会话')
     assert.equal(b.reused, true)
     assert.equal(created.length, 1, '只应建过一次会话')
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('升级自愈：升级前换房留下的 home.json 没有 rotatedTo，用 wokeFor 补一次（2026-11-13）', async () => {
+  const root = await tmpRoot()
+  try {
+    const { ctx } = fakeCtx()
+    const a = await bootstrapHome(ctx, { root })
+    assert.equal(a.ok, true, a.why)
+
+    // 模拟 0.9.9 留下的现场：家被认回了旧会话，wokeFor 还指着轮换建出来的那条，
+    // 但没有 rotatedTo（这个字段本轮才加）。旧文件里没有它，就再也轮不到下一次轮换。
+    const hf = join(paths(root).root, 'home.json')
+    const raw = JSON.parse(await readFile(hf, 'utf8'))
+    await writeFile(hf, JSON.stringify({
+      ...raw,
+      rotatedFrom: 'ses-old',
+      rotatedAt: new Date().toISOString(),
+      wokeFor: 'ses-brand-new',
+      turns: 5,
+    }, null, 2))
+
+    const notes = []
+    const b = await bootstrapHome(ctx, { root, log: (m) => notes.push(String(m)) })
+    assert.equal(b.ok, true, b.why)
+    const st = await homeStatus(root)
+    assert.equal(st.sessionId, a.sessionId, '自愈只补记录，不搬屋子——他可能还坐在旧窗口里')
+    assert.equal(st.rotatedTo, 'ses-brand-new')
+    assert.ok(notes.some((m) => /rotatedTo/.test(m)), `要留一行能查的日志：${notes.join(' | ').slice(0, 160)}`)
+
+    // 再启动一次：已经补过，不再覆盖成别的
+    await writeFile(hf, JSON.stringify({
+      ...JSON.parse(await readFile(hf, 'utf8')),
+      rotatedTo: 'ses-brand-new',
+      wokeFor: 'ses-somewhere-else',
+    }, null, 2))
+    await bootstrapHome(ctx, { root })
+    assert.equal((await homeStatus(root)).rotatedTo, 'ses-brand-new', '补过的记录不许被后来的唤醒改掉')
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
 

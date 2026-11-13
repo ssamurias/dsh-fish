@@ -1272,6 +1272,7 @@ test('认回只认换下来那条，别的会话照样不记', async () => {
           createdAt: '2026-10-31T00:50:27.000Z',
           turns: 0,
           rotatedFrom: HER_SESSION,
+          rotatedTo: 's-new-1',
         },
         null,
         2,
@@ -1413,6 +1414,110 @@ test('换房 10 分钟以内，新会话用过轮也照样认回', async () => {
         return st.sessionId === HER_SESSION && st.turns > 5 ? st : null
       })
       assert.equal(h.turns, 6, '轮数接着数（5 之后再 +1），不白送一段、也不清零重来')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 2026-11-13（外部反馈：轮换后「家」停在旧会话，自动醒落回旧对话）。
+// 真机时间线：22:49:23 满 40 轮换房 → 22:49:35 他还在旧窗口说了一句，
+// 屋子按「换下来那条」认回旧会话 → 之后他在新房间里聊了一整夜，却没有任何
+// 逻辑把家跟过去；08:03 的自动醒照着 home.json 叫回那条 383K tok 的旧对话。
+// 修法：轮换时对称记下 rotatedTo，他在那条里说话家就跟过去。
+test('轮换后他先回旧窗口、随后搬进新会话 → 屋子跟到新会话（外部反馈 2026-11-13）', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    await writeAtomic(
+      join(paths(root).root, 'home.json'),
+      JSON.stringify(
+        {
+          wsId: 'ws-1',
+          sessionId: 's-new-1',
+          createdAt: new Date(Date.now() - 60_000).toISOString(),
+          turns: 0,
+          rotatedFrom: HER_SESSION,
+          rotatedTo: 's-new-1',
+          rotatedAt: new Date(Date.now() - 60_000).toISOString(),
+          carry: '## 上次我们说到这\n- 旧话',
+        },
+        null,
+        2,
+      ),
+    )
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      // 第一步：换房 12 秒后他还在旧窗口里说了一句（这一步是设计如此：认回旧会话）
+      ctx.emit('session/event', session(HER_SESSION), humanMsg('下一个试试'))
+      ctx.emit('session/event', session(HER_SESSION), TURN_END)
+      const back = await waitFor(async () => {
+        const st = await homeStatus(root)
+        return st.sessionId === HER_SESSION && st.turns > 0 ? st : null
+      })
+      assert.equal(back.turns, 1)
+      let raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+      assert.equal(raw.rotatedFrom, undefined, '认回旧窗口后不再记着它')
+      assert.equal(raw.rotatedTo, 's-new-1', 'rotatedTo 要留着——他可能还会搬过去')
+      assert.equal(raw.carry, undefined)
+
+      // 第二步：他换到轮换建出来的新房间里说话（真机上这段聊了一整夜）
+      ctx.emit('session/event', session('s-new-1'), humanMsg('我换到新房间了'))
+      ctx.emit('session/event', session('s-new-1'), TURN_END)
+      const moved = await waitFor(async () => {
+        const st = await homeStatus(root)
+        return st.sessionId === 's-new-1' && st.turns > 1 ? st : null
+      })
+      assert.equal(moved.turns, 2, '轮数接着数，不清零、也不白送')
+      raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+      assert.equal(raw.sessionId, 's-new-1')
+      assert.ok(raw.adoptedAt, '搬过屋子要留 adoptedAt，观测台能看出是认回的')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// rotatedTo 和 rotatedFrom 不一样：这条会话本来就是轮换替他开的房，
+// 他在里头说话，家就该在哪儿——不存在「太晚了不认」的窗口。
+test('rotatedTo 那条隔多久说话都认，carry 也留着', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    await writeAtomic(
+      join(paths(root).root, 'home.json'),
+      JSON.stringify(
+        {
+          wsId: 'ws-1',
+          sessionId: HER_SESSION,
+          createdAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+          turns: 5,
+          rotatedTo: 's-new-1',
+          rotatedAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+          carry: '## 上次我们说到这\n- 还没说完的话',
+        },
+        null,
+        2,
+      ),
+    )
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session('s-new-1'), humanMsg('三个钟头后我才搬过来'))
+      ctx.emit('session/event', session('s-new-1'), TURN_END)
+      const h = await waitFor(async () => {
+        const st = await homeStatus(root)
+        return st.turns > 5 ? st : null
+      })
+      assert.equal(h.sessionId, 's-new-1')
+      assert.equal(h.turns, 6)
+      const raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+      assert.match(String(raw.carry ?? ''), /还没说完的话/, 'carry 是给这间新房间准备的，不能丢')
     } finally {
       off()
     }
