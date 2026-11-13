@@ -1,5 +1,34 @@
 ## 1.0.1 — 2026-11-13
 
+- **成长与「像人」的四条小改动（用户 m00704，2026-11-14）：拒绝记账接到工具说明、检验带 id、首醒一句事实、topic 引导。** 不是新机制，是把已经存在的信息摆到她眼前、把已经存在的出口接上：
+  - **拒绝记账**：`capture.js` 的 `growth_commit` 说明补触发场景——拒绝过一件具体的事（对着某件事说了不做、或没照做的那一件）→ `type=refusal`，写清是哪件事。不改 `REFUSE_RE`（2026-11-02 已按用户选的方案 B 放宽），也不写进事件卡 prompt：这是操作要求，不是台词。
+  - **检验带 id**：`test_first` 的旧句子后面带 `（ev_xxx）`。她 70 条认领里只有 9 条带 refs，`her_recall` 一次没调用过——缺的是可指的编号，不是意愿；dreamtable 早就这么做了。
+  - **首醒**：新增 `lib/firstwake.js`——本地 ≥4 点、当天没有 ≥4 点的 wake、距上次 wake/活动 ≥4 小时，才在处境里加一句「你刚醒。」不写 `sleep:`（那是夜间 think 的槽位），不新增卡；桌上照旧摆 dreamtable。
+  - **话题**：`topic` 说明补「同一件事尽量用同一个标签」。`conflicts` 仍只认手填 topic，不做自动聚类——R §8.9 点名否过的「共同子串 + 极性」正是那条路。
+  - 测试：新增 `test/firstwake.test.mjs` 8 条；全量 **2562 pass / 0 fail**。
+
+- **采纳 issue #138 的三条字幕建议：偶发空列表重问一次、`subtitle_url_v2` 兜底、人工字幕排在 AI 前面（外部反馈，2026-11-14；dsh-fish 1.0.0 / macOS arm64）。** 他复现到的那条 `//aisubtitle.hdslb.com/...` 被跳过，其实 1.0.1 的 `absSubUrl()` 已经修了（提交 `870576f`，测试「协议相对的字幕地址补成 https 再取」），这里补的是他没被覆盖到的三处：
+  - **空轨道重问一次**：`/x/player/wbi/v2` 会偶发返回 `subtitles: []`（他的实测约 1/4），旧逻辑直接把这一次当成「没有字幕」。现在只要手里有登录凭据、轨道为空，就换一把 wbi 钥匙（`ensureMk(true)`）重问一次；匿名请求不重问。
+  - **`subtitle_url_v2` 兜底**：有些轨道只给 `subtitle_url_v2`（`//subtitle.bilibili.com/...`），以前只看 `subtitle_url` 就当没地址。新增 `trackUrl(s)` 统一取两者，过滤与取正文都走它。
+  - **人工轨优先**：`SUB_LAN_ORDER` 改成人工中文在前（`zh-CN`/`zh-Hans`/`zh`/`zh-TW`），`ai-zh` 排在它们之后、但仍在英文之前（中文内容不读成英文 CC）。理由是他的实测：AI 把「蛋鸡存栏」听成「氮气存栏」、「红原鸡」听成「无烟机」——这些字会直接进她引用的原文。
+  - 测试：`test/bili-subtitle.test.mjs` +3（偶发空重问、`subtitle_url_v2` 兜底、人工轨先读 `cc.json`），全量 **2548 pass / 0 fail**。1.0.1 尚未发布，这些随下一版一起出。
+
+- **她每一轮读的 20,412 字系统提示词里，16,055 字（79%）是宿主和别的插件的规矩；这次把「讲别的工具」的那几段真正摘掉了（用户反馈，2026-11-14；真机 dsh-fish 1.0.1）。** 用户问「宿主还有什么注入在影响她，能不能从插件这边删」，于是从她的会话存储里把最后一轮 `system/message` 原样拆出来量了一遍（脚本 `04-小工具/dump-fish-prompt.mjs`，zstd 多帧）：她自己的只有 4,357 字（身份 1,472 + 醒着的话 434 + 工具表 369 + 宿主那一行 48），其余 **13,750 字** 讲的是她没有的工具——`genui` 围栏 3,397、auto-memory 的记忆纪律 3,017、free-search 引擎表 2,003、present 文件引用规则 1,305、运行时/HMR 1,329、`tool:beauticode` 192、`tool:jobs` 382、`tool:pwsh` 259、`session_search` 315、`tool:goal` 528、`workflow` 325、evolve 持久记忆 698、那条 `harness:identity` 48（第二轮按用户要求也删了）。
+  - **根因：宿主 0.2.x 的 `assemble()` 把 `tools` 挂在瀑布返回之后**（`@deepseek-ai/dsh-system-prompt/lib/index.js` 的 `assembly = { sections, contexts, variables }` 才进瀑布，`tools` 之后才赋值），所以 `assembly.tools` 恒为 `undefined`，而 `trimToolDocs` 的自保第 1 条是「拿不到工具表就一段都不动」——整条判据变成空转。她日志里最后一次成功摘段是 `2026-11-06 04:24:45`（省 6926 字），之后宿主升级，这一周多一直原样塞给她。
+  - **改法一：工具表改从她自己身上取。** `attachAssembleFix` 在 `next()` 之后用 `visibleToolsOf(agent)`（`lib/restrict.js`，走 `agent.ctx.tools.view(agent)`）现取她的工具名，连同 `assembly.tools` 一起并进 `trimToolDocs`；两处都是空才整条不动。老的 0.2.x 前的宿主照旧按 `assembly.tools` 工作。
+  - **改法二：名字表兜住启发式抓不到的段。** `identity.js` 新增 `HOST_TOOL_SECTIONS`（`tool:beauticode`、`tool:jobs`、`tool:pwsh`、`tool:goal`、`free-search:engines`、`genui:fence`、`genui:native`、`dsh:auto-memory-pre-rules`、`dsh:auto-memory-pre`、`dsh:m6-reference-tail-pre`、`dsh-harness-dev-context`）与 `NEVER_TRIM`（`harness:identity`、`fish:*`、persona）——前者太短或压根没有像工具名的词，靠「≥3 个陌生工具名 + ≥400 字」永远抓不到。
+  - **判据顺序先看她够不够得着**：段里提到的工具只要有一个在她手上，这段就留着（讲的是她能做的事）；一个都不在，才按名字表 / 启发式摘。她自己那条 `tool:jobs` 测试就是这么钉住的：她手上真有 `job_output` 时留着。
+  - **能摘多少**：13,750 字里除了 present 规则（名字没对上，暂留），其余约 12,450 字在她这条链上会被摘掉，系统提示词从 20,412 降到 8,000 上下；`fish:` 开头的段顺序不变，她永远第一个被读到。
+  - **`harness:identity` 也删了**（用户 2026-11-14 追加要求）：那行 `You are an AI agent powered by DeepSeek Harness.` 是宿主的产品介绍，不是她的自我陈述。从 `NEVER_TRIM` 挪进 `HOST_TOOL_SECTIONS`，按名字一律摘；`test/identity.test.mjs` 里三处钉它的用例改成「摘掉之后只剩 `fish:identity`」。她读到的第一句从此就是「你是谁」，不再是宿主自报家门。
+  - **公开包加固（第二轮，2026-11-14）**：这套判据要随 npm 包发给别人，宿主的版本、插件、白名单都不一样，所以「摘得对」比「摘得多」重要：
+    - **段的正文可能是 getter**：真宿主挂的 section 是 `text: () => …`，旧代码只认 `typeof text === 'string'`，等于把每一段都读成空串——名字表和启发式在真机上一辈子对不上。新增 `sectionText()`，在 try/catch 里调 getter。
+    - **名字表要先对内容签名**：`HOST_TOOL_SECTIONS` 从 `Set` 改为 `Map<名字, { sig, needs? }>`。宿主改词、或另一个插件占用了同名 section 时，签名对不上就**留着**——名字像不等于正文就是那段。
+    - **`needs` 判据**：`ui:deliverable-file-references`（present 的文件引用规则）只在她**真握着 `present`** 时才留；没有 present 的用户那里照摘。
+    - **安全闸**：提示词总量 ≥ 4,000 字时，如果这一次要摘掉的段会让她剩下不到 2,000 字、或一次摘掉超过 75%，整次回退、原样放行，并记一行「太可疑，按原样放行」——这更像判据坏了，而不是「她没有这些工具」。
+    - **紧急开关**：`DSH_FISH_PROMPT_TRIM=off`（或 `0`/`false`/`no`）时只排序、一段不摘；`=debug` 时每轮记一行「她手上 N 个工具，摘 M 段 / 省 X 字」，排查不用再改代码。
+    - **第二人称自述的身份句一并摘掉**：复核她的提示词时还找到一句 `You are interacting with the user through the DeepSeek Harness Web GUI …`，它属于运行时说明、名字在各版本里可能不同。新增内容判据 `HOST_IDENTITY_CLAUSE`（`You are (an AI|coding agent|interacting with the user)`），不管 section 叫什么名字都摘；只在 `fish:*` 之外的段上生效，她自己的话里出现英文也不动。`dsh-context`（checkout / GUI / HMR 那段）也补进名字表。
+  - 测试：`test/identity.test.mjs` +9（`assembly.tools` 缺失时用调用方传进来的工具表、名字认得出的短段照摘、`harness:identity` 签名不符时留着、getter 正文、`needs: present` 的有无、两条安全闸、环境开关、第二人称身份句按内容摘）；全量 **2554 pass / 0 fail**。
+
 - **「每天几点醒」改成「她醒着的时间段」，并把醒来日的账算对（用户反馈，2026-11-13）。** 反馈里这个设置项被读成「每天几点起床」：有人设成 08:00–22:00，以为只在 8 点醒一次。实际语义一直是「醒着的时间段」——定时醒来、空醒、主动搭话都在里面；你发消息、主人 @、手动叫醒不受限制。这次把话说明白，并修了两处会让人觉得「设了没用」的账：
   - **文案与校验**：标签「她醒着的时间段」；hint 分三句写清「这段里自己醒 / 过了结束时间不再自己醒 / 你找她、@、手动随时能叫醒」；「每天醒几次」→「每天定时醒几次」、「每天事件数」→「每天几张事件卡」，组说明补「主动搭话另算，不占这个数」。时间段控件补时长；起止相同不再静默回退 20:00–23:00，输入框下就地红字，自动保存与 `POST /config` 都拒收（旧配置加载仍保留兜底）。
   - **改完时段当天重抽落点**：`ensureSchedule` 取最后一条 `sched:` 标记，旧落点不在新窗口或不属于当前醒来日就重抽；重抽点不早于现在，避免一开应用就补醒一次。
@@ -47,6 +76,13 @@
   - **改法**：身份段也在挂载处填一次（`fillOwner(..., pronounFor(root))`），跟处境段同一个口径（他的设置是「他 / 她 / TA」，改了下一轮就跟着变，不用重建会话）；`fillOwner` 本身幂等，别处再填一遍也不会坏。
   - **守住它**：`test/identity.test.mjs` 新增一条回归——渲染出来的「手边有什么」里不许出现 `{T}`，也不许出现任何 `{大写字母…}` 形状的占位符；顺手验了把 `owner.pronoun` 改成「她」之后同一段立刻跟着换。
   - 测试：全量 **2542 pass / 0 fail**。
+
+- **新增 `docs/插件约定.md`：给第三方插件作者的一页约定（2026-11-14）。** 起因是 PR #134 讨论「插件该放哪」：结论是各作者独立建仓、我们不收代码也不做索引，只维护一份带日期的短名单。于是把「怎么被市场找到」写清楚：
+  - **发现靠 `keywords`，不靠包名**：市场（`dsh-market-ui` 等）的检索键是 npm registry 的 `keywords:dsh-plugin`，缓存 6 小时；所以 `dsh-plugin` 必填、`dsh-fish` 建议带，包名只作命名建议（`dsh-fish-<用途>`，不强制前缀）。
+  - **`engines.dsh` 必填**（市场拿它比对本地版本），`description` 中文一句话，**禁止 `preinstall` / `install` / `postinstall`**（市场体检会警告，且容易把旧核心包拖进来），`dependencies` 保持 `{}`。
+  - **硬性条款六条**：不改她的数据（`events.jsonl` 只读）、不提供人格入口、不注册会改她人格或身份的工具、工具走 `tools.allow` 放行、至少一条 `node:test`、工具名写具体别抢通用词。
+  - 另含：接 [`docs/素材契约.md`](docs/素材契约.md) 的最小形状、安全边界（外发/`eval`/IM 登录）、给使用者的装前自查四项、常见翻车对照表、发布后多久能被搜到（新包按精确包名兜底）。
+  - `README.md` 的「想给她加一件只属于你的工具」末尾加了指针。纯文档，`node --test` 不影响绿线。
 
 ## 1.0.0 — 2026-11-13
 
