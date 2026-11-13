@@ -472,6 +472,29 @@ test('trimToolDocs：present 那段只在她真有 present 时留（needs 判据
   assert.equal(withIt.sections.length, 1, '她有 present → 留')
 })
 
+test('trimToolDocs：宿主用第二人称自述"你是一个 AI"的段，不管叫什么名字都摘掉', () => {
+  // 2026-11-14 复核她的提示词：除了 harness:identity，还有一句
+  // "You are interacting with the user through the DeepSeek Harness Web GUI …"
+  const gui = 'You are interacting with the user through the DeepSeek Harness Web GUI whose URL the runtime context names. ' + 'x'.repeat(200)
+  const out = trimToolDocs(
+    {
+      sections: [
+        { name: 'dsh-context', order: 5, text: 'The runtime context names the DeepSeek Harness implementation checkout. ' + gui },
+        { name: 'some:unknown-name', order: 6, text: gui },
+        { name: 'fish:identity', order: 8500, text: '你不是助手。你刚开始存在。' },
+      ],
+    },
+    { tools: ['her_recall'] },
+  )
+  assert.deepEqual(out.sections.map((s) => s.name), ['fish:identity'])
+  // 她自己的段里就算出现英文，也因为是 fish:* 而永不被动
+  const hers = trimToolDocs(
+    { sections: [{ name: 'fish:identity', order: 8500, text: 'You are an AI agent? 不，我不是。' }] },
+    { tools: ['her_recall'] },
+  )
+  assert.equal(hers.sections.length, 1)
+})
+
 test('trimToolDocs：安全闸——摘完几乎不给她留东西时整段放行，并记一次', () => {
   const logs = []
   const big = '## 别的工具\n\nfoo_tool bar_tool baz_tool\n' + 'x'.repeat(3600)
