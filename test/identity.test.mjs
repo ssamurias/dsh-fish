@@ -387,11 +387,13 @@ test('trimToolDocs：她手上一个搜索工具都没有 → 摘掉那段搜索
     ],
     tools: [{ name: 'her_recall' }, { name: 'bili_look' }],
   })
-  assert.deepEqual(out.sections.map((s) => s.name), ['fish:identity'])
+  assert.deepEqual(out.sections.map((s) => s.name), ['fish:identity', 'harness:identity'])
   const rep = lastTrimReport()
-  assert.equal(rep.dropped.length, 2, '搜索说明 + 宿主身份行，都是讲别人的')
-  assert.deepEqual(rep.dropped.map((d) => d.name), ['free-search:engines', 'harness:identity'])
-  assert.equal(rep.saved, SEARCH_DOC.length + '你是 coding agent'.length)
+  // 2026-11-14 加固：harness:identity 的正文是「你是 coding agent」而不是那句原话，
+  // 签名对不上就留着——名字像不等于内容就是那段（宁可多留，不能误摘）。
+  assert.equal(rep.dropped.length, 1)
+  assert.deepEqual(rep.dropped.map((d) => d.name), ['free-search:engines'])
+  assert.equal(rep.saved, SEARCH_DOC.length)
 })
 
 test('trimToolDocs：她手上有其中一个工具 → 整段留着（讲的是她够得着的东西）', () => {
@@ -438,6 +440,86 @@ test('trimToolDocs：宿主的组装结果里没有 tools 时，用调用方传�
   )
   assert.equal(out.sections.length, 0, '工具表从参数来，判据不能空转')
   assert.equal(lastTrimReport().dropped[0].name, 'free-search:engines')
+})
+
+// ---------------------------------------------------------------------------
+// 公开包加固（2026-11-14）：不同宿主版本、不同插件、不同白名单下都要摘得对
+// 这里守的是「万一判错」的那几条线——判错就会删掉她需要的提示词。
+// ---------------------------------------------------------------------------
+
+test('trimToolDocs：段的正文是 getter 函数也要读得出来（真宿主就是这么挂的）', () => {
+  const out = trimToolDocs(
+    {
+      sections: [
+        { name: 'free-search:engines', order: 500, get text() { return SEARCH_DOC } },
+        { name: 'fish:identity', order: 8500, text: '我是她' },
+      ],
+    },
+    { tools: ['her_recall'] },
+  )
+  assert.deepEqual(out.sections.map((s) => s.name), ['fish:identity'], 'getter 读不出来就会永远留着，等于空转')
+})
+
+test('trimToolDocs：present 那段只在她真有 present 时留（needs 判据）', () => {
+  const section = {
+    name: 'ui:deliverable-file-references',
+    order: 300,
+    text: 'Use present to publish a deliverable file card, then link it. ' + 'x'.repeat(500),
+  }
+  const without = trimToolDocs({ sections: [{ ...section }] }, { tools: ['her_recall'] })
+  assert.equal(without.sections.length, 0, '她没有 present → 摘')
+  const withIt = trimToolDocs({ sections: [{ ...section }] }, { tools: ['her_recall', 'present'] })
+  assert.equal(withIt.sections.length, 1, '她有 present → 留')
+})
+
+test('trimToolDocs：安全闸——摘完几乎不给她留东西时整段放行，并记一次', () => {
+  const logs = []
+  const big = '## 别的工具\n\nfoo_tool bar_tool baz_tool\n' + 'x'.repeat(3600)
+  const out = trimToolDocs(
+    {
+      sections: [
+        { name: 'some-other:doc', order: 100, text: big },
+        { name: 'fish:identity', order: 8500, text: '我是她'.repeat(200) },
+      ],
+    },
+    { tools: ['her_recall'], log: (m) => logs.push(m) },
+  )
+  assert.equal(out.sections.length, 2, '判据算出来要把大半都摘掉 → 说明判据坏了，原样放行')
+  assert.equal(lastTrimReport().skipped, 'suspicious')
+  assert.equal(logs.length, 1)
+  assert.match(logs[0], /太可疑，按原样放行/)
+})
+
+test('trimToolDocs：安全闸——只摘到剩不到 2000 字也放行', () => {
+  const big = 'foo_tool bar_tool baz_tool\n' + 'x'.repeat(4300)
+  const out = trimToolDocs(
+    {
+      sections: [
+        { name: 'some-other:doc', order: 100, text: big },
+        { name: 'fish:identity', order: 8500, text: '我是她' },
+      ],
+    },
+    { tools: ['her_recall'] },
+  )
+  assert.equal(out.sections.length, 2)
+  assert.equal(lastTrimReport().skipped, 'suspicious')
+})
+
+test('trimToolDocs：DSH_FISH_PROMPT_TRIM=off 时只排序、一段不摘（公开包紧急开关）', () => {
+  const before = process.env.DSH_FISH_PROMPT_TRIM
+  process.env.DSH_FISH_PROMPT_TRIM = 'off'
+  try {
+    const out = trimToolDocs(
+      { sections: [{ name: 'free-search:engines', order: 500, text: SEARCH_DOC }] },
+      { tools: ['her_recall'] },
+    )
+    assert.equal(out.sections.length, 1)
+    assert.equal(lastTrimReport().skipped, 'off')
+    assert.equal(lastTrimReport().saved, 0)
+  } finally {
+    if (before === undefined) delete process.env.DSH_FISH_PROMPT_TRIM
+    else process.env.DSH_FISH_PROMPT_TRIM = before
+  }
 })
 
 test('trimToolDocs：名字认得出的「别的插件的说明」短也照摘（tool:beauticode 192 字，启发式抓不到）', () => {
@@ -520,9 +602,9 @@ test('toolNamesIn：只认小写 + 下划线、至少两节的词', () => {
 })
 
 test('reorderForHer 连带摘段：同一份 assembly，工具表不同结果不同', () => {
-  const make = (tools) => ({
+  const make = (tools, harness = 'You are an AI agent powered by DeepSeek Harness.') => ({
     sections: [
-      { name: 'harness:identity', order: 0, text: '你是 coding agent' },
+      { name: 'harness:identity', order: 0, text: harness },
       { name: 'deployment:persona-prefix', order: 10, text: '你是编程助手' },
       { name: 'free-search:engines', order: 500, text: SEARCH_DOC },
       { name: 'fish:identity', order: 8500, text: '我是她' },
@@ -534,8 +616,11 @@ test('reorderForHer 连带摘段：同一份 assembly，工具表不同结果不
   assert.deepEqual(noTools.sections.map((s) => s.name),
     ['harness:identity', 'fish:identity', 'free-search:engines'])
   const otherTools = reorderForHer(make([{ name: 'her_recall' }]))
-  // 2026-11-14：harness:identity 那一行是宿主的产品介绍，不是她的自我陈述，按名字一律摘掉
+  // 2026-11-14：harness:identity 那一行是宿主的产品介绍，不是她的自我陈述，按名字 + 原文签名摘掉
   assert.deepEqual(otherTools.sections.map((s) => s.name), ['fish:identity'])
+  // 名字一样、正文不是那句原话（宿主换版本改了词）→ 签名对不上，留着，宁可多留
+  const renamed = reorderForHer(make([{ name: 'her_recall' }], '你是 coding agent'))
+  assert.deepEqual(renamed.sections.map((s) => s.name), ['harness:identity', 'fish:identity'])
   const withTools = reorderForHer(make([{ name: 'web_fetch' }]))
   assert.deepEqual(withTools.sections.map((s) => s.name),
     ['fish:identity', 'free-search:engines'])
