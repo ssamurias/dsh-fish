@@ -409,7 +409,7 @@ test('备份与恢复是一张卡：手动、自动、云端三层都在里面�
   const all = cardText(tree, '备份与恢复')
   assert.match(all, /手动备份/)
   assert.match(all, /自动备份/)
-  assert.match(all, /再往云端送一份/)
+  assert.match(all, /云端备份/)
   assert.equal(findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '云端备份')).length, 0, '不该再有一张单独的「云端备份」卡')
   const card = findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '备份与恢复'))[0]
   assert.equal(card.props.className, 'card full', '三层塞一窄列会挤成竖缝，这张要整行宽')
