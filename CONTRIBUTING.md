@@ -11,7 +11,7 @@
 不需要装任何东西。Node 20 以上，零依赖，没有 install 步骤。
 
 ```bash
-node --test        # 在仓库根目录，约 33 秒，当前基线 2718 条
+node --test        # 在仓库根目录，约 33 秒，当前基线 2725 条
 ```
 
 别写成 `node --test "test/*.test.mjs"`（Node 20 不展开 glob），也别写成 `node --test test/`（Node 26 + Windows 下 `MODULE_NOT_FOUND`）。沙箱里用 `node --test --test-isolation=none`，但有两条跨文件假红，逐文件跑才是准的。
