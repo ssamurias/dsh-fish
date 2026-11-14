@@ -40,6 +40,7 @@ import {
   mountedCount,
   registerIdentity,
   reorderForHer,
+  quietForeignMemory,
   resetIdentityCache,
   resetTurnIdentity,
   setWakeSection,
@@ -877,4 +878,58 @@ test('处境最多活十分钟：turn/end 一直不来也不会挂到进程退�
   assert.equal(getWakeSection('session-t'), '这一轮是你自己的。')
   t.mock.timers.tick(10 * 60_000)
   assert.equal(getWakeSection('session-t'), '', '到点无条件清掉')
+})
+
+test('quietForeignMemory：默认关，config 里打开才算（2026-11-14，用户 m02622）', () => {
+  const root = tmp()
+  fs.mkdirSync(root, { recursive: true })
+  assert.equal(quietForeignMemory(root), false, '没有配置就是关：随公开包发出去，不能替别人改环境')
+  const cfg = paths(root).config
+  fs.writeFileSync(cfg, JSON.stringify({ prompt: { quietForeignMemory: true } }), 'utf8')
+  const later = new Date(Date.now() + 5000)
+  fs.utimesSync(cfg, later, later)
+  assert.equal(quietForeignMemory(root), true)
+  fs.writeFileSync(cfg, JSON.stringify({ prompt: { quietForeignMemory: false } }), 'utf8')
+  const later2 = new Date(Date.now() + 10000)
+  fs.utimesSync(cfg, later2, later2)
+  assert.equal(quietForeignMemory(root), false, '关掉之后立刻按关走')
+})
+
+test('reorderForHer：开了 quietForeign，别人的记忆段和 <memory_system> 都不再递给她', () => {
+  const assembly = {
+    sections: [
+      { name: 'harness:identity', text: 'You are an AI agent powered by DeepSeek Harness.' },
+      { name: IDENTITY_SECTION, text: '## 你是谁\n我是她' },
+      { name: 'evolve:memory-index', text: '# 持久记忆\n中央库里存着一些从前的事，按工作区分开。' },
+      { name: 'dsh:auto-memory-pre-rules', text: '## 记忆系统的固定纪律\n写日志之前先想清楚。' },
+    ],
+    contexts: [
+      { name: 'dsh:auto-memory-pre', text: '<memory_system>每轮都给的一段</memory_system>' },
+      { name: 'dsh:auto-memory-pre', text: 'required 的那条', required: true },
+      { name: 'other-context', text: '别的东西' },
+    ],
+  }
+  const out = reorderForHer(assembly, { quietForeign: true })
+  const names = out.sections.map((s) => String(s?.name ?? ''))
+  assert.equal(names.includes('evolve:memory-index'), false, 'evolve 的索引段摘掉')
+  assert.equal(names.includes('dsh:auto-memory-pre-rules'), false, 'auto-memory 的规矩段摘掉')
+  assert.equal(names.includes(IDENTITY_SECTION), true, '她自己的身份段不受影响')
+  const ctxs = out.contexts ?? []
+  assert.equal(ctxs.filter((c) => c?.name === 'dsh:auto-memory-pre' && c?.required !== true).length, 0, '动态那一段摘掉')
+  assert.equal(ctxs.filter((c) => c?.name === 'dsh:auto-memory-pre' && c?.required === true).length, 1, '宿主标了必需的照留')
+  assert.equal(ctxs.some((c) => c?.name === 'other-context'), true, '别人的 context 不动')
+})
+
+test('reorderForHer：没开 quietForeign 时原样留着（别人家的鱼不受影响）', () => {
+  const assembly = {
+    sections: [
+      { name: 'harness:identity', text: 'You are an AI agent powered by DeepSeek Harness.' },
+      { name: IDENTITY_SECTION, text: '## 你是谁\n我是她' },
+      { name: 'evolve:memory-index', text: '# 持久记忆\n中央库里存着一些从前的事。' },
+    ],
+    contexts: [{ name: 'dsh:auto-memory-pre', text: '<memory_system>…</memory_system>' }],
+  }
+  const out = reorderForHer(assembly, { quietForeign: false })
+  assert.equal(out.sections.some((s) => s?.name === 'evolve:memory-index'), true)
+  assert.equal((out.contexts ?? []).some((c) => c?.name === 'dsh:auto-memory-pre'), true)
 })
