@@ -100,6 +100,18 @@ function cardText(tree, title) {
   return textOf(hit[0]).join('')
 }
 
+/** 找开关：Toggle 渲染成 button[role=switch]，里面只有一个 knob、没有文字，按旁边的标签认。 */
+function sw(tree, label) {
+  const hit = findAll(tree, (n) => n.type === 'button' && n.props?.role === 'switch'
+    && (n.children ?? []).every((c) => c?.type === 'span' && c?.props?.className === 'knob'))
+  const owned = hit.filter((b) => {
+    const fld = findAll(tree, (n) => n.type === 'div' && n.props?.className === 'fld' && (n.children ?? []).includes(b))[0]
+    return fld && textOf(fld).join('').startsWith(label)
+  })
+  assert.equal(owned.length, 1, `页面上要正好有一个「${label}」开关`)
+  return owned[0]
+}
+
 /** 假 fetch：按路径回固定的 JSON；没写的路径回 {}。 */
 async function withFetch(table, fn) {
   const prev = globalThis.fetch
@@ -342,4 +354,63 @@ test('恢复回执：只记了个数的那几个算进真实条数，「没列�
   assert.ok(msg.includes(names[0]), msg)
   assert.match(msg, /另有 5 个连名字都写不进包里/)
   assert.doesNotMatch(msg, /还有 \d+ 个没列出来/)
+})
+
+// ---- 2026-11-14 用户 m02555：点「往云端送」点不开，得说是缺什么 ----
+
+test('云端开关：一个地方都没有时不开，并且说清楚先去哪儿加', async () => {
+  const { tree, sets } = await render({ tab: 'data', cloudState: { targets: [], kinds: [] } })
+  let posted = 0
+  await withFetch({}, async (calls) => {
+    await sw(tree, '往云端送').props.onClick()
+    posted = calls.filter((c) => c.path === '/config').length
+  })
+  assert.equal(posted, 0, '缺东西时不该把开关状态提交上去')
+  assert.equal(last(sets, 'cloudOn'), undefined, '开关不该动')
+  const msg = last(sets, 'cloudMsg')
+  assert.ok(msg, '点了必须有回话，不能只回弹')
+  assert.match(msg, /还没有云端存储方式/)
+  assert.match(msg, /加一个/)
+})
+
+test('云端开关：地方都列出来了但一个都没填完时，指到「改」而不是让人瞎找', async () => {
+  const { tree, sets } = await render({
+    tab: 'data',
+    cloudState: { targets: [{ id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: true, ready: false, problem: '还差：目录' }], kinds: [] },
+  })
+  let posted = 0
+  await withFetch({}, async (calls) => {
+    await sw(tree, '往云端送').props.onClick()
+    posted = calls.filter((c) => c.path === '/config').length
+  })
+  assert.equal(posted, 0)
+  const msg = last(sets, 'cloudMsg')
+  assert.match(msg, /还没填完/)
+  assert.match(msg, /改/)
+})
+
+test('云端开关：有一个能用的地方时正常打开，并清掉上一句提示', async () => {
+  const { tree, sets } = await render({
+    tab: 'data',
+    cloudState: { targets: [{ id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: true, ready: true, problem: '' }], kinds: [] },
+  })
+  await withFetch({ 'POST /config': { ok: true } }, async (calls) => {
+    await sw(tree, '往云端送').props.onClick()
+    const hit = calls.find((c) => c.path === '/config')
+    assert.ok(hit, '要真的提交')
+    assert.match(String(hit.body), /"enabled":true/)
+  })
+  assert.equal(last(sets, 'cloudOn'), true)
+  assert.equal(last(sets, 'cloudMsg'), '')
+})
+
+test('备份与恢复是一张卡：手动、自动、云端三层都在里面，且只有这一张', async () => {
+  const { tree } = await render({ tab: 'data' })
+  const all = cardText(tree, '备份与恢复')
+  assert.match(all, /拿一份在手上/)
+  assert.match(all, /到点自己存一份/)
+  assert.match(all, /再往云端送一份/)
+  assert.equal(findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '云端备份')).length, 0, '不该再有一张单独的「云端备份」卡')
+  const card = findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '备份与恢复'))[0]
+  assert.equal(card.props.className, 'card full', '三层塞一窄列会挤成竖缝，这张要整行宽')
 })
