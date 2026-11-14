@@ -634,7 +634,29 @@ test('自动备份的两个数字框并排一格，不各占一行', async () =>
   assert.equal(sameRow.length, 1, '两个框要在同一个 row 里并排')
 })
 
-// ---- 2026-11-14 用户 m03579：.enc 看不懂、「从这份恢复」这条路径说不通、口令那句说两遍 ----
+// ---- 2026-11-14 用户 m04003：云端那四个旋钮摆成 2×2，加密与渠道往下挪 ----
+
+test('云端那四个旋钮摆成 2×2：左上开不开、右上多久、左下连不连最新、右下留几份', async () => {
+  // 原来四个竖着排四行，要上下扫四遍才拼得出「现在到底怎么在送」。
+  // 左上/右上一行是「送不送 × 多久送」，左下/右下一行是「连不连最新 × 每处留几份」。
+  const { tree } = await render({ tab: 'data', cloudOpen: true, cloudState: { enabled: false, targets: [], kinds: [] } })
+  const grid = findAll(tree, (n) => n.type === 'div' && n.props?.style?.display === 'grid')
+  assert.equal(grid.length, 1, '这四个旋钮要在同一个 grid 里')
+  const cells = grid[0].children
+  assert.equal(cells.length, 4, '正好四个格子（左下那颗开关自带一格）')
+  const order = cells.map((c) => textOf(c).join(''))
+  assert.match(order[0], /往云端送/, '左上：送不送')
+  assert.match(order[1], /多久送一次/, '右上：多久送一次')
+  assert.match(order[2], /「最新」那份也送/, '左下：连不连「最新」')
+  assert.match(order[3], /每个地方留几份/, '右下：每个地方留几份')
+
+  // 下一层（加密）必须排在这个 grid 后面，不能又插回旋钮中间
+  const flat = []
+  findAll(tree, (n) => { flat.push(n); return false })
+  const at = (label) => flat.findIndex((n) => textOf(n).join('').startsWith(label))
+  assert.ok(at('加密之后再送') > at('多久送一次'), '加密之后再送要排在四个旋钮后面')
+})
+
 
 test('云上那几份：既给「取到本机」，也留着「直接恢复」——原来说的路径根本不存在', async () => {
   // 用户原话：「从云端下载下来的不能是 json 格式吗……我不下载下来怎么去导入数据恢复」
