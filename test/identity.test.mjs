@@ -38,8 +38,10 @@ import {
   identityText,
   lastTrimReport,
   mountedCount,
+  promptPrefs,
   registerIdentity,
   reorderForHer,
+  reorderVolatile,
   quietForeignMemory,
   resetIdentityCache,
   resetTurnIdentity,
@@ -933,3 +935,70 @@ test('reorderForHer：没开 quietForeign 时原样留着（别人家的鱼不�
   assert.equal(out.sections.some((s) => s?.name === 'evolve:memory-index'), true)
   assert.equal((out.contexts ?? []).some((c) => c?.name === 'dsh:auto-memory-pre'), true)
 })
+
+test('promptPrefs：会变的段挪到最后默认开，config 里可以关（2026-11-14，用户 m02835）', () => {
+  const root = tmp()
+  fs.mkdirSync(root, { recursive: true })
+  assert.equal(promptPrefs(root).orderVolatileSections, true, '默认开：只换位置，不改字')
+  const cfg = paths(root).config
+  fs.writeFileSync(cfg, JSON.stringify({ prompt: { orderVolatileSections: false } }), 'utf8')
+  const later = new Date(Date.now() + 5000)
+  fs.utimesSync(cfg, later, later)
+  assert.equal(promptPrefs(root).orderVolatileSections, false)
+})
+
+test('reorderVolatile：连续几轮都在变的那段挪到最后，稳的不动', () => {
+  const key = 'vol-evolve'
+  let n = 0
+  const build = () => ({
+    sections: [
+      { name: 'harness:identity', order: 0, text: () => 'You are an AI agent powered by DeepSeek Harness.' },
+      { name: 'evolve:memory-index', order: 400, text: () => `# 持久记忆\n今天记了 ${n} 条` },
+      { name: 'stable:doc', order: 600, text: () => '一段不动的说明' },
+      { name: BELIEFS_SECTION, order: BELIEFS_ORDER, text: () => '尾巴' },
+    ],
+  })
+  assert.equal(reorderVolatile(build(), { key }), 0, '第一轮只记账，还没见过「上一轮」')
+  n = 1
+  assert.equal(reorderVolatile(build(), { key }), 0, '第二轮只变过一次，先不动')
+  n = 2
+  const third = build()
+  assert.equal(reorderVolatile(third, { key }), 1, '第三轮：见过 3 次、变了 2 次，挪')
+  assert.equal(third.sections.at(-1)?.name, 'evolve:memory-index', '挪到最末尾')
+  assert.equal(third.sections.at(-2)?.name, BELIEFS_SECTION, '排在 beliefs 之后')
+  assert.ok(third.sections.at(-1).order >= BELIEFS_ORDER, 'order 也跟着排到最后，宿主按 order 排也不会被排回去')
+  assert.equal(third.sections[0].name, 'harness:identity', '宿主身份段不动')
+  assert.equal(third.sections.find((s) => s.name === 'stable:doc')?.order, 600, '稳定的段原样不动')
+})
+
+test('reorderVolatile：只抖一次不算「一直在变」', () => {
+  const key = 'vol-jitter'
+  const make = (text) => ({ sections: [{ name: 'other:plugin', order: 700, text: () => text }] })
+  reorderVolatile(make('一'), { key })
+  reorderVolatile(make('二'), { key })
+  const out = make('二')
+  assert.equal(reorderVolatile(out, { key }), 0, '三次里只变了一次：不挪')
+  assert.equal(out.sections[0].order, 700)
+})
+
+test('reorderVolatile：她自己的段和宿主的身份段永远不挪', () => {
+  const key = 'vol-pinned'
+  let n = 0
+  const build = () => ({
+    sections: [
+      { name: 'harness:identity', order: 0, text: () => `You are an AI agent. ${n}` },
+      { name: IDENTITY_SECTION, order: IDENTITY_ORDER, text: () => `## 你是谁\n第 ${n} 版` },
+      { name: 'other:plugin', order: 700, text: () => `第 ${n} 版` },
+    ],
+  })
+  reorderVolatile(build(), { key })
+  n = 1
+  reorderVolatile(build(), { key })
+  n = 2
+  const out = build()
+  assert.equal(reorderVolatile(out, { key }), 1)
+  assert.equal(out.sections[0].name, 'harness:identity')
+  assert.equal(out.sections.filter((s) => s.name === IDENTITY_SECTION).length, 1)
+  assert.equal(out.sections.at(-1).name, 'other:plugin')
+})
+
