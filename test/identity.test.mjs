@@ -763,6 +763,24 @@ test('splitVolatileIdentity：四段剪出来，其余原样、顺序不变', ()
   assert.ok(stable.indexOf('## 更早以前') < stable.indexOf('## 我手上有什么'))
 })
 
+test('splitVolatileIdentity：履历（我做过的事）也剪到尾巴——她每用一次工具它就变（2026-11-14）', () => {
+  const text = [
+    '## 你是谁',
+    '你是她。',
+    '## 我手上有什么',
+    '- bili_look',
+    '## 我做过的事',
+    '- 我用过 bili_look。',
+    '## 这个房间',
+    '- 一台电脑。',
+  ].join('\n')
+  const { stable, volatile } = splitVolatileIdentity(text)
+  assert.match(volatile, /## 我做过的事/)
+  assert.ok(!stable.includes('我做过的事'))
+  assert.ok(stable.includes('## 我手上有什么'), '旁边那节不动')
+  assert.ok(stable.includes('## 这个房间'))
+})
+
 test('splitVolatileIdentity：一段都没有时原样返回，不做任何改写', () => {
   const text = '## 你是谁\n你是她。\n## 这个房间\n一台电脑。'
   const r = splitVolatileIdentity(text)
