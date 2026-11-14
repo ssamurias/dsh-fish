@@ -407,8 +407,8 @@ test('云端开关：有一个能用的地方时正常打开，并清掉上一�
 test('备份与恢复是一张卡：手动、自动、云端三层都在里面，且只有这一张', async () => {
   const { tree } = await render({ tab: 'data' })
   const all = cardText(tree, '备份与恢复')
-  assert.match(all, /拿一份在手上/)
-  assert.match(all, /到点自己存一份/)
+  assert.match(all, /手动备份/)
+  assert.match(all, /自动备份/)
   assert.match(all, /再往云端送一份/)
   assert.equal(findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '云端备份')).length, 0, '不该再有一张单独的「云端备份」卡')
   const card = findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '备份与恢复'))[0]
