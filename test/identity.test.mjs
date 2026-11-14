@@ -1002,3 +1002,25 @@ test('reorderVolatile：她自己的段和宿主的身份段永远不挪', () =>
   assert.equal(out.sections.at(-1).name, 'other:plugin')
 })
 
+
+test('处境排在信念之后：每醒一次，只有它自己是新的（2026-11-14，用户 m03077）', () => {
+  // 处境（fish:wake）每醒一次就换一份（时间、间隔、最近几条），原来排 8700、
+  // 压在 fish:beliefs（9000）前面，于是每次自主醒都把后面那三千字信念段带掉缓存。
+  // 现在 9250：信念留在缓存里，只有处境自己重算；账本挪来的外来段（9400+）仍在最后。
+  assert.ok(
+    WAKE_ORDER > BELIEFS_ORDER,
+    `处境要排在信念后面（WAKE_ORDER=${WAKE_ORDER}，BELIEFS_ORDER=${BELIEFS_ORDER}）`,
+  )
+
+  // 宿主按 order 升序渲染：排一遍，处境必须是最后一个「她自己的」段。
+  const sections = [
+    { name: IDENTITY_SECTION, order: IDENTITY_ORDER },
+    { name: TOOLS_SECTION, order: TOOLS_ORDER },
+    { name: WAKE_SECTION, order: WAKE_ORDER },
+    { name: BELIEFS_SECTION, order: BELIEFS_ORDER },
+  ].sort((a, b) => a.order - b.order)
+  assert.deepEqual(
+    sections.map((s) => s.name),
+    [IDENTITY_SECTION, TOOLS_SECTION, BELIEFS_SECTION, WAKE_SECTION],
+  )
+})
