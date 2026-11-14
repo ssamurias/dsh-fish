@@ -414,3 +414,40 @@ test('备份与恢复是一张卡：手动、自动、云端三层都在里面�
   const card = findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '备份与恢复'))[0]
   assert.equal(card.props.className, 'card full', '三层塞一窄列会挤成竖缝，这张要整行宽')
 })
+
+// ---- 2026-11-14 用户 m02795：自动备份那层只留「存在哪儿」，两个重复入口撤掉 ----
+
+test('自动备份那层不再有「从这份恢复」和「现在存一份」——要存/要恢复都走上面手动那两颗', async () => {
+  const autoState = {
+    enabled: true, count: 1, sizeText: '1 份，一共 8KB', due: false, dueWhy: '24 小时后',
+    dir: 'C:\\Users\\me\\.dsh-fish\\backups', latest: { name: '大肥鱼-自动-最新.json' },
+    items: [{ name: '大肥鱼-自动-20261114-070255.json', bytes: 8192 }],
+  }
+  const { tree } = await render({ tab: 'data', autoState })
+  const labels = findAll(tree, (n) => n.type === 'button').map((b) => textOf(b).join(''))
+  assert.ok(!labels.includes('从这份恢复'), '列表里不该再挂恢复按钮')
+  assert.ok(!labels.includes('现在存一份到数据文件夹'), '手动存一份已被上面「备份成一份文件」覆盖')
+  assert.ok(labels.includes('备份成一份文件'), '上面那颗手动备份要还在')
+  assert.ok(labels.includes('从备份恢复'), '恢复入口只剩上面那颗')
+})
+
+test('自动备份那层明写「存在哪儿」，并给一颗复制路径的按钮', async () => {
+  const dir = 'C:\\Users\\me\\.dsh-fish\\backups'
+  const autoState = { enabled: true, count: 0, sizeText: '', due: true, dueWhy: '还没备份过', dir, latest: null, items: [] }
+  const { tree, sets } = await render({ tab: 'data', autoState })
+  const all = cardText(tree, '备份与恢复')
+  assert.ok(all.includes(dir), '路径要写在明面上，别让人自己去猜')
+  assert.match(all, /资源管理器/)
+  const copy = button(tree, '复制备份文件夹路径')
+  await withFetch({}, async () => { await copy.props.onClick() })
+  const note = last(sets, 'note')
+  assert.ok(note, '点了要有回话')
+  assert.match(note, /剪贴板|复制/, '复制不了也要说清楚，不能静默')
+})
+
+test('自动备份那层：路径还没读到时按钮禁用，并说「刷新一下再看」而不是给颗死按钮', async () => {
+  const { tree } = await render({ tab: 'data', autoState: { enabled: true, count: 0, dir: '', items: [] } })
+  const b = button(tree, '备份路径还没读到')
+  assert.equal(b.props.disabled, true)
+  assert.match(cardText(tree, '备份与恢复'), /刷新/)
+})

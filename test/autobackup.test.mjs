@@ -51,7 +51,7 @@ async function makeRoot() {
   return root
 }
 
-const cfgOf = (backup) => ({ backup: { enabled: true, everyDays: 1, keep: 7, lastAt: '', ...backup } })
+const cfgOf = (backup) => ({ backup: { enabled: true, everyDays: 1, keep: 2, lastAt: '', ...backup } })
 
 // ---- 名字 ----
 
@@ -293,7 +293,7 @@ test('状态：关着也如实说关着，并给出目录与份数', async () =>
     assert.equal(st.dueWhy, '关着')
     assert.equal(st.dir, autoBackupDir(root))
     assert.equal(st.everyDays, 1)
-    assert.equal(st.keep, 7)
+    assert.equal(st.keep, 2)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -391,7 +391,7 @@ test('catchupBackup：该刷就刷，不该刷就什么都不写', async () => {
   }
 })
 
-test('兜底那份也能读回来（设置页那张列表里点「从这份恢复」走得通）', async () => {
+test('兜底那份也能读回来（云端与排障要它；设置页上那两颗按钮已撤，读回能力仍在模块里）', async () => {
   const root = await makeRoot()
   try {
     await runLatestBackup(root, { now: new Date(), config: cfgOf({}) })
