@@ -479,3 +479,35 @@ test('AUTO_SKIP 只写相对路径，不写盘上绝对路径；传空数组就�
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('自动备份范围同时用于历史档和最新档，手动备份仍使用原范围', async () => {
+  const root = await makeRoot()
+  try {
+    await mkdir(join(root, 'home', '.dsh-im', 'inbound'), { recursive: true })
+    await writeFile(join(root, 'home', '.dsh-im', 'inbound', 'book.txt'), 'fixture')
+    await mkdir(join(root, 'media'))
+    await writeFile(join(root, 'media', 'picture.png'), Buffer.from([1, 2, 3]))
+    const backup = cfgOf({ coreOnly: true, extras: ['attachments', '../outside'] })
+    const historical = await runAutoBackup(root, { config: backup })
+    const latest = await runLatestBackup(root, { config: backup })
+    for (const result of [historical, latest]) {
+      assert.equal(result.ok, true)
+      const { bundle } = await readAutoBackup(result.name, root)
+      assert.equal(checkBundle(bundle).ok, true)
+      const paths = bundle.files.map((file) => file.path)
+      assert.ok(paths.includes('events.jsonl'))
+      assert.ok(paths.includes('home/.dsh-im/inbound/book.txt'))
+      assert.ok(!paths.includes('owner.json'))
+      assert.ok(bundle.excluded.includes('media/'))
+    }
+
+    const full = await runLatestBackup(root, { config: cfgOf({}) })
+    for (const bundle of [(await readAutoBackup(full.name, root)).bundle, await collectBackup(root)]) {
+      const paths = bundle.files.map((file) => file.path)
+      assert.ok(paths.includes('owner.json'))
+      assert.ok(paths.includes('media/picture.png'))
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
