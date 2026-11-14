@@ -152,7 +152,7 @@ test('组件在"还没有数据"时也能渲染，不抛错', async () => {
   const atHomePage = src1.indexOf('const homePage')
   const atDiary = src1.indexOf("group('日记'", atHomePage)
   // 卡先定义成常量（在 homePage 之前），再在住所页里按「日记 → 小纸条 → 自检」的顺序摆进去。
-  const atNote = src1.indexOf("groupFull('她写的小纸条'")
+  const atNote = src1.indexOf("groupFull(S('她写的小纸条')")
   const atUse = src1.indexOf('        inboxCard,', atHomePage)
   const atCheck = src1.indexOf("group('本插件工作自检'")
   assert.ok(atNote > 0, '「她写的小纸条」卡要在')
@@ -584,7 +584,7 @@ test('状态卡把「认知矛盾」和「记得很牢」露出来（2026-10-24 
   // 提示语在 title 属性里，textOf 取不到，直接查源码
   const src = await readFile(CLIENT, 'utf8')
   assert.ok(src.includes('不能同时算数'), '要说清这是什么，不能只丢一个数字')
-  assert.ok(src.includes('可以直接问她'), '给她留一条出路：去问，而不是让她自己猜')
+  assert.ok(src.includes('可以直接问${SELF_SHE}'), '给她留一条出路：去问，而不是让她自己猜')
   assert.ok(!src.includes('这不是正确答案'), '界面不许替她裁决哪句对')
 })
 

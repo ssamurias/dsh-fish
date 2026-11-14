@@ -217,5 +217,5 @@ test('她得知道自己有 her_dream（0.9.0 起对所有人）', () => {
   assert.match(selfdoc, /DREAM_BRIEF/, '身份文档要念到它')
   const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.match(client, /group\('做梦'/, '设置页有「做梦」那张开关卡')
-  assert.match(client, /group\('她做过的梦'/, '设置页有「她做过的梦」那张卡')
+  assert.match(client, /group\(S\('她做过的梦'\)/, '设置页有「她做过的梦」那张卡')
 })

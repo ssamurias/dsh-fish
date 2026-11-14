@@ -83,12 +83,12 @@ test('页签顺序：插件 → 原理 → 数据 → 反馈；出门排在「�
   assert.ok(cl.includes("jpost('/outing', { action: 'ack' })"), '确认按钮要能写回 ack')
   assert.ok(cl.includes("groupFull('先确认一下'"), '没确认时要有一张确认卡')
   // 收起的是入口，不是功能：说明、页面、渲染树都还在，重新放出来不用重写。
-  assert.ok(cl.includes("outing: '出门："), 'TAB_HELP 必须有出门页说明')
+  assert.ok(cl.includes("outing: S('出门："), 'TAB_HELP 必须有出门页说明')
   assert.ok(/showTab\('outing'\) \? outingPage : null/.test(cl), '出门页要挂进渲染树')
   assert.ok(cl.includes('const outingPage = h('), '出门页面代码要保留')
   // 动作面板不是配置：不许进 AUTO_SAVE_TABS（否则会多一句「改完就生效」的错误提示）
   assert.ok(!/AUTO_SAVE_TABS = new Set\(.*outing/.test(cl), '出门不进自动保存页签')
-  assert.ok(cl.includes("principle: '原理："), 'TAB_HELP 必须有原理页说明')
+  assert.ok(cl.includes("principle: S('原理："), 'TAB_HELP 必须有原理页说明')
   assert.ok(cl.includes("showTab('principle') ? principlePage : null"), '必须真的挂上渲染')
   assert.ok(cl.indexOf("showTab('principle')") > cl.indexOf("showTab('env')"), '原理在插件之后')
   assert.ok(cl.indexOf("showTab('principle')") < cl.indexOf("showTab('data')"), '原理在数据之前')

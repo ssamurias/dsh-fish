@@ -371,6 +371,91 @@ test('设置界面面向用户的文案里不出现男字旁的「他」', async
   assert.deepEqual(bad, [], '面向用户的字符串里不许出现「他」')
 })
 
+test('设置界面里跟她有关的固定文案都走 S()，不裸写「她」（issue #139）', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+  // 守的是 issue #139 的边界：旁观者视角的第三人称统一经 S() 出，
+  // 换 config.self.pronoun 时才只有一处可改。她说过的话、日记原文不经过 S()，
+  // 也不在 client.js 里；模板里的静态段已由 codemod 换成 ${SELF_SHE}。
+  //
+  // 这里用一个小词法走一遍：注释跳过，字符串/模板记下来，模板的 ${...} 里按代码
+  // 再走（所以 `...${cond ? '她…' : ''}` 这种也能抓到）。
+  const bad = []
+  const lineAt = (at) => {
+    const s = src.lastIndexOf('\n', at) + 1
+    const e = src.indexOf('\n', at)
+    return src.slice(s, e === -1 ? src.length : e)
+  }
+  const flag = (at, why) => bad.push(`${why}${src.slice(Math.max(0, at - 20), at + 24)}`)
+
+  const stack = []
+  let i = 0
+  let inCode = true
+  while (i < src.length) {
+    const c = src[i]
+    const n = src[i + 1]
+
+    if (!inCode) {
+      const top = stack[stack.length - 1]
+      const wrapped = src.slice(top.start - 2, top.start) === 'S('
+      if (c === '\\') { i += 2; continue }
+      if (c === '`') {
+        const seg = src.slice(top.segStart, i)
+        if (!wrapped && /她/.test(seg)) flag(top.start, '模板里的「她」没包 S()：')
+        stack.pop()
+        inCode = true
+        i += 1
+        continue
+      }
+      if (c === '$' && n === '{') {
+        if (!wrapped && /她/.test(src.slice(top.segStart, i))) flag(top.segStart, '模板插值外的「她」没换成 ${SELF_SHE}：')
+        stack.push({ kind: 'expr', depth: 0, start: i })
+        inCode = true
+        i += 2
+        continue
+      }
+      i += 1
+      continue
+    }
+
+    if (c === '/' && n === '/') { const e = src.indexOf('\n', i); i = e === -1 ? src.length : e; continue }
+    if (c === '/' && n === '*') { const e = src.indexOf('*/', i + 2); i = e === -1 ? src.length : e + 2; continue }
+    if (c === "'" || c === '"') {
+      const q = c
+      let j = i + 1
+      while (j < src.length && src[j] !== q) { if (src[j] === '\\') j += 1; j += 1 }
+      // S() 自己的实现：初值与 split 的那个「她」是机制本身，不是文案。
+      if (/她/.test(src.slice(i + 1, j)) && src.slice(i - 2, i) !== 'S('
+        && !/SELF_SHE\s*=.*'她'|\.split\('她'\)/.test(lineAt(i))) flag(i, '固定文案里的「她」没包 S()：')
+      i = j + 1
+      continue
+    }
+    if (c === '`') {
+      stack.push({ kind: 'template', segStart: i + 1, start: i })
+      inCode = false
+      i += 1
+      continue
+    }
+
+    const top = stack[stack.length - 1]
+    if (top && top.kind === 'expr') {
+      if (c === '{') top.depth += 1
+      else if (c === '}') {
+        if (top.depth === 0) {
+          stack.pop()
+          const parent = stack[stack.length - 1]
+          if (parent && parent.kind === 'template') parent.segStart = i + 1
+          inCode = false
+          i += 1
+          continue
+        }
+        top.depth -= 1
+      }
+    }
+    i += 1
+  }
+  assert.deepEqual(bad, [], '固定文案里的「她」必须包在 S() 里；否则 self.pronoun 换不掉它')
+})
+
 test('own 层的 ops_* 能存进白名单，且 /tools 会说明「收窄挡不住它」（2026-10-29）', async () => {
   // 用户真机：想把 dsh-ops 的 ops_bash 写进白名单，输入框一直报「名字不存在」。
   // 原因是 knownToolNames 只收 restrictableNames，而 ops_* 注册在 agent 自身作用域。

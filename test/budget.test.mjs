@@ -57,9 +57,9 @@ test('say.js：递话时也带预算，但不许把身份拼回去', () => {
 
 test('客户端：有这一项设置、也有登录提示卡与「不用了」', () => {
   const src = SRC('../lib/client.js')
-  assert.ok(src.includes("label: '她一轮最多写多少字'"))
+  assert.ok(src.includes("label: S('她一轮最多写多少字')"))
   assert.ok(src.includes('replyChars: Number(replyChars)'), '要进 buildConfig 才会存盘')
-  assert.ok(src.includes("['她一轮最多写多少字', replyChars, 0, 2000]"), '越界报错里的名字跟控件上的一样')
+  assert.ok(src.includes("[S('她一轮最多写多少字'), replyChars, 0, 2000]"), '越界报错里的名字跟控件上的一样')
   assert.ok(src.includes('还没存 B 站登录'))
   assert.ok(src.includes('ownerHintDismissed: true'))
   assert.ok(src.includes('不用了'))
