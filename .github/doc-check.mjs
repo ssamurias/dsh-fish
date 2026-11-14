@@ -76,12 +76,20 @@ function actualCases() {
   if (fail && Number(fail[1]) > 0) {
     console.error(`注意：这次跑测试本身有 ${fail[1]} 条失败，数字仅供参照。`)
   }
-  const pass = /^# pass (\d+)$/m.exec(out)
-  if (!pass) {
-    console.error('没从 TAP 输出里读到 "# pass N"。换一个 --test-reporter 的话，这个脚本要跟着改。')
+  // 用 `# tests` 而不是 `# pass`（2026-11-14 用户在 CI 上抓到）：有几条用例是按平台跳过的
+  // ——只读属性挡不住 rename、路径大小写不敏感这类只在 Windows 上成立的事。
+  // 在 ubuntu 的 CI 上 `# pass` 会少 6 条，可文档里那个数字说的是「一共有多少条测试」，
+  // 跟平台无关；跳过的也算一条。`# tests` 把 skipped / todo 都算进去，跨平台一致。
+  const total = /^# tests (\d+)$/m.exec(out)
+  if (!total) {
+    console.error('没从 TAP 输出里读到 "# tests N"。换一个 --test-reporter 的话，这个脚本要跟着改。')
     process.exit(2)
   }
-  return Number(pass[1])
+  const skipped = /^# skipped (\d+)$/m.exec(out)
+  if (skipped && Number(skipped[1]) > 0) {
+    console.log(`（本平台跳过了 ${skipped[1]} 条，跨平台也算在总数里）`)
+  }
+  return Number(total[1])
 }
 
 function actualFiles() {
