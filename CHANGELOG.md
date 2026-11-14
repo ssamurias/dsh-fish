@@ -117,9 +117,9 @@
   - **新文件** `lib/autobackup.js`（判断 / 存 / 清理 / 列表 / 读回 / 状态）；`lib/observe.js` 加 `GET|POST /backup/auto` 与 `GET /backup/auto/file`；`lib/client.js` 数据页多一张「自动备份」小卡（开关 + 多久一份 + 留几份 + 最近 5 份「从这份恢复」+ 现在存一份），三项走 `patchGroup('backup', …)` 单独提交，不挤进自动保存那张整表。
   - 新增 `test/autobackup.test.mjs` 21 条、`test/p5.test.mjs` 补 1 条 `/config` 收得下 `backup` 组的用例；全量 **2598 pass / 0 fail**。
 
-- **自动备份的时机改成「按启动算」，不再依赖「每天几点」（用户 m00597）。** 1.0.2 的判据是「距上次成功过了 N 天」，它默认了 DSH 一直开着、并且下次还会再开。但没人知道自己哪一次打开是最后一次，也没人保证它全天运行——「每天一份」在最要紧的场景里正好交不上货：用了一下午、晚上关掉，这几个小时里的东西一份都没落盘。
+- **自动备份的时机改成「按启动算」，不再依赖「每天几点」（用户 m00597）。** 这一层最初的判据是「距上次成功过了 N 天」，它默认了 DSH 一直开着、并且下次还会再开。但没人知道自己哪一次打开是最后一次，也没人保证它全天运行——「每天一份」在最要紧的场景里正好交不上货：用了一下午、晚上关掉，这几个小时里的东西一份都没落盘。
   - **改成两条腿**：① 「最新的」那份 `backups/大肥鱼-自动-最新.json`，滚动覆盖，永远一份；**启动后第一拍无条件刷**、运行中「有新东西且距上刷满 `CATCHUP_GAP_MS`（30 分钟）」再刷、shutdown 时抢刷一次。② 「带日子的」那批 `backups/大肥鱼-自动-YYYYMMDD-HHMMSS.json` 照旧按 `backup.everyDays` 攒、留 `backup.keep` 份，负责「往回退得远」。
-  - **半小时那个闸是刻意的**：每次启动都写一份更像样，但一个下午重启五六次会把默认 7 份挤光，真正值钱的「上周那份」反而被清掉。第一拍与退出那两次走 `force`，不受这个闸限制。
+  - **半小时那个闸是刻意的**：每次启动都写一份更像样，但一个下午重启五六次会把配额挤光，真正值钱的「上周那份」反而被清掉。第一拍与退出那两次走 `force`，不受这个闸限制。
   - **「有新东西」只看 `events.jsonl` 的 mtime**，不解析 json；**刻意不把 `config.json` 算进去**——`lastAt` 写完配置就变了，把它算进「脏」里会永远脏、一刻不停地白存。
   - **两条腿的计数器分开**：兜底档**不写 `lastAt`、不占 `keep`**。它每半小时刷一次，若也写 `lastAt`，「一天一份」的历史档就永远不会到点。`pruneAutoBackups` 只数带日子的那批（`isAutoBackupName` 不认「最新」，另加 `isAutoBackupFile` 给读回的白名单用）。
   - **新导出**（`lib/autobackup.js`）：`CATCHUP_GAP_MS`、`LATEST_NAME`、`isAutoBackupFile`、`latestBackupInfo`、`newestDataAt`、`catchupDue`（纯函数，可单测）、`runLatestBackup`、`catchupBackup`；`autoBackupStatus` 多一个 `latest` 字段，`autoBackupSizeText` 在只有兜底档时说「只有兜底那一份，X」。
@@ -191,7 +191,7 @@
   - **事件弧三张卡读便条**：`lib/generator.js` 的 `cardContext` 增第 4 参 `notes`，产出 `inProgress`（open 且有进展的便条里按最后一笔 `at` 取最新一张，形如 `{text, progress, at}`）；`lib/events.js` 新增 `progressLine(ctx)`，`plan_due` / `arc_try_mid` / `arc_try_end` 各引一句「你便条上那张「…」最近记的一笔是：「…」」。**没有进展时返回空串，问句与从前一字不差。** `lib/scheduler.js` 的定时 tick 与手动叫醒两处 `plan()` 调用都补读 `readNotes(root)` 并透传（读失败当没有）。
   - **`NOTE_BRIEF` 重写**（`lib/persona.js`，5 行 230 字，受 240 字上限约束）：补上「做到一半记一笔，只说这一步到哪儿；事情本身变了，就把那句改掉，之前记的不动」。仍须含「老在同一个地方绕」「翻翻便条」「原样」「为什么放下」，并且「先给处境再给动作」——把「翻翻便条」放行首会让那条断言失败，放句尾即可。
   - **明确不做的两件**：不自动生成便条（用户 m00209 原话「不要反复生成便条」，外部反馈嫌便条永不过期很烦，系统再自动生成更烦）；不做周期性重复（要重复执行，她自己在便条文字里写）。没有新增 goal/project 实体——这次只补便条这一层的状态，不加第二套。
-  - 测试：`test/note.test.mjs` +5（44 条）、`test/events-pack3.test.mjs` +3（15 条）。全量 **2669 pass / 0 fail**。
+  - 测试：`test/note.test.mjs` +5（44 条）、`test/events-pack3.test.mjs` +3（15 条）。全量 **2710 pass / 0 fail**。
 
 ## 1.0.0 — 2026-11-13
 
