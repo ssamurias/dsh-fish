@@ -601,3 +601,100 @@ test('自动备份的两个数字框并排一格，不各占一行', async () =>
   assert.equal(sameRow.length, 1, '两个框要在同一个 row 里并排')
 })
 
+// ---- 2026-11-14 用户 m03579：.enc 看不懂、「从这份恢复」这条路径说不通、口令那句说两遍 ----
+
+test('云上那几份：既给「取到本机」，也留着「直接恢复」——原来说的路径根本不存在', async () => {
+  // 用户原话：「从云端下载下来的不能是 json 格式吗……我不下载下来怎么去导入数据恢复」
+  // 云上放的是 .json.enc，本地「从备份恢复」只认 .json，所以界面上必须有一条「先取下来」的路。
+  const target = { id: 't1', kind: 'folder', name: '网盘', label: '一个文件夹', ready: true, enabled: true, problem: '' }
+  const { tree } = await render({
+    tab: 'data',
+    cloudOpen: true,
+    cloudRemote: { target, items: [{ name: '大肥鱼-自动-20261114-070255.json.enc', bytes: 8192 }] },
+    cloudState: { enabled: true, targets: [target], kinds: [] },
+  })
+  const labels = findAll(tree, (n) => n.type === 'button').map((b) => textOf(b).join(''))
+  assert.ok(labels.includes('取到本机'), '要把云上那份取成本机的 json')
+  assert.ok(labels.includes('直接恢复'), '就地恢复那条路也留着，两条路各有各的用处')
+  assert.ok(!labels.includes('从这份恢复'), '旧措辞要撤掉：它说的不是下载')
+})
+
+test('云上那几份：先讲清云上是加密的 .enc、两条路各是干什么的', async () => {
+  const target = { id: 't1', kind: 'folder', name: '网盘', label: '一个文件夹', ready: true, enabled: true, problem: '' }
+  const { tree } = await render({
+    tab: 'data',
+    cloudOpen: true,
+    cloudRemote: { target, items: [{ name: '大肥鱼-自动-20261114-070255.json.enc', bytes: 8192 }] },
+    cloudState: { enabled: true, targets: [target], kinds: [] },
+  })
+  const all = cardText(tree, '备份与恢复')
+  assert.match(all, /\.enc/, '得让人知道云上那个后缀是什么')
+  assert.match(all, /从备份恢复/, '要说清取下来之后怎么用')
+})
+
+test('取到本机：成功后要说清放进哪儿了，不写『已完成』了事', async () => {
+  const target = { id: 't1', kind: 'folder', name: '网盘', label: '一个文件夹', ready: true, enabled: true, problem: '' }
+  const { tree, sets } = await render({
+    tab: 'data',
+    cloudOpen: true,
+    cloudRemote: { target, items: [{ name: '大肥鱼-自动-20261114-070255.json.enc', bytes: 8192 }] },
+    cloudState: { enabled: true, targets: [target], kinds: [] },
+  })
+  const btn = button(tree, '取到本机')
+  await withFetch({
+    'POST /cloud/download': { ok: true, name: '大肥鱼-自动-20261114-070255.json', path: 'C:\\x\\backups\\大肥鱼-自动-20261114-070255.json', bytes: 8192, encrypted: true },
+  }, async () => { await btn.props.onClick() })
+  const msg = String(last(sets, 'cloudMsg'))
+  assert.match(msg, /取下来了/)
+  assert.match(msg, /大肥鱼-自动-20261114-070255\.json/, '要把文件名说出来')
+  assert.match(msg, /备份文件夹/, '要告诉人它落到哪儿去了')
+})
+
+test('取到本机：口令不对时原样端上来，不能变成一句「失败」', async () => {
+  const target = { id: 't1', kind: 'folder', name: '网盘', label: '一个文件夹', ready: true, enabled: true, problem: '' }
+  const { tree, sets } = await render({
+    tab: 'data',
+    cloudOpen: true,
+    cloudRemote: { target, items: [{ name: '大肥鱼-自动-20261114-070255.json.enc', bytes: 8192 }] },
+    cloudState: { enabled: true, targets: [target], kinds: [] },
+  })
+  const btn = button(tree, '取到本机')
+  await withFetch({
+    'POST /cloud/download': () => { throw new Error('解不开：口令不对，或者这份文件在路上被改过。') },
+  }, async () => { await btn.props.onClick() })
+  const msg = String(last(sets, 'cloudMsg'))
+  assert.match(msg, /取不下来/)
+  assert.match(msg, /口令不对/, '原话要留着，人才知道该去改口令')
+})
+
+test('没设口令时「没有口令就没法加密」只说一遍', async () => {
+  // 用户 m03579：那句话原来出现两次（手写文案一遍、passProblem 一遍）。
+  const { tree } = await render({
+    tab: 'data',
+    cloudOpen: true,
+    cloudState: {
+      enabled: false, targets: [], hasPass: false,
+      passProblem: '还没设口令。没有口令就没法加密，云端那一份等于明着放。',
+    },
+  })
+  const all = cardText(tree, '备份与恢复')
+  const hits = all.split('没有口令就没法加密').length - 1
+  assert.equal(hits, 1, `同一句提示只说一次，现在说了 ${hits} 次`)
+})
+
+test('设过口令之后那句换成了「存在哪、丢了会怎样」', async () => {
+  const { tree } = await render({
+    tab: 'data',
+    cloudOpen: true,
+    cloudState: {
+      enabled: true, targets: [], hasPass: true, passHint: '我的生日',
+      passFingerprint: 'a1b2c3d4', passProblem: '',
+    },
+  })
+  const all = cardText(tree, '备份与恢复')
+  assert.match(all, /我的生日/)
+  assert.match(all, /丢了就真解不开/)
+  assert.ok(!all.includes('没有口令就没法加密'), '设过了就不该再说这句')
+})
+
+
