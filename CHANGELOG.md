@@ -11,6 +11,15 @@
   - 新增 `lib/cloudcrypto.js`（加解密）、`lib/cloudtargets.js`（六种目标的字段定义，界面字段表由它下发，加字段只改一处）、`lib/cloudsmtp.js`（零依赖 SMTP）、`lib/clouddrive.js`（六驱动）、`lib/cloudbackup.js`（调度、队列、状态）。`/dsh-fish/cloud*` 六条路由，`/config` 白名单同步登记 `cloud`。数据页新增一张「云端备份」卡。
   - 测试：`test/cloudcrypto.test.mjs` 12 条、`test/cloudtargets.test.mjs` 17 条、`test/cloudbackup.test.mjs` 25 条，全量 **2669 pass / 0 fail**。
 
+- **便条能记进展了，事件弧读得见她做到哪儿（用户 m00209）。** `her_note` 记的便条一直只有一句话：要么还没做，要么划掉了。做到一半的事写不出「到哪儿了」，而要跨天的一件事恰恰最需要这个状态——这是「她想做事但做不完」的卡点，不在缺工具，在缺「这件事还在进行中」。
+  - **新增 `action: "log"` + 参数 `progress`**：`text` 指认是哪一张（一字不差），`progress` 写这一回做到哪儿（≤120 字）。只追一笔、不覆盖正文；`revisedAt` 同步更新，保持「最近动过」的语义。`lib/note.js` 新增 `logProgress(root, {id, text, progress})`、常量 `NOTE_PROGRESS_MAX = 5`（只留最近五笔，满了丢最旧）、`NOTE_PROGRESS_TEXT_MAX = 120`。
+  - **回显只说最近一笔，不报条数**：醒来那行与回翻那行统一在行尾缀 `（最近：…）`。这是便条从第一天起的硬约束「不吃状态」——不许变成「你还有 3 条未完成」，这一版没破例。
+  - **事情变了就改那句**：`update`（已在 1.0.x 存在）改的是便条正文，**之前记的进展原样保留**——改的是「要做的事」，不是「做过的事」。
+  - **事件弧三张卡读便条**：`lib/generator.js` 的 `cardContext` 增第 4 参 `notes`，产出 `inProgress`（open 且有进展的便条里按最后一笔 `at` 取最新一张，形如 `{text, progress, at}`）；`lib/events.js` 新增 `progressLine(ctx)`，`plan_due` / `arc_try_mid` / `arc_try_end` 各引一句「你便条上那张「…」最近记的一笔是：「…」」。**没有进展时返回空串，问句与从前一字不差。** `lib/scheduler.js` 的定时 tick 与手动叫醒两处 `plan()` 调用都补读 `readNotes(root)` 并透传（读失败当没有）。
+  - **`NOTE_BRIEF` 重写**（`lib/persona.js`，5 行 230 字，受 240 字上限约束）：补上「做到一半记一笔，只说这一步到哪儿；事情本身变了，就把那句改掉，之前记的不动」。仍须含「老在同一个地方绕」「翻翻便条」「原样」「为什么放下」，并且「先给处境再给动作」——把「翻翻便条」放行首会让那条断言失败，放句尾即可。
+  - **明确不做的两件**：不自动生成便条（用户 m00209 原话「不要反复生成便条」，外部反馈嫌便条永不过期很烦，系统再自动生成更烦）；不做周期性重复（要重复执行，她自己在便条文字里写）。没有新增 goal/project 实体——这次只补便条这一层的状态，不加第二套。
+  - 测试：`test/note.test.mjs` +5（44 条）、`test/events-pack3.test.mjs` +3（15 条）。全量 **2669 pass / 0 fail**。
+
 ## 1.0.4 — 2026-11-14
 
 - **自动备份不再搬封面缓存（用户 m00862）。** 上一版上线后实测了一次真实数据文件夹（134 个文件、36MB）：单次收集 514–640ms、`JSON.stringify` 70–110ms、写盘 117–146ms，合计约 0.7–0.85 秒；事件循环最长卡顿 **183ms**。也就是说，**卡顿不是问题，写盘量才是**——包里 48MB 有 30MB 是 `out/covers/` 的 82 张 B 站封面。按「一天十份」算就是每天 480MB 的无谓写入，24 小时常开则是 2.3GB/天。

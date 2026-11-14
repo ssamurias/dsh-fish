@@ -237,3 +237,71 @@ test('复核后的措辞：旧话复盘、接话、约定到期、试新事各�
   assert.match(findTemplate('arc_try_start').prompt(model({})), /从没做过/)
   assert.equal(findTemplate('say_no').repeat.everyDays, 6, '自主门要两次拒绝，冷却不能太长')
 })
+
+// ── 便条上的进展进事件弧（2026-11-14，用户 m00209）────────────────────────
+// 为什么要有：约定和试新事这两条弧，问的是「现在到哪一步」。
+// 她真正记到哪儿只在 notes.json 里，事件卡以前看不见，只能靠 lastAfter 复读她上次说的话。
+// 现在只要她记了进展，那张卡上最近一笔就摆进问句里；没记就一个字都不加。
+
+const noteOf = (over = {}) => ({
+  id: 'n1',
+  text: '把那篇东西写完',
+  due: '',
+  created: at(5),
+  status: 'open',
+  reason: '',
+  closedAt: null,
+  revisedAt: null,
+  progress: [],
+  ...over,
+})
+
+test('cardContext：只在便条真记过进展时给 inProgress，取最近动过的那张', () => {
+  const ctx0 = cardContext(model({ day: 10 }), [], Date.now(), [])
+  assert.equal(ctx0.inProgress, null, '没有便条就是空，不硬造一张')
+
+  const notes = [
+    noteOf({ id: 'a', text: '早的那张', progress: [{ at: '2026-11-10T00:00:00.000Z', text: '第一步' }] }),
+    noteOf({ id: 'b', text: '晚的那张', progress: [{ at: '2026-11-12T00:00:00.000Z', text: '回信写了' }] }),
+    noteOf({ id: 'c', text: '只有纸没有进展' }),
+    noteOf({ id: 'd', text: '做完了的', status: 'done', progress: [{ at: '2026-11-13T00:00:00.000Z', text: '做完了' }] }),
+  ]
+  const ctx = cardContext(model({ day: 10 }), [], Date.now(), notes)
+  assert.equal(ctx.inProgress.text, '晚的那张')
+  assert.equal(ctx.inProgress.progress, '回信写了')
+})
+
+test('事件弧的问句带便条上那一笔；没有进展时句子和从前一字不差', () => {
+  const now = Date.now()
+  const fired = new Map([
+    ['plan_make', { id: 'plan_make', count: 1, lastAt: now - 4 * DAY }],
+    ['arc_try_start', { id: 'arc_try_start', count: 1, lastAt: now - 4 * DAY }],
+    ['arc_try_mid', { id: 'arc_try_mid', count: 1, lastAt: now - 8 * DAY }],
+  ])
+  const base = { now, fired, lastAfter: () => '' }
+  const withNote = {
+    ...base,
+    inProgress: { text: '把那篇东西写完', progress: '只翻到第三页', at: at(1) },
+  }
+
+  for (const id of ['plan_due', 'arc_try_mid', 'arc_try_end']) {
+    const t = findTemplate(id)
+    assert.doesNotMatch(t.prompt(model({}), base), /便条上那张/, `${id} 没进展就不该多这句话`)
+    const text = t.prompt(model({}), withNote)
+    assert.match(text, /便条上那张「把那篇东西写完」最近记的一笔是：「只翻到第三页」/, `${id} 要看得到进展`)
+  }
+})
+
+test('端到端：她记过进展时，plan_due 真被选中时带着那一笔', () => {
+  const cfg = normalizeConfig({})
+  const m = model({ day: 10, stage: 2, beliefCount: 2 })
+  const events = [
+    { type: 'meta', text: 'fired:plan_make', ts: at(4) },
+    { type: 'utterance', text: '我说要把那张图修好', ts: at(3.9) },
+  ]
+  const notes = [noteOf({ progress: [{ at: at(2), text: '修到一半，色还没对' }] })]
+  const r = pick(m, cfg, today(), events, { notes })
+  assert.equal(r?.template?.id, 'plan_due')
+  assert.match(r.prompt, /修到一半，色还没对/)
+})
+

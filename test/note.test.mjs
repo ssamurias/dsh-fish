@@ -22,6 +22,8 @@ import {
   NOTE_TEXT_MAX,
   NOTE_SHOW_MAX,
   NOTE_LIST_MAX,
+  NOTE_PROGRESS_MAX,
+  NOTE_PROGRESS_TEXT_MAX,
   notesPath,
   readNotes,
   writeNotes,
@@ -33,6 +35,8 @@ import {
   nudgeSeen,
   addNote,
   closeNote,
+  logProgress,
+  lastProgress,
   registerNote,
 } from '../lib/note.js'
 import { NOTE_BRIEF } from '../lib/persona.js'
@@ -664,4 +668,99 @@ test('放下的那张用 id 也划不掉，状态还是放下（issue #82）', a
     assert.equal(n.status, 'dropped', '放下不该被改写成划掉')
     assert.equal(n.reason, '不想去了')
   })
+})
+
+// ── 进展（2026-11-14，用户 m00209）────────────────────────────────────────
+// 为什么要有：一件事做了一半，需要的不是「还有 3 条没完成」这种数字，
+// 而是「上次到哪儿了」。所以进展只追加、不覆盖，醒来那行只带最近一笔，
+// 一个字都不提攒了几笔。
+
+test('进展：记一笔就多一笔，不回显条数，只留最近五笔', async () => {
+  await withRoot(async (root) => {
+    const { def, call } = herTool(root)
+    const a = await def.execute({ text: '把那篇东西写完' }, { session: {} })
+
+    assert.match(await call({ action: 'log', text: '把那篇东西写完' }), /^\[没记上：记下哪一句/)
+    assert.equal(await call({ action: 'log', text: '把那篇东西写完', progress: '写完了开头两段' }), '[记下了]')
+    assert.equal(
+      await call({ action: 'log', text: '把那篇东西写完', progress: '卡在第二个例子' }),
+      '[记下了]',
+      '同一张可以一直往后面续',
+    )
+
+    const [n] = await readNotes(root)
+    assert.deepEqual(n.progress.map((p) => p.text), ['写完了开头两段', '卡在第二个例子'], '旧的不能被覆盖')
+    assert.ok(n.progress.every((p) => p.at), '每一笔自己要带时间')
+    assert.ok(n.revisedAt, '动过就留痕')
+    assert.equal(a.id, n.id, '记进展不是另起一张')
+  })
+})
+
+test('进展：醒来那一行带最近一笔，回翻那一行也带，都不报条数', async () => {
+  await withRoot(async (root) => {
+    const { def, call } = herTool(root)
+    await def.execute({ text: '把借的伞还回去', due: '2026-11-01' }, { session: {} })
+    await call({ action: 'log', text: '把借的伞还回去', progress: '先问了一下谁家那把' })
+    await call({ action: 'log', text: '把借的伞还回去', progress: '找到了，明天顺路带过去' })
+
+    const wake = renderNotes(await readNotes(root), new Date(2026, 10, 5))
+    assert.match(wake, /找到了，明天顺路带过去/)
+    assert.doesNotMatch(wake, /先问了一下谁家那把/, '醒来只摆最近一笔，不摊账')
+    assert.doesNotMatch(wake, /两笔|2 笔|条进展/)
+    assert.match(await call({ action: 'list' }), /最近：找到了，明天顺路带过去/)
+  })
+})
+
+test('进展：压到 120 字以内，最多留五笔；划掉/放下的记不上', async () => {
+  await withRoot(async (root) => {
+    const { def, call } = herTool(root)
+    const a = await def.execute({ text: '收拾那间屋子' }, { session: {} })
+
+    assert.match(
+      await call({ action: 'log', text: '收拾那间屋子', progress: '一'.repeat(NOTE_PROGRESS_TEXT_MAX + 1) }),
+      /^\[没记上：一笔进展压到 120 字以内/,
+    )
+
+    for (let i = 1; i <= NOTE_PROGRESS_MAX + 2; i += 1) {
+      await call({ action: 'log', text: '收拾那间屋子', progress: `第 ${i} 步` })
+    }
+    const [n] = await readNotes(root)
+    assert.equal(n.progress.length, NOTE_PROGRESS_MAX, '只留最近五笔，不无限长')
+    assert.equal(lastProgress(n).text, `第 ${NOTE_PROGRESS_MAX + 2} 步`)
+
+    await call({ id: a.id, status: 'done' })
+    assert.match(await call({ action: 'log', text: '收拾那间屋子', progress: '再记一笔' }), /^\[没记上：这张已经划掉了/)
+
+    await def.execute({ text: '另一件事' }, { session: {} })
+    await call({ action: 'drop', text: '另一件事', reason: '不想做了' })
+    assert.match(await call({ action: 'log', text: '另一件事', progress: '再记一笔' }), /^\[没记上：这张已经放下了/)
+  })
+})
+
+test('进展：事情变了就改那句，之前记的进展原样留着', async () => {
+  await withRoot(async (root) => {
+    const { def, call } = herTool(root)
+    await def.execute({ text: '把整篇翻完' }, { session: {} })
+    await call({ action: 'log', text: '把整篇翻完', progress: '翻到第三页' })
+
+    assert.equal(
+      await call({ action: 'update', text: '把整篇翻完', newText: '只翻剩下的 50%，前面那半不翻了' }),
+      '[改好了]',
+    )
+
+    const [n] = await readNotes(root)
+    assert.equal(n.text, '只翻剩下的 50%，前面那半不翻了')
+    assert.deepEqual(n.progress.map((p) => p.text), ['翻到第三页'], '改的是那句，不是做过的事')
+  })
+})
+
+test('进展：坏数据不会拖垮一次唤醒，坏项直接丢掉', () => {
+  const n = normalizeNote({
+    text: '一件事',
+    created: '2026-11-01T00:00:00.000Z',
+    progress: [{ at: '2026-11-02T00:00:00.000Z', text: '第一步' }, { text: '' }, null, '乱七八糟'],
+  })
+  assert.deepEqual(n.progress.map((p) => p.text), ['第一步'])
+  assert.equal(normalizeNote({ text: '没进展的' }).progress.length, 0)
+  assert.equal(lastProgress(normalizeNote({ text: '空' })), null)
 })
