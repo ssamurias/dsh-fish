@@ -35,6 +35,7 @@ import {
 import { runAutoBackup, autoBackupDir, LATEST_NAME, runLatestBackup } from '../lib/autobackup.js'
 import { writePass, readPass, isEncrypted, decryptBuffer, KEY_FILE } from '../lib/cloudcrypto.js'
 import { collectBackup } from '../lib/backup.js'
+import { git } from '../lib/clouddrive.js'
 import { normTarget } from '../lib/cloudtargets.js'
 import { readConfig } from '../lib/store.js'
 
@@ -553,4 +554,67 @@ test('testTarget：没填完的目标直接说「还差什么」，不去连网'
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+
+test('GitHub Release 附件上传成功后按份数清理，保留其他附件', async (t) => {
+  const root = makeRoot()
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const older = { id: 8, name: 'dsh-fish-backup-20261113-120000.json.enc', state: 'uploaded' }
+  const unrelated = { id: 9, name: 'notes.txt', state: 'uploaded' }
+  const assets = [older, unrelated]
+  let release = null
+  let privateRepo = true
+  let failUpload = true
+  let uploaded
+  const deleted = []
+  const reply = (body, status = 200) => Response.json(body, { status })
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    const u = new URL(url)
+    const path = u.pathname.replace('/repos/test/fish', '')
+    if (path === '') return reply({ private: privateRepo, default_branch: 'main' })
+    if (path === '/releases/tags/dsh-fish-backups') return release ? reply(release) : reply({}, 404)
+    if (path === '/releases' && opts.method === 'POST') {
+      const body = JSON.parse(opts.body)
+      assert.equal(body.tag_name, 'dsh-fish-backups')
+      release = { ...body, id: 7 }
+      return reply(release, 201)
+    }
+    if (path === '/releases/7/assets' && opts.method === 'GET') return reply(assets)
+    if (path === '/releases/7/assets' && opts.method === 'POST') {
+      assert.equal(u.host, 'uploads.github.com')
+      assert.equal(opts.headers['content-type'], 'application/octet-stream')
+      if (failUpload) return reply({}, 502)
+      uploaded = Buffer.from(opts.body)
+      assert.ok(isEncrypted(uploaded))
+      const asset = { id: 10, name: u.searchParams.get('name'), size: uploaded.length, state: 'uploaded' }
+      assets.push(asset)
+      return reply(asset, 201)
+    }
+    if (path === '/releases/assets/8' && opts.method === 'DELETE') {
+      deleted.push(8)
+      assets.splice(assets.indexOf(older), 1)
+      return new Response(null, { status: 204 })
+    }
+    if (path === '/releases/assets/10' && opts.method === 'GET') return new Response(uploaded)
+    assert.fail('unexpected GitHub request: ' + opts.method + ' ' + url)
+  })
+
+  writePass(root, 'a-long-test-only-backup-passphrase')
+  const local = await runAutoBackup(root, { now: new Date(2026, 10, 14, 12) })
+  assert.equal(local.ok, true)
+  const target = normTarget({ kind: 'git', repo: 'test/fish', token: 'fixture', releaseAssets: true })
+  const config = { cloud: { keep: 1 } }
+  assert.equal((await pushTo(root, target, local.name, config)).ok, false)
+  assert.deepEqual(deleted, [])
+  failUpload = false
+  const result = await pushTo(root, target, local.name, config)
+  assert.equal(result.ok, true)
+  assert.deepEqual(deleted, [8])
+  assert.deepEqual(assets.map((a) => a.id), [9, 10])
+  assert.deepEqual(await git.get(target, result.name), uploaded)
+  assert.equal((await pushTo(root, target, local.name, config)).ok, true)
+  assert.equal(assets.length, 2)
+  privateRepo = false
+  assert.equal((await pushTo(root, target, local.name, config)).ok, false)
 })
