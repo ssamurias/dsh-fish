@@ -446,6 +446,39 @@ test('「加一个」一进页面就能点：下拉画着第一项，按钮就�
   assert.equal(sel.props.value, 'folder', '下拉的值要落在第一项上，跟眼睛看到的一致')
 })
 
+// ---- 2026-11-14 用户 m03925：「删」一点就没了，说不出自己点了哪颗 ----
+
+test('「删」要按两下：第一下只是问，第二下才真删', async () => {
+  // 一排五颗小按钮（先别用它 / 改 / 测一下 / 删 / 看云上那几份），删又是唯一不可逆的那颗。
+  // 用户原话是「不知道点了什么，都点没了」，所以第一下只把这一颗变成「真的删掉」。
+  const target = { id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: true, ready: true, problem: '' }
+  const { tree, sets } = await render({ tab: 'data', cloudOpen: true, cloudState: { targets: [target], kinds: [] } })
+  const del = button(tree, '删')
+  let posts = 0
+  await withFetch({}, async (calls) => {
+    await del.props.onClick()
+    posts = calls.filter((c) => c.path === '/cloud/target').length
+  })
+  assert.equal(posts, 0, '第一下不该发出去')
+  assert.equal(last(sets, 'cloudDelConfirm'), 't1', '第一下只是把这一行标成待确认')
+
+  // 第二下：状态已经是「等这条确认」，按钮文字换掉了，这次才真删
+  const again = await render({
+    tab: 'data',
+    cloudOpen: true,
+    cloudDelConfirm: 't1',
+    cloudState: { targets: [target], kinds: [] },
+  })
+  const sure = button(again.tree, '真的删掉')
+  await withFetch({ 'POST /cloud/target': { ok: true } }, async (calls) => {
+    await sure.props.onClick()
+    const hit = calls.find((c) => c.path === '/cloud/target')
+    assert.ok(hit, '第二下要真的提交')
+    assert.match(String(hit.body), /"remove":"t1"/)
+  })
+  assert.equal(last(again.sets, 'cloudDelConfirm'), '', '删完要把待确认状态清掉')
+})
+
 test('刷新状态：点了必须留下「刷过了 + 看到了什么 + 几点」，不能一声不吭', async () => {
   // 用户 m03127：「刷新状态的按钮，点了之后好像也没有变化」——原来只重拉一次、写同样的字。
   const st = { enabled: false, targets: [], due: false, dueWhy: '关着', lastName: '', localDir: '', newest: null, queue: {} }
