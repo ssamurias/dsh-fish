@@ -367,10 +367,13 @@ test('云端开关：一个地方都没有时不开，并且说清楚先去哪�
   })
   assert.equal(posted, 0, '缺东西时不该把开关状态提交上去')
   assert.equal(last(sets, 'cloudOn'), undefined, '开关不该动')
-  const msg = last(sets, 'cloudMsg')
+  // 2026-11-14 用户 m03127：这句必须贴在开关旁边，不能写到卡片最底下——云端那层很长，
+  // 写了等于没写。所以断言它落在 cloudGate 里，而不是 cloudMsg。
+  const msg = last(sets, 'cloudGate')
   assert.ok(msg, '点了必须有回话，不能只回弹')
   assert.match(msg, /还没有云端存储方式/)
   assert.match(msg, /加一个/)
+  assert.equal(last(sets, 'cloudMsg'), undefined, '不许再塞到底部那句里去')
 })
 
 test('云端开关：地方都列出来了但一个都没填完时，指到「改」而不是让人瞎找', async () => {
@@ -384,9 +387,29 @@ test('云端开关：地方都列出来了但一个都没填完时，指到「�
     posted = calls.filter((c) => c.path === '/config').length
   })
   assert.equal(posted, 0)
-  const msg = last(sets, 'cloudMsg')
+  const msg = last(sets, 'cloudGate')
   assert.match(msg, /还没填完/)
   assert.match(msg, /改/)
+})
+
+test('云端开关：地方都在、但全被「先别用它」关着时，说清要先开一个', async () => {
+  // 2026-11-14 用户 m03127 报「关了之后点不开」：真正会踩到的是这一种——
+  // 目标还在、也填完了，只是每一条都被单独关了。原来这里只判 ready，会直接放行然后
+  // 后端因为「没有能用目标」把开关顶回来，看着就像点不开。
+  const { tree, sets } = await render({
+    tab: 'data',
+    cloudState: { targets: [{ id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: false, ready: true, problem: '' }], kinds: [] },
+  })
+  let posted = 0
+  await withFetch({}, async (calls) => {
+    await sw(tree, '往云端送').props.onClick()
+    posted = calls.filter((c) => c.path === '/config').length
+  })
+  assert.equal(posted, 0, '一个都没启用时不该提交')
+  assert.equal(last(sets, 'cloudOn'), undefined)
+  const msg = last(sets, 'cloudGate')
+  assert.match(msg, /先别用它/)
+  assert.match(msg, /用它/)
 })
 
 test('云端开关：有一个能用的地方时正常打开，并清掉上一句提示', async () => {
@@ -401,16 +424,66 @@ test('云端开关：有一个能用的地方时正常打开，并清掉上一�
     assert.match(String(hit.body), /"enabled":true/)
   })
   assert.equal(last(sets, 'cloudOn'), true)
-  assert.equal(last(sets, 'cloudMsg'), '')
+  assert.equal(last(sets, 'cloudGate'), '', '打开之后那句拦人的话要消失')
 })
 
-test('备份与恢复是一张卡：手动、自动、云端三层都在里面，且只有这一张', async () => {
+// ---- 2026-11-14 用户 m03127：「加一个」一进来就是灰的 ----
+
+test('「加一个」一进页面就能点：下拉画着第一项，按钮就不能是灰的', async () => {
+  // 原因：select 的 value 是空串时浏览器会把第一项**画**出来，看着像选中了、值还是空的，
+  // 于是「加一个」被禁用，得先切走再切回来才活。现在按「用户选过就用他选的，没选过用第一项」。
+  const kinds = [
+    { kind: 'folder', label: '一个文件夹', fields: [{ key: 'dir', label: '目录', type: 'text', required: true }] },
+    { kind: 'git', label: '代码仓库', fields: [] },
+  ]
+  const { tree } = await render({ tab: 'data', cloudState: { targets: [], kinds } })
+  const btn = button(tree, '加一个')
+  assert.ok(!btn.props.disabled, '一进来就该能点，不该逼人先去下拉里绕一圈')
+  const sel = findAll(tree, (n) => n.type === 'select')[0]
+  assert.equal(sel.props.value, 'folder', '下拉的值要落在第一项上，跟眼睛看到的一致')
+})
+
+test('刷新状态：点了必须留下「刷过了 + 看到了什么 + 几点」，不能一声不吭', async () => {
+  // 用户 m03127：「刷新状态的按钮，点了之后好像也没有变化」——原来只重拉一次、写同样的字。
+  const st = { enabled: false, targets: [], due: false, dueWhy: '关着', lastName: '', localDir: '', newest: null, queue: {} }
+  const { tree, sets } = await render({ tab: 'data', cloudState: st })
+  const btn = button(tree, '刷新状态')
+  await withFetch({ 'GET /cloud': st }, async () => { await btn.props.onClick() })
+  const msg = last(sets, 'cloudMsg')
+  assert.ok(msg, '点了要有回话')
+  assert.match(msg, /刷过了/, '要说清这一下真的刷过')
+  assert.match(msg, /关着的/, '要把当下看到的状态说出来')
+  assert.match(msg, /[0-9]{1,2}:[0-9]{2}/, '带上时间，两次点之间也能看出差别')
+})
+
+test('刷新状态：接口不通时也要说人话，不能静默', async () => {
+  const { tree, sets } = await render({ tab: 'data', cloudState: { enabled: false, targets: [] } })
+  const btn = button(tree, '刷新状态')
+  await withFetch({ 'GET /cloud': () => { throw new Error('连不上') } }, async () => {
+    await btn.props.onClick()
+  })
+  const msg = last(sets, 'cloudMsg')
+  assert.match(String(msg), /没刷成/)
+  assert.match(String(msg), /连不上/)
+})
+
+// ---- 2026-11-14 用户 m03127：「只删它自己传上去的那些，别的东西不碰」看不懂 ----
+
+test('「每个地方留几份」的说明要讲明白删的是哪些文件，别用「它自己」这种指代', async () => {
+  const { tree } = await render({ tab: 'data' })
+  const all = cardText(tree, '备份与恢复')
+  assert.match(all, /每个地方留几份/)
+  assert.doesNotMatch(all, /只删它自己传上去的那些/, '这句用户看不懂，已经换掉了')
+  assert.match(all, /大肥鱼-自动-/, '要举出文件名长什么样')
+  assert.match(all, /不碰/, '要说清别人的文件不受影响')
+})
+
+test('备份与恢复是一张卡：手动、自动、云端三层都在里面', async () => {
   const { tree } = await render({ tab: 'data' })
   const all = cardText(tree, '备份与恢复')
   assert.match(all, /手动备份/)
   assert.match(all, /自动备份/)
   assert.match(all, /云端备份/)
-  assert.equal(findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '云端备份')).length, 0, '不该再有一张单独的「云端备份」卡')
   const card = findAll(tree, (n) => n.type === 'div' && (n.children ?? []).some((c) => c?.type === 'h3' && textOf(c).join('') === '备份与恢复'))[0]
   assert.equal(card.props.className, 'card full', '三层塞一窄列会挤成竖缝，这张要整行宽')
 })
