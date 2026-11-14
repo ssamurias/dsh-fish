@@ -359,7 +359,7 @@ test('恢复回执：只记了个数的那几个算进真实条数，「没列�
 // ---- 2026-11-14 用户 m02555：点「往云端送」点不开，得说是缺什么 ----
 
 test('云端开关：一个地方都没有时不开，并且说清楚先去哪儿加', async () => {
-  const { tree, sets } = await render({ tab: 'data', cloudState: { targets: [], kinds: [] } })
+  const { tree, sets } = await render({ tab: 'data', cloudOpen: true, cloudState: { targets: [], kinds: [] } })
   let posted = 0
   await withFetch({}, async (calls) => {
     await sw(tree, '往云端送').props.onClick()
@@ -379,6 +379,7 @@ test('云端开关：一个地方都没有时不开，并且说清楚先去哪�
 test('云端开关：地方都列出来了但一个都没填完时，指到「改」而不是让人瞎找', async () => {
   const { tree, sets } = await render({
     tab: 'data',
+    cloudOpen: true,
     cloudState: { targets: [{ id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: true, ready: false, problem: '还差：目录' }], kinds: [] },
   })
   let posted = 0
@@ -398,6 +399,7 @@ test('云端开关：地方都在、但全被「先别用它」关着时，说�
   // 后端因为「没有能用目标」把开关顶回来，看着就像点不开。
   const { tree, sets } = await render({
     tab: 'data',
+    cloudOpen: true,
     cloudState: { targets: [{ id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: false, ready: true, problem: '' }], kinds: [] },
   })
   let posted = 0
@@ -415,6 +417,7 @@ test('云端开关：地方都在、但全被「先别用它」关着时，说�
 test('云端开关：有一个能用的地方时正常打开，并清掉上一句提示', async () => {
   const { tree, sets } = await render({
     tab: 'data',
+    cloudOpen: true,
     cloudState: { targets: [{ id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: true, ready: true, problem: '' }], kinds: [] },
   })
   await withFetch({ 'POST /config': { ok: true } }, async (calls) => {
@@ -436,8 +439,8 @@ test('「加一个」一进页面就能点：下拉画着第一项，按钮就�
     { kind: 'folder', label: '一个文件夹', fields: [{ key: 'dir', label: '目录', type: 'text', required: true }] },
     { kind: 'git', label: '代码仓库', fields: [] },
   ]
-  const { tree } = await render({ tab: 'data', cloudState: { targets: [], kinds } })
-  const btn = button(tree, '加一个')
+  const { tree } = await render({ tab: 'data', cloudOpen: true, cloudState: { targets: [], kinds } })
+  const btn = button(tree, '点击配置')
   assert.ok(!btn.props.disabled, '一进来就该能点，不该逼人先去下拉里绕一圈')
   const sel = findAll(tree, (n) => n.type === 'select')[0]
   assert.equal(sel.props.value, 'folder', '下拉的值要落在第一项上，跟眼睛看到的一致')
@@ -446,7 +449,7 @@ test('「加一个」一进页面就能点：下拉画着第一项，按钮就�
 test('刷新状态：点了必须留下「刷过了 + 看到了什么 + 几点」，不能一声不吭', async () => {
   // 用户 m03127：「刷新状态的按钮，点了之后好像也没有变化」——原来只重拉一次、写同样的字。
   const st = { enabled: false, targets: [], due: false, dueWhy: '关着', lastName: '', localDir: '', newest: null, queue: {} }
-  const { tree, sets } = await render({ tab: 'data', cloudState: st })
+  const { tree, sets } = await render({ tab: 'data', cloudOpen: true, cloudState: st })
   const btn = button(tree, '刷新状态')
   await withFetch({ 'GET /cloud': st }, async () => { await btn.props.onClick() })
   const msg = last(sets, 'cloudMsg')
@@ -457,7 +460,7 @@ test('刷新状态：点了必须留下「刷过了 + 看到了什么 + 几点�
 })
 
 test('刷新状态：接口不通时也要说人话，不能静默', async () => {
-  const { tree, sets } = await render({ tab: 'data', cloudState: { enabled: false, targets: [] } })
+  const { tree, sets } = await render({ tab: 'data', cloudOpen: true, cloudState: { enabled: false, targets: [] } })
   const btn = button(tree, '刷新状态')
   await withFetch({ 'GET /cloud': () => { throw new Error('连不上') } }, async () => {
     await btn.props.onClick()
@@ -470,7 +473,8 @@ test('刷新状态：接口不通时也要说人话，不能静默', async () =>
 // ---- 2026-11-14 用户 m03127：「只删它自己传上去的那些，别的东西不碰」看不懂 ----
 
 test('「每个地方留几份」的说明要讲明白删的是哪些文件，别用「它自己」这种指代', async () => {
-  const { tree } = await render({ tab: 'data' })
+  // 2026-11-14 用户 m03310：云端那层默认折叠，要展开才看得到这段说明。
+  const { tree } = await render({ tab: 'data', cloudOpen: true })
   const all = cardText(tree, '备份与恢复')
   assert.match(all, /每个地方留几份/)
   assert.doesNotMatch(all, /只删它自己传上去的那些/, '这句用户看不懂，已经换掉了')
@@ -524,3 +528,76 @@ test('自动备份那层：路径还没读到时按钮禁用，并说「刷新�
   assert.equal(b.props.disabled, true)
   assert.match(cardText(tree, '备份与恢复'), /刷新/)
 })
+
+// ---- 2026-11-14 用户 m03310：云端默认折叠 / 选目录走文件选择器 / 两个数字框并排 ----
+
+test('云端那层默认折叠：一进来只有标题和一颗「展开」，设置项都不在页面上', async () => {
+  const { tree } = await render({ tab: 'data', cloudState: { enabled: false, targets: [] } })
+  const labels = findAll(tree, (n) => n.type === 'button').map((b) => textOf(b).join(''))
+  assert.ok(labels.includes('展开'), '要有一颗展开的入口')
+  assert.ok(!labels.includes('收起'), '默认是收着的')
+  assert.ok(!labels.includes('往云端送'), '折叠时不该把开关摊在外面')
+  assert.ok(!labels.includes('现在就送一份'), '折叠时底部那排也不该在')
+})
+
+test('云端那层：点「展开」就摊开设置，再点「收起」收回去', async () => {
+  const { tree, sets } = await render({ tab: 'data', cloudState: { enabled: false, targets: [] } })
+  await button(tree, '展开').props.onClick()
+  assert.equal(last(sets, 'cloudOpen'), true, '点一下要真的打开')
+
+  // 打开之后重新渲染一次，才看得见摊开的内容。
+  const opened = await render({ tab: 'data', cloudOpen: true, cloudState: { enabled: false, targets: [] } })
+  assert.ok(findAll(opened.tree, (n) => n.type === 'button').map((b) => textOf(b).join('')).includes('收起'))
+  // 开关的标签在 .fl 里，不在按钮文字里，所以按整棵树的文字找。
+  assert.match(textOf(opened.tree).join(''), /往云端送/)
+})
+
+test('云端「一个文件夹」的目录：给一颗「选择文件夹…」，没有选择器时说清改成手填', async () => {
+  const kinds = [
+    { kind: 'folder', label: '一个文件夹', steps: '选一个目录', fields: [{ key: 'dir', label: '目录', type: 'text', required: true }] },
+  ]
+  const { tree, sets } = await render({
+    tab: 'data',
+    cloudOpen: true,
+    cloudDraft: { kind: 'folder', id: '', name: '', dir: '' },
+    cloudState: { enabled: false, targets: [], kinds },
+  })
+  const pick = button(tree, '选择文件夹…')
+  // 测试环境没有 window.__DSH_DIRECTORY_PICKER__，点了应当给出人话退路，而不是静默什么都不发生。
+  await pick.props.onClick()
+  const msg = last(sets, 'cloudMsg')
+  assert.ok(msg, '点了要有回话')
+  assert.match(msg, /贴进|手填|路径/)
+})
+
+test('云端「一个文件夹」的目录：有文件选择器时，选完直接把路径写进草稿', async () => {
+  const kinds = [
+    { kind: 'folder', label: '一个文件夹', steps: '选一个目录', fields: [{ key: 'dir', label: '目录', type: 'text', required: true }] },
+  ]
+  globalThis.__DSH_DIRECTORY_PICKER__ = { pick: async () => 'D:\\我的网盘\\大肥鱼备份' }
+  try {
+    const { tree, sets } = await render({
+      tab: 'data',
+      cloudOpen: true,
+      cloudDraft: { kind: 'folder', id: '', name: '', dir: '' },
+      cloudState: { enabled: false, targets: [], kinds },
+    })
+    await button(tree, '选择文件夹…').props.onClick()
+    const draft = last(sets, 'cloudDraft')
+    assert.ok(draft, '选完要写回草稿')
+    assert.equal(draft.dir, 'D:\\我的网盘\\大肥鱼备份', '路径要原样落进去，不用人再敲一遍')
+  } finally {
+    delete globalThis.__DSH_DIRECTORY_PICKER__
+  }
+})
+
+test('自动备份的两个数字框并排一格，不各占一行', async () => {
+  const { tree } = await render({ tab: 'data' })
+  const sameRow = findAll(tree, (n) => {
+    if (n.type !== 'div' || n.props?.className !== 'row') return false
+    const t = textOf(n).join('')
+    return t.includes('多久存一份') && t.includes('留几份')
+  })
+  assert.equal(sameRow.length, 1, '两个框要在同一个 row 里并排')
+})
+

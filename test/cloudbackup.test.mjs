@@ -30,6 +30,7 @@ import {
   queuePath,
   readyTargets,
   runCloudBackup,
+  testTarget,
 } from '../lib/cloudbackup.js'
 import { runAutoBackup, autoBackupDir, LATEST_NAME, runLatestBackup } from '../lib/autobackup.js'
 import { writePass, readPass, isEncrypted, decryptBuffer, KEY_FILE } from '../lib/cloudcrypto.js'
@@ -503,4 +504,53 @@ test('cloudSizeText / cloudLine：三种状态说人话', () => {
     cloudLine({ enabled: true, targets: [{ enabled: true, ready: true }], lastAt: 'x', due: false, dueWhy: '24 小时后' }),
     /1 个地方都有过/,
   )
+})
+
+
+/* ───────── 2026-11-14 用户 m03310：测通了要说清测到了什么、测不到什么 ───────── */
+
+test('testTarget：目录能写就绿，但必须说清「查不到网盘客户端有没有真同步」', async () => {
+  const root = makeRoot()
+  try {
+    const r = await testTarget(FOLDER(join(root, 'cloud-out')), { root })
+    assert.equal(r.ok, true)
+    assert.match(r.note, /写|读|删/, '要说清验证的是哪几步')
+    assert.match(r.note, /同步/, '网盘那一端我们看不见，不能装作验过了')
+    assert.equal(existsSync(join(root, 'cloud-out', '.dsh-fish-probe.txt')), false, '探测文件要清掉，别留在人家目录里')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('testTarget：仓库是公开的就不能回绿勾（旧代码会无条件覆写成 ok:true）', async () => {
+  // 这是 m03310 顺手修掉的一个真 bug：原来 `return { ok: true, ...r }`，
+  // 驱动自己判的 ok:false（仓库公开）被覆写成绿勾，用户以为配好了。
+  const prev = globalThis.fetch
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ private: false, default_branch: 'main' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  const root = makeRoot()
+  try {
+    const t = targetOf('git', { repo: 'me/dafish-backup', token: 'ghp_secret', name: '仓库' })
+    const r = await testTarget(t, { root })
+    assert.equal(r.ok, false, '公开仓库不能报通')
+    assert.equal(r.public, true)
+    assert.match(r.note, /公开/)
+  } finally {
+    globalThis.fetch = prev
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('testTarget：没填完的目标直接说「还差什么」，不去连网', async () => {
+  const root = makeRoot()
+  try {
+    const r = await testTarget(normTarget({ kind: 'git' }, 0), { root })
+    assert.equal(r.ok, false)
+    assert.match(String(r.why), /还差|不完整/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
