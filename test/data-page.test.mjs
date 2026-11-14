@@ -393,7 +393,7 @@ test('云端开关：地方都列出来了但一个都没填完时，指到「�
   assert.match(msg, /改/)
 })
 
-test('云端开关：地方都在、但全被「先别用它」关着时，说清要先开一个', async () => {
+test('云端开关：地方都在、但全被「先停一停」关着时，说清要先开一个', async () => {
   // 2026-11-14 用户 m03127 报「关了之后点不开」：真正会踩到的是这一种——
   // 目标还在、也填完了，只是每一条都被单独关了。原来这里只判 ready，会直接放行然后
   // 后端因为「没有能用目标」把开关顶回来，看着就像点不开。
@@ -410,8 +410,8 @@ test('云端开关：地方都在、但全被「先别用它」关着时，说�
   assert.equal(posted, 0, '一个都没启用时不该提交')
   assert.equal(last(sets, 'cloudOn'), undefined)
   const msg = last(sets, 'cloudGate')
-  assert.match(msg, /先别用它/)
-  assert.match(msg, /用它/)
+  assert.match(msg, /先停一停/)
+  assert.match(msg, /继续往这儿送/)
 })
 
 test('云端开关：有一个能用的地方时正常打开，并清掉上一句提示', async () => {
@@ -447,13 +447,40 @@ test('「加一个」一进页面就能点：下拉画着第一项，按钮就�
 })
 
 // ---- 2026-11-14 用户 m03925：「删」一点就没了，说不出自己点了哪颗 ----
+// ---- 2026-11-14 用户 m04053：「这几个按钮根本搞不明白是干什么用的」 ----
+
+test('每一处默认只露一颗「管理这一处」，五个动作和说明都藏在里面', async () => {
+  // 原来一排五颗两三个字的按钮（先别用它 / 改 / 测一下 / 删 / 看云上那几份），
+  // 用户原话是「五六个按钮，根本搞不明白是干什么用的」。现在默认一颗，点开才是一列整句。
+  const target = { id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: true, ready: true, problem: '' }
+  const closed = await render({ tab: 'data', cloudOpen: true, cloudState: { targets: [target], kinds: [] } })
+  assert.equal(button(closed.tree, '管理这一处').props.disabled, false)
+  for (const gone of ['先停一停，别再往这儿送了', '改这里的设置', '看看现在还连得上吗', '删掉这一处']) {
+    assert.equal(findAll(closed.tree, (n) => n.type === 'button' && n.props.children === gone).length, 0, `「${gone}」不该在收起时露出来`)
+  }
+
+  const open = await render({ tab: 'data', cloudOpen: true, cloudManage: 't1', cloudState: { targets: [target], kinds: [] } })
+  const text = textOf(open.tree).join('')
+  for (const label of ['先停一停，别再往这儿送了', '改这里的设置', '看看现在还连得上吗', '删掉这一处']) {
+    assert.ok(text.includes(label), `点开之后要看得见「${label}」`)
+  }
+  // 每个动作下面还得有一句它到底做什么，否则还是让人猜
+  assert.ok(text.includes('只停这一处'), '「暂停」要说清只影响这一处')
+  assert.ok(text.includes('只测连通'), '「测」要说清不传东西')
+  assert.ok(text.includes('云上已经传上去的备份不会跟着消失'), '「删」要说清云上的不受影响')
+
+  let managed
+  await withFetch({}, async () => { await button(closed.tree, '管理这一处').props.onClick() })
+  managed = last(closed.sets, 'cloudManage')
+  assert.equal(managed, 't1', '点「管理这一处」要把这一行的动作放出来')
+})
 
 test('「删」要按两下：第一下只是问，第二下才真删', async () => {
-  // 一排五颗小按钮（先别用它 / 改 / 测一下 / 删 / 看云上那几份），删又是唯一不可逆的那颗。
-  // 用户原话是「不知道点了什么，都点没了」，所以第一下只把这一颗变成「真的删掉」。
+  // 这一颗是整排里唯一不可逆的。用户原话是「不知道点了什么，都点没了」，
+  // 所以第一下只把它变成「真的删掉」，而且还要先点开「管理这一处」才会看到。
   const target = { id: 't1', kind: 'folder', name: '网盘', label: '文件夹', enabled: true, ready: true, problem: '' }
-  const { tree, sets } = await render({ tab: 'data', cloudOpen: true, cloudState: { targets: [target], kinds: [] } })
-  const del = button(tree, '删')
+  const { tree, sets } = await render({ tab: 'data', cloudOpen: true, cloudManage: 't1', cloudState: { targets: [target], kinds: [] } })
+  const del = button(tree, '删掉这一处')
   let posts = 0
   await withFetch({}, async (calls) => {
     await del.props.onClick()
@@ -466,6 +493,7 @@ test('「删」要按两下：第一下只是问，第二下才真删', async ()
   const again = await render({
     tab: 'data',
     cloudOpen: true,
+    cloudManage: 't1',
     cloudDelConfirm: 't1',
     cloudState: { targets: [target], kinds: [] },
   })
