@@ -767,7 +767,9 @@ test('外部名字一直没来：宽限用完剔掉照收，不报 deferred（is
   }
   setTimeout(() => { names = new Set(own) }, 7) // 自己的到齐；read_image 始终没来
   ctx.emit('agent/created', { agent })
-  await new Promise((r) => setTimeout(r, 80))
+  // 2026-11-14：原来固定等 80ms。整个文件单跑时够，但 `node --test` 全量并发时这一拍会被
+  // 别人的活拖过去，机器慢一点就只看到第一把窄刀（实测 `1 !== 2` 偶发）。等条件，不等钟。
+  await until(() => calls.length >= 2, '窄刀之后宽限用完，要落下第二把完整刀')
 
   assert.equal(calls.length, 2, '窄刀 + 宽限过后的完整刀')
   assert.ok(!calls.at(-1).allow.includes('read_image'), '这台机器真没有的名字要剔掉')
