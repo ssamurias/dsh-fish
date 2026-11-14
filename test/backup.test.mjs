@@ -223,7 +223,9 @@ test('界面与路由都接上了（别只写了个模块）', async () => {
   // 打包时把恢复上限也带进去（collectBackup(root, { restoreLimit })），还是这一个 root
   assert.match(o, /collectBackup\(root[,)]/)
   // 恢复必须走「先封存」那条路，不许直接覆盖；skipBad 是 issue #65 的「人看过名单才跳过」
-  assert.match(o, /restoreBackup\(b, root[,)]/)
+  // 2026-11-14（用户 m03675）：恢复调用收进 `runRestore(bundle, skipBad)` 了，
+  // 三条入口（普通 / 加密 / 云端）共用，所以第一参是 bundle 不再是 b。
+  assert.match(o, /restoreBackup\((bundle|b), root[,)]/)
   assert.match(o, /skipBad/)
   // 备份恢复这条不拿「正文是不是 UTF-8」整包拦——旧包里本来就可能带替换符
   assert.match(o, /readBody\(req, restoreLimit, \{ mojibake: false \}\)/)

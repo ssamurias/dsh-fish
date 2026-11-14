@@ -697,4 +697,104 @@ test('设过口令之后那句换成了「存在哪、丢了会怎样」', async
   assert.ok(!all.includes('没有口令就没法加密'), '设过了就不该再说这句')
 })
 
+// ---- 2026-11-14 用户 m03675 / m03709：从备份恢复要能直接吃下 .enc ----
+
+/** 冒充一个 File：够 restoreFromFile 用的那几个方法（slice/arrayBuffer/text）。 */
+function fakeFile(bytes, { name = '大肥鱼-自动-20261114-100429.json.enc' } = {}) {
+  const buf = Buffer.from(bytes)
+  return {
+    name,
+    size: buf.length,
+    slice: (a, b) => ({ arrayBuffer: async () => buf.subarray(a, b) }),
+    arrayBuffer: async () => buf,
+    text: async () => buf.toString('utf8'),
+  }
+}
+
+const ENC_HEAD = Buffer.from('DSHFISH1', 'ascii')
+
+test('选文件的对话框不再只列 json——不然 .json.enc 根本看不见', async () => {
+  // 用户 m03709：「点击之后是默认选择json文件，你得改成选择所有文件，这样才能显示enc文件」
+  const { tree, made } = await render({ tab: 'data' })
+  button(tree, '从备份恢复').props.onClick()
+  const input = made.find((el) => el.tag === 'input')
+  assert.equal(input.accept, '', '空字符串＝不筛，什么文件都能选')
+})
+
+test('选到加密包（开头 DSHFISH1）时走解密那条路，不在前端硬吃', async () => {
+  const { tree, sets, made } = await render({ tab: 'data', cloudPass: 'my-pass-123' })
+  await withFetch({
+    'POST /backup/restore/enc': { ok: true, restored: 4, quarantined: '', skipped: [] },
+  }, async () => {
+    button(tree, '从备份恢复').props.onClick()
+    const input = made.find((el) => el.tag === 'input')
+    input.files = [fakeFile(Buffer.concat([ENC_HEAD, Buffer.alloc(64, 7)]))]
+    await input.onchange()
+  })
+  const msg = last(sets, 'backupMsg')
+  assert.match(msg, /^已恢复 4 个文件/, `要按恢复回执说：${msg}`)
+})
+
+test('加密包不看扩展名：名字改成 .txt 也照样按内容认出来', async () => {
+  const { tree, made } = await render({ tab: 'data' })
+  let hit = ''
+  await withFetch({
+    'POST /backup/restore/enc': () => { hit = 'enc'; return { ok: true, restored: 1 } },
+    'POST /backup/restore': () => { hit = 'plain'; return { ok: true, restored: 1 } },
+  }, async () => {
+    button(tree, '从备份恢复').props.onClick()
+    const input = made.find((el) => el.tag === 'input')
+    input.files = [fakeFile(Buffer.concat([ENC_HEAD, Buffer.alloc(32, 1)]), { name: '随便改的名字.txt' })]
+    await input.onchange()
+  })
+  assert.equal(hit, 'enc', '网盘改名、下载器加后缀都不该影响判断')
+})
+
+test('普通 json 仍走原来那条路，不因为放开文件类型就改道', async () => {
+  const { tree, made } = await render({ tab: 'data' })
+  const seen = []
+  await withFetch({
+    'POST /backup/restore/enc': () => { seen.push('enc'); return { ok: true, restored: 1 } },
+    'POST /backup/restore': () => { seen.push('plain'); return { ok: true, restored: 2 } },
+  }, async () => {
+    button(tree, '从备份恢复').props.onClick()
+    const input = made.find((el) => el.tag === 'input')
+    input.files = [fakeFile(JSON.stringify(BUNDLE), { name: '大肥鱼-20261114-1004.json' })]
+    await input.onchange()
+  })
+  assert.deepEqual(seen, ['plain'])
+})
+
+test('口令不对时给一条能照着做的话，并说清口令存在哪儿、找不回来', async () => {
+  const { tree, sets, made } = await render({ tab: 'data' })
+  await withFetch({
+    'POST /backup/restore/enc': () => ({
+      __status: 400,
+      ok: false,
+      error: '解不开：口令不对，或者这份文件在路上被改过。',
+    }),
+  }, async () => {
+    button(tree, '从备份恢复').props.onClick()
+    const input = made.find((el) => el.tag === 'input')
+    input.files = [fakeFile(Buffer.concat([ENC_HEAD, Buffer.alloc(32, 3)]))]
+    await input.onchange()
+  })
+  const msg = last(sets, 'backupMsg')
+  assert.match(msg, /没有对得上的口令/)
+  assert.match(msg, /加密口令/, '要指到那个输入框去')
+  assert.match(msg, /cloud-key\.txt/, '要告诉人当时那份口令存在哪儿')
+})
+
+test('既不是 json、开头也不是 DSHFISH1：说清两种都不是，别只说「不是 json」', async () => {
+  const { tree, sets, made } = await render({ tab: 'data' })
+  button(tree, '从备份恢复').props.onClick()
+  const input = made.find((el) => el.tag === 'input')
+  input.files = [fakeFile('这是一张图片，不是备份')]
+  await input.onchange()
+  const msg = last(sets, 'backupMsg')
+  assert.match(msg, /不是 json/)
+  assert.match(msg, /DSHFISH1/, '要带上认出来的依据，才知道该换哪个文件')
+})
+
+
 
