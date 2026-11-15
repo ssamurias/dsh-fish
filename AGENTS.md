@@ -72,7 +72,7 @@
 node --test
 ```
 
-当前基线 **2725 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **2776 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
@@ -150,7 +150,7 @@ GET /dsh-fish/whoami
 2. **外客不动生命体征**。`seen:`、`bumpTurns`、会话轮换只由 desk/private 且非 `guest` 触发；群聊与群友私聊一条都不写。否则群里一天几百句，冷落检测永远不会触发——他一周没露面，面板还显示"今天聊过"。`heard` 分两种：私聊/书房那条算「他来过」，群聊那条（`scene:'group'`）**不算**——`lib/schema.js` 的 `isContactEvent` 已经把群聊的 `heard` 排除掉了（2026-11-08）。**「他来过」也只认她自己的房间**（2026-11-11）：客户端亲手打的字（`source.kind:'user'` 且带 `clientTimeZone`）只有落在她住的那条会话、或 `channels.json` 里登记过的房间才写 `seen:`；本机别的 DSH 会话里他跟其他 agent 说话，不再清零冷落钟（用户报「好几天没回她还不算冷落」就是这条）。桥注入的消息（`kind` 不是 `user`、或没有 `clientTimeZone`）照旧算——QQ 私聊那条路不能断（issue #18）。
 3. **外来场次必须带说话人前缀**。`lib/say.js` 对 `group` 与 `guest` 都用 `speaker` 拼 `某某在群里说：…` / `某某说：…`。不拼的话，群里三个人的话在她看来跟一个人连说三句一模一样，她会把三个人的观点拼成一个"他"。外来文本统一过 `lib/guard.js` 的 `sanitizeForeign`。
 4. **桥不要用宿主的 `source.form`**。`snapshot`、`notice`、`catalog`、`instructions`、`recall` 是宿主前端的保留词表，`classifyMessage` 见到就当上下文，不算人（`MACHINE_FORMS`）。转述人说的话，要么不带 `form`，要么用 `relay`。
-5. **走宿主 prompt 的桥，`rpcId` 就是记号**。`sessionController.prompt()` 把 `kind` 写死成 `user`，把调用方的 `requestId` 写进 `source.rpcId`，桥传不进自己的 `source`；`clientTimeZone` 是可选字段，忘了不会报错。2026-11-08 起 `classifyMessage` 把「带 rpcId 的 user 消息」也认作人：我们自己的 prompt 用 `PLUGIN_RPC` 前缀先挡掉，`lib/possess.js` / `lib/sessionnote.js` 的 append 没有 rpcId，仍留 unknown。桥仍应带 `clientTimeZone`——`dsh-time-context` 只认「kind user + rpcId + 时区」三者齐全的 source。正文末尾的 `[渠道：…]` / `[Channel: …]` 独立段落只影响记账（`lib/turns.js` 的 `stripChannelNote` 会裁掉），会话原文不动；只有提示的那条不算他来过。
+5. **走宿主 prompt 的桥，`rpcId` 就是记号**。`sessionController.prompt()` 把 `kind` 写死成 `user`，把调用方的 `requestId` 写进 `source.rpcId`，桥传不进自己的 `source`；`clientTimeZone` 是可选字段，忘了不会报错。2026-11-08 起 `classifyMessage` 把「带 rpcId 的 user 消息」也认作人：我们自己的 prompt 用 `PLUGIN_RPC` 前缀先挡掉，`lib/possess.js` 的交接句没有 rpcId，仍留 unknown；`lib/sessionnote.js` 的便条卡片用 `source.fish:'note'` 标出来，归 plugin（1.0.2 起，issue #136）。桥仍应带 `clientTimeZone`——`dsh-time-context` 只认「kind user + rpcId + 时区」三者齐全的 source。正文末尾的 `[渠道：…]` / `[Channel: …]` 独立段落只影响记账（`lib/turns.js` 的 `stripChannelNote` 会裁掉），会话原文不动；只有提示的那条不算他来过。
 6. **走 `prompt()` 的桥，发之前先登记这一轮是什么**（2026-11-09，issue #96）。上一条的「带 rpcId 就算人」把群聊、群友私聊、桥自己的定时提醒也一起算成了他本人：涨轮数、换会话、写 `seen:`、记「他说」、撤掉叫醒。桥在调 `sessionController.prompt()` 之前发一条即可：
 
    ```js
@@ -289,7 +289,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `lib/guard.js`
 - [ ] 加 / 改名 / 删了工具，`test/toolmap.test.mjs` 的 `MAP`（或 `lib/toolreg.js` 的 `SCENE_TOOLS`）跟着改了（见 §8）
-- [ ] `node --test` 2725 全绿
+- [ ] `node --test` 2776 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」；给她看的文本里指主人的字写的是 `{T}` 而不是写死「他」（见 §4）
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节
