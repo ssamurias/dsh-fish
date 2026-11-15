@@ -153,6 +153,9 @@ test('动手那句只在她的记录里点到工具名时才点名', () => {
   assert.match(none, /做一件就收/)
   assert.match(none, /直接做/)
   assert.match(none, /不用先把这件事说出来/)
+  // 做出来的是个文件时，要把路径交给 her_make（预演里就是这条没写清才白丢）
+  assert.match(none, /交给 her_make/)
+  assert.match(none, /路径照抄工具给的/)
   // 便条/预约这类「悬着的事」里点到过，也算她写过
   assert.match(doingSection({ loose: [{ text: '周末想玩 game_play 那局' }], tools }), /game_play/)
 })
