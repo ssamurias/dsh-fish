@@ -502,11 +502,64 @@ test('自动备份范围同时用于历史档和最新档，手动备份仍使�
     }
 
     const full = await runLatestBackup(root, { config: cfgOf({}) })
-    for (const bundle of [(await readAutoBackup(full.name, root)).bundle, await collectBackup(root)]) {
-      const paths = bundle.files.map((file) => file.path)
-      assert.ok(paths.includes('owner.json'))
-      assert.ok(paths.includes('media/picture.png'))
+    const fullBundle = (await readAutoBackup(full.name, root)).bundle
+    const fullPaths = fullBundle.files.map((file) => file.path)
+    assert.ok(fullPaths.includes('owner.json'))
+    // 2026-11-15（用户 m01641）：自动备份默认不带媒体与桥接附件；手动备份仍是全量。
+    assert.ok(!fullPaths.includes('media/picture.png'), '自动备份默认不带媒体')
+    assert.ok(fullBundle.excluded.includes('media/'))
+
+    const keep = await runLatestBackup(root, { config: cfgOf({ skipAttachments: false }) })
+    const keepPaths = (await readAutoBackup(keep.name, root)).bundle.files.map((file) => file.path)
+    assert.ok(keepPaths.includes('media/picture.png'), '关掉开关后要带回来')
+
+    const manual = await collectBackup(root)
+    assert.ok(manual.files.some((file) => file.path === 'media/picture.png'), '手动备份不受影响')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('核心备份带上顶层状态文件（#142 审查补齐）', async () => {
+  const root = await makeRoot()
+  try {
+    for (const [name, body] of [
+      ['notes.json', '{"notes":[]}'],
+      ['session-notes.json', '{"notes":[]}'],
+      ['possessions.json', '{"items":[]}'],
+      ['outings.json', '{"items":[]}'],
+      ['keepsakes.json', '{"items":[]}'],
+    ]) await writeFile(join(root, name), body)
+    await mkdir(join(root, 'keepsakes'), { recursive: true })
+    await writeFile(join(root, 'keepsakes', 'a.md'), '留着的。')
+    const result = await runAutoBackup(root, { config: cfgOf({ coreOnly: true }) })
+    assert.equal(result.ok, true)
+    const paths = (await readAutoBackup(result.name, root)).bundle.files.map((file) => file.path)
+    for (const rel of ['notes.json', 'session-notes.json', 'possessions.json', 'outings.json', 'keepsakes.json', 'keepsakes/a.md']) {
+      assert.ok(paths.includes(rel), `${rel} 要在核心备份里`)
     }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('自动备份跳过附件类型与大文件，但事件流和头像例外', async () => {
+  const root = await makeRoot()
+  try {
+    await mkdir(join(root, 'home'), { recursive: true })
+    await writeFile(join(root, 'home', 'photo.png'), Buffer.from([1, 2, 3]))
+    await writeFile(join(root, 'home', 'novel.epub'), Buffer.from([4, 5, 6]))
+    await writeFile(join(root, 'home', 'big.bin'), Buffer.alloc(4 * 1024 * 1024 + 1, 7))
+    await writeFile(join(root, 'avatar.png'), Buffer.from([8, 9]))
+    const result = await runLatestBackup(root, { config: cfgOf({}) })
+    const bundle = (await readAutoBackup(result.name, root)).bundle
+    const paths = bundle.files.map((file) => file.path)
+    for (const rel of ['home/photo.png', 'home/novel.epub', 'home/big.bin']) {
+      assert.ok(!paths.includes(rel), `${rel} 不该进自动备份`)
+    }
+    assert.ok(paths.includes('events.jsonl'), '事件流永远要带')
+    assert.ok(paths.includes('avatar.png'), '头像不能当附件丢掉')
+    assert.ok(bundle.skipped.some((line) => line.startsWith('home/big.bin')), '大文件要写进 skipped')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
