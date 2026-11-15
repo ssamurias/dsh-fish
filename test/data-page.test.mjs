@@ -879,5 +879,24 @@ test('既不是 json、开头也不是 DSHFISH1：说清两种都不是，别只
   assert.match(msg, /DSHFISH1/, '要带上认出来的依据，才知道该换哪个文件')
 })
 
+// ---- 1.0.3：这颗按钮不该藏在 GitHub Release 目标后面 ----
+
+test('自动备份那层：没有云端目标也能点「现在生成一份历史备份」，点了真的存一份', async () => {
+  // 1.0.2 里它被绑在 kind=git && ready && enabled && releaseAssets===true 上，
+  // 而 POST /backup/auto 根本不需要云端目标：没有目标的人就永远看不见这颗按钮。
+  const { tree, sets } = await render({ tab: 'data', cloudState: { enabled: false, targets: [] } })
+  const btn = button(tree, '现在生成一份历史备份')
+  assert.equal(btn.props.disabled, false)
+  await withFetch({
+    'POST /backup/auto': { ok: true, name: '大肥鱼-自动-20261115-2100.json', sizeText: '1 份，一共 8KB' },
+    'GET /backup/auto': { enabled: true, count: 1, dir: 'C:\\Users\\me\\.dsh-fish\\backups', items: [] },
+  }, async (calls) => {
+    await btn.props.onClick()
+    assert.ok(calls.some((c) => c.path === '/backup/auto' && c.method === 'POST'), '要真的发 POST /backup/auto')
+  })
+  const msg = last(sets, 'autoBackupResult')
+  assert.match(msg, /已生成「大肥鱼-自动-20261115-2100\.json」/)
+})
+
 
 
