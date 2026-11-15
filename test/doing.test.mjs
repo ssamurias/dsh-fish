@@ -66,8 +66,16 @@ test('didText / parseDid 往返，key 可以含冒号', () => {
   assert.equal(parseDid('不是 did'), null)
 })
 
+// 本地正午：额度按「本地日」算，用 Date.now() 在凌晨 0–1 点跑会把「一小时前」
+// 算成昨天（2026-11-15 00:06 真红过）。锚到正午，什么时候跑都一样。
+function noonOfToday() {
+  const d = new Date()
+  d.setHours(12, 0, 0, 0)
+  return d.getTime()
+}
+
 test('doingUsage：只数成功，消耗按当天算', () => {
-  const now = Date.now()
+  const now = noonOfToday()
   const events = [
     did({ ts: now - HOUR }),
     did({ ok: false, ts: now - HOUR }),
@@ -81,7 +89,7 @@ test('doingUsage：只数成功，消耗按当天算', () => {
 })
 
 test('消耗类一天一次：第二次拦下，产出不占额度', () => {
-  const now = Date.now()
+  const now = noonOfToday()
   const events = [did({ ts: now - HOUR })]
   assert.equal(checkDoing({ name: 'bili_watch', args: { bvid: 'BV2' }, events, now }).code, 'daily')
 
