@@ -75,7 +75,7 @@ test('页签顺序：插件 → 原理 → 数据 → 反馈；出门排在「�
   const ids = [...tabs[1].matchAll(/\['([a-z]+)', '[^']+'\]/g)].map((m) => m[1])
   // 2026-10-28 用户要求加第 9 个页签「反馈」（开发者 QQ + 交流群二维码），排在最后；
   // 出门页从 2026-10-30（用户 m01904）起对所有人可见，2026-10-30（m02207）挪到「上网」和「记忆」之间。
-  assert.deepEqual(ids, ['now', 'grow', 'home', 'bili', 'outing', 'memory', 'env', 'principle', 'data', 'feedback'])
+  assert.deepEqual(ids, ['now', 'grow', 'home', 'bili', 'outing', 'memory', 'pressure', 'env', 'principle', 'data', 'feedback'])
   // 门从「藏页签」改成「页面里一次性确认」：说明卡没点过，三个入口按钮先灰着。
   assert.ok(!cl.includes('const [devMode, setDevMode] = useState(null)'), '不再有藏页签的 devMode 开关')
   assert.ok(cl.includes('...TABS.map(([id, name]) =>'), '页签栏不过滤，出门页常驻')
