@@ -881,11 +881,11 @@ test('时段控件下面补一行 24 小时制：00:00 不会被读成中午十�
 // 2026-11-08：issue #69 —— 数字框范围、提醒开关、历史天数
 // ---------------------------------------------------------------------------
 
-test('数字框的范围跟 settings.js 的 LIMITS 对齐：事件/问题能到 6，旁听间隔也在表里（issue #69）', async () => {
+test('数字框的范围跟 settings.js 的 LIMITS 对齐：事件能到 12，旁听间隔也在表里（issue #69）', async () => {
   const src = await readFile(CLIENT, 'utf8')
 
   // 0–5 会把用户选的「6」判成非法：保存按钮一直红着，却说不出是哪一项。
-  assert.ok(src.includes("['每天几张事件卡', eventsPerDay, 0, 6]"), '事件条数上限是 6')
+  assert.ok(src.includes("['每天几张事件卡', eventsPerDay, 0, 12]"), '事件条数上限是 12（2026-11-15 与 wakesPerDay 同步）')
   assert.ok(src.includes("['每天问题卡数', questionsPerDay, 0, 6]"), '问题条数上限是 6')
 
   // 这个框一直有（growPage 里那行），但不在 NUM_BOUNDS 里 —— 清空或越界时不会被拦。

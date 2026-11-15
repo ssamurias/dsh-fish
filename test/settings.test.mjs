@@ -35,7 +35,7 @@ test('越界值被夹到合法区间', () => {
   const c = normalizeConfig({ growthDays: 9999, wakesPerDay: -5, daily: { events: 99 } })
   assert.equal(c.growthDays, 180)
   assert.equal(c.wakesPerDay, 0)
-  assert.equal(c.daily.events, 6)
+  assert.equal(c.daily.events, 12) // 2026-11-15：与 wakesPerDay 同步放宽到 12
 })
 
 // 2026-11-11（外部用户反馈）：换会话带几轮原话要能调，上限跟 talkmem 的落盘上限是同一个数。

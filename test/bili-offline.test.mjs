@@ -367,7 +367,8 @@ test('「上网」那一页的说明跟代码对得上', async () => {
   assert.ok(!text.includes('不叫醒你'))
   // 「每天最多刷几次」只有自动逛读，选 0 她照样能自己出门
   assert.ok(!text.includes('从不上网'))
-  assert.ok(text.includes('0 次 · 不自动逛'))
+  // 2026-11-15：「每天最多刷几次」从下拉档位改成可填数字，0 的说法写在提示里
+  assert.ok(text.includes('0 为不自动逛'))
   assert.ok(text.includes('只管自动逛'))
   // 屏蔽名单现在也管点名看画面（最短时长除外）
   assert.ok(!text.includes('不管看画面'))

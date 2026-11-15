@@ -120,6 +120,24 @@ test('契约：重复原话去重，原文一个字都不改', () => {
   assert.equal(r.material.quotes[0].text, '他说：「别 急着 下结论。」')
 })
 
+test('契约：0 赞保留为 0，「不适用」才省掉（issue #140）', () => {
+  const r = coerceMaterial(good({
+    quotes: [
+      { text: '零赞的那条。', kind: 'comment', like: 0 },
+      { text: '有赞的那条。', kind: 'comment', like: 54 },
+      { text: '弹幕没有赞。', kind: 'danmaku' },
+      { text: '赞数坏掉的那条。', kind: 'comment', like: null },
+    ],
+  }))
+  assert.equal(r.ok, true)
+  assert.equal(r.material.quotes.length, 4)
+  assert.equal(r.material.quotes[0].like, 0)
+  assert.equal(r.material.quotes[1].like, 54)
+  // 弹幕与「赞数未知」都不写 like：0 和「没有这个字段」必须分得开
+  assert.ok(!('like' in r.material.quotes[2]))
+  assert.ok(!('like' in r.material.quotes[3]))
+})
+
 test('契约：工具返回值只有整段是 JSON 才认，散文不猜', () => {
   assert.equal(materialFromToolText(JSON.stringify(good()))?.source, 'zhihu')
   assert.equal(materialFromToolText('今天看了个视频，挺有意思的。'), null)

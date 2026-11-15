@@ -386,7 +386,7 @@ test('ask_owner：截断后两个选项一样就不问，半个 emoji 也不留'
 test('ask_owner：kind=time 写不出账上存得下的数就不问，null 不算 0', async () => {
   for (const bad of [
     {}, { window: ['8:00', '22:00'] }, { window: ['09:00', '09:00'] }, { wakesPerDay: null }, { wakesPerDay: '' }, { wakesPerDay: 2, window: ['bad', '22:00'] },
-    { wakesPerDay: 5 }, { wakesPerDay: -1 }, { wakesPerDay: 2.5 }, { wakesPerDay: '0x10' }, { wakesPerDay: '1e1' }, { wakesPerDay: 'abc', window: ['08:00', '22:00'] },
+    { wakesPerDay: 13 }, { wakesPerDay: -1 }, { wakesPerDay: 2.5 }, { wakesPerDay: '0x10' }, { wakesPerDay: '1e1' }, { wakesPerDay: 'abc', window: ['08:00', '22:00'] },
   ]) {
     await withRoot(async (root) => {
       const { out } = await askRelayed(root, { kind: 'time', ...bad })

@@ -388,7 +388,7 @@ test('打开页面之后改一项，照样停手 700ms 存一次，带的「@ �
       await app.tab('成长')
       const before = app.posts().length
       assert.equal(before, 0, '/owner 正常回来、什么都没动：打开页面不写盘')
-      inputOf(app.field('每天定时醒几次'), 'select').props.onChange({ target: { value: '2' } })
+      inputOf(app.field('每天定时醒几次'), 'input').props.onChange({ target: { value: '2' } })
       await app.settle()
       await app.advance(699)
       assert.equal(app.posts().length, before, '还没停手够 700ms')
@@ -634,7 +634,7 @@ test('打开页面时 /beliefs 失败、/config 没灌进来：改一项也不�
     await app.advance(1000)
     assert.deepEqual(app.posts(), [], '打开页面不写盘')
     await app.tab('成长')
-    inputOf(app.field('每天定时醒几次'), 'select').props.onChange({ target: { value: '2' } })
+    inputOf(app.field('每天定时醒几次'), 'input').props.onChange({ target: { value: '2' } })
     await app.settle()
     await app.advance(2000)
     assert.deepEqual(app.posts(), [], '界面上除了 /state 那几项都是初值，不能整表写下去')
@@ -646,7 +646,7 @@ test('打开页面时 /beliefs 失败、/config 没灌进来：改一项也不�
     assert.ok(!app.text().includes('设置还没从盘上读全'), '读全了，那句不再成立')
     await app.advance(1000)
     assert.deepEqual(app.posts(), [], '重读本身不写盘')
-    inputOf(app.field('每天定时醒几次'), 'select').props.onChange({ target: { value: '2' } })
+    inputOf(app.field('每天定时醒几次'), 'input').props.onChange({ target: { value: '2' } })
     await app.settle()
     await app.advance(700)
     const posts = app.posts()
@@ -716,5 +716,30 @@ test('「看过的视频」：说明不把她自己点开的说成旧版刷站�
     const note = textOf(card.children.find((c) => c?.props?.className === 'hint')).join('')
     assert.ok(!note.includes('其余是旧版刷站翻到的'), `说明要算上她自己点开的，实际：${note}`)
     assert.ok(note.includes('自己点开'), `说明要算上她自己点开的，实际：${note}`)
+  } finally { app.unmount() }
+})
+
+test('这七项都是数字框、不是下拉：放宽范围不能被残留的 Sel 挡住', async () => {
+  // 2026-11-15：用户发现「每天最多搭话」还是 0–6 的下拉——前面五处都换了，唯独漏了这一处。
+  // 所以这里按标签逐个钉住：控件必须是 input，树里不许再有 select。
+  const app = await openPage(normalizeConfig({}), () => undefined)
+  try {
+    await app.advance(1000)
+    const FIELDS = [
+      ['成长', '每天定时醒几次'],
+      ['成长', '每天几张事件卡'],
+      ['成长', '每天最多搭话'],
+      ['上网', '每天最多刷几次'],
+      ['上网', '每条取几帧'],
+      ['上网', '每天评论几条'],
+      ['记忆', '身份段字数'],
+    ]
+    for (const [tab, label] of FIELDS) {
+      await app.tab(tab)
+      const fld = app.field(label)
+      assert.ok(fld, `「${label}」要在`)
+      assert.ok(inputOf(fld, 'input'), `「${label}」要是数字框——写成 Sel 就选不到超过档位的数`)
+      assert.equal(findAll(fld, (n) => n.type === 'select').length, 0, `「${label}」不该再有下拉`)
+    }
   } finally { app.unmount() }
 })

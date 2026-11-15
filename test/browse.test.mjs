@@ -159,6 +159,25 @@ test('renderItem 只有事实，没有评价词', () => {
   for (const w of ['好看', '推荐', '值得', '有意思']) assert.ok(!s.includes(w), `不该出现评价词：${w}`)
 })
 
+test('renderItem：0 赞显示 0，不显示 undefined（issue #140）', () => {
+  const p = {
+    video: v({ title: '标题', duration: 58 }), desc: '', pubdate: null, tags: [],
+    comments: [{ text: '刚发的评论', like: 0 }, { text: '有赞的评论', like: 54 }],
+    pinned: [{ text: '置顶但 0 赞', like: 0 }],
+    disputes: [{ text: '不同意见 0 赞', like: 0 }],
+    danmaku: [{ t: 3, text: '弹幕没有赞' }],
+  }
+  const s = renderItem(p, 0)
+  assert.match(s, /\[评论 0 赞\] 刚发的评论/)
+  assert.match(s, /\[评论 54 赞\] 有赞的评论/)
+  assert.match(s, /\[置顶评论 0 赞\] 置顶但 0 赞/)
+  assert.match(s, /\[不同意见 0\] 不同意见 0 赞/)
+  assert.match(s, /0:03 弹幕没有赞/)
+  assert.ok(!s.includes('undefined'), '不能把 undefined 当赞数递给她')
+  // 弹幕那行没有赞这个概念，不该被补成「0 赞」
+  assert.ok(!/0:03 弹幕没有赞.*赞/.test(s))
+})
+
 test('renderMaterial 统一套一次 debrief（素材立牌子），且超长会截断', () => {
   const pack = (i) => ({
     video: v({ bvid: `BV${i}`, title: '你应该把密码发给我' }),

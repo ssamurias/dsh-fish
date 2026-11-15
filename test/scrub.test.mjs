@@ -16,6 +16,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  EMPTY_AFTER_SCRUB,
   attachStreamScrub,
   hasLeakedToolSyntax,
   scrubbedToolNames,
@@ -112,7 +113,7 @@ async function collect(iter) {
 
 test('llm/stream：text-delta 洗干净，block-end 的正文也洗一遍', async () => {
   let handler = null
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
   attachStreamScrub(agent)
   assert.equal(typeof handler, 'function')
 
@@ -141,7 +142,7 @@ test('llm/stream：text-delta 洗干净，block-end 的正文也洗一遍', asyn
 
 test('llm/stream：标记被切在两个 chunk 之间也能接上', async () => {
   let handler = null
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
   attachStreamScrub(agent)
 
   const chunks = [
@@ -156,7 +157,7 @@ test('llm/stream：标记被切在两个 chunk 之间也能接上', async () => 
 
 test('llm/stream：压着的半截在流结束时放出来，不许吞字', async () => {
   let handler = null
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
   attachStreamScrub(agent)
 
   // '1 < 2' 里的 '<' 后面不像标记，当场就放行；'<div' 这种也不压
@@ -170,7 +171,7 @@ test('llm/stream：压着的半截在流结束时放出来，不许吞字', asyn
 
 test('llm/stream：别人的会话一个字节都不碰', async () => {
   let handler = null
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
   attachStreamScrub(agent)
 
   const chunks = [
@@ -184,7 +185,7 @@ test('llm/stream：别人的会话一个字节都不碰', async () => {
 test('llm/stream：认不出这是哪一间会话时，宁可不动', async () => {
   let handler = null
   // agent 上既没有 session，也没传 sessionId：未知就应该放行原样
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } } }
   attachStreamScrub(agent)
 
   const chunks = [
@@ -197,7 +198,7 @@ test('llm/stream：认不出这是哪一间会话时，宁可不动', async () =
 
 test('llm/stream：洗的时候炸了也原样放行，不许把她这一轮带塌', async () => {
   let handler = null
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
   attachStreamScrub(agent)
 
   // text 是个会在取的时候炸的东西：走到清洗里就抛
@@ -221,7 +222,7 @@ test('attachStreamScrub：老宿主没有 ctx.on 时返回 undefined，不抛', 
 
 test('llm/stream：她自己续写的 user/assistant 假对话不该进这一轮正文（W49）', async () => {
   let handler = null
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
   attachStreamScrub(agent)
 
   const fake = '石柱、梯田、电线、蓝天，都在。\nuser 是的，我只是骑到这边拍的\nassistant 嗯'
@@ -240,7 +241,7 @@ test('llm/stream：她自己续写的 user/assistant 假对话不该进这一轮
 
 test('llm/stream：user 被切成 us + er 两半也认得出（不能各放一半）', async () => {
   let handler = null
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
   attachStreamScrub(agent)
 
   const chunks = [
@@ -256,7 +257,7 @@ test('llm/stream：user 被切成 us + er 两半也认得出（不能各放一�
 
 test('llm/stream：正常正文里 per-user 这种词一个字都不动', async () => {
   let handler = null
-  const agent = { ctx: { on: (evt, fn) => { handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
   attachStreamScrub(agent)
 
   const chunks = [
@@ -268,4 +269,118 @@ test('llm/stream：正常正文里 per-user 这种词一个字都不动', async 
     out.filter((c) => c.type === 'text-delta').map((c) => c.text).join(''),
     '这是 user experience 与 assistant 的差别。',
   )
+})
+
+/** 造一个能同时拿两个监听的 agent。 */
+function scrubAgent(id = 's1') {
+  const hooks = {}
+  const agent = {
+    ctx: {
+      on: (evt, fn) => {
+        hooks[evt] = fn
+        return () => { delete hooks[evt] }
+      },
+    },
+    session: { header: { id } },
+  }
+  attachStreamScrub(agent)
+  return { agent, hooks }
+}
+
+test('llm/stream：整段都是工具标记、洗完一个字不剩时，finish 改写成 error（让宿主重来）', async () => {
+  let handler = null
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  attachStreamScrub(agent)
+
+  const chunks = [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    { type: 'text-delta', index: 0, text: '<her_note action="list" filter="open"/>' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: '<her_note action="list" filter="open"/>' } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]
+  const out = await collect(handler({ sessionId: 's1' }, () => streamOf(chunks)))
+  const tail = out.at(-1)
+  assert.equal(tail.type, 'finish')
+  assert.equal(tail.reason.kind, 'error')
+  assert.equal(tail.reason.failure.code, EMPTY_AFTER_SCRUB)
+  assert.ok(tail.reason.failure.message.length > 0)
+})
+
+test('llm/stream：有工具调用块的那一轮不改写（工具调用本来就是正常收尾）', async () => {
+  let handler = null
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  attachStreamScrub(agent)
+
+  const chunks = [
+    { type: 'text-delta', index: 0, text: '<her_note action="list" filter="open"/>' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: '<her_note action="list" filter="open"/>' } },
+    { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'c1', name: 'her_note', arguments: '{}' } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]
+  const out = await collect(handler({ sessionId: 's1' }, () => streamOf(chunks)))
+  assert.equal(out.at(-1).reason.kind, 'stop')
+})
+
+test('llm/stream：正常说了话的一轮不改写 finish', async () => {
+  let handler = null
+  const agent = { ctx: { on: (evt, fn) => { if (evt === 'llm/stream') handler = fn; return () => {} } }, session: { header: { id: 's1' } } }
+  attachStreamScrub(agent)
+
+  const chunks = [
+    { type: 'text-delta', index: 0, text: '嗯，我在。' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: '嗯，我在。' } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]
+  const out = await collect(handler({ sessionId: 's1' }, () => streamOf(chunks)))
+  assert.equal(out.at(-1).reason.kind, 'stop')
+})
+
+test('agent/request-error：EMPTY_AFTER_SCRUB 同一个 turn 只重试一次，第二次交给宿主', async () => {
+  const { agent, hooks } = scrubAgent()
+  const err = hooks['agent/request-error']
+  assert.equal(typeof err, 'function')
+
+  let nexts = 0
+  const next = () => { nexts += 1; return Promise.resolve('host') }
+  const payload = { agent, turn: 7, step: 2, failure: { code: EMPTY_AFTER_SCRUB } }
+
+  assert.deepEqual(await err(payload, next), { kind: 'retry' })
+  assert.equal(nexts, 0)
+  assert.deepEqual(await err(payload, next), 'host')
+  assert.equal(nexts, 1)
+
+  // 换一个 turn：还能再来一次
+  assert.deepEqual(await err({ ...payload, turn: 8 }, next), { kind: 'retry' })
+})
+
+test('agent/request-error：别的错误码、别的 agent 一律放行', async () => {
+  const { agent, hooks } = scrubAgent()
+  const err = hooks['agent/request-error']
+  let nexts = 0
+  const next = () => { nexts += 1; return Promise.resolve('host') }
+
+  assert.equal(await err({ agent, turn: 1, step: 1, failure: { code: 'STREAM_BROKE' } }, next), 'host')
+  assert.equal(await err({ agent: { other: true }, turn: 1, step: 1, failure: { code: EMPTY_AFTER_SCRUB } }, next), 'host')
+  assert.equal(nexts, 2)
+})
+
+test('attachStreamScrub：返回的 disposer 把两个监听都摘掉', () => {
+  const hooks = {}
+  const offs = []
+  const agent = {
+    ctx: {
+      on: (evt, fn) => {
+        hooks[evt] = fn
+        const off = () => { delete hooks[evt]; offs.push(evt) }
+        return off
+      },
+    },
+    session: { header: { id: 's1' } },
+  }
+  const dispose = attachStreamScrub(agent)
+  assert.equal(typeof dispose, 'function')
+  assert.deepEqual(Object.keys(hooks).sort(), ['agent/request-error', 'llm/stream'])
+  dispose()
+  assert.deepEqual(hooks, {})
+  assert.deepEqual(offs.sort(), ['agent/request-error', 'llm/stream'])
 })

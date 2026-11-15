@@ -22,6 +22,10 @@ import { join } from 'node:path'
 import {
   BELIEFS_ORDER,
   BELIEFS_SECTION,
+  CATALOG_ORDER,
+  CATALOG_SECTION,
+  HANDOFF_SECTION,
+  HANDOFF_ORDER,
   HOST_PERSONA_SECTION,
   IDENTITY_ORDER,
   IDENTITY_SECTION,
@@ -89,7 +93,7 @@ test('identityText：读到文件内容，改文件后（mtime 变）能拿到�
   assert.equal(identityText(root), '第二版身份')
 })
 
-test('attachIdentity：挂三段——身份 + 这一次的处境（平时空）+ 手边有什么', () => {
+test('attachIdentity：挂五段——交接页 + 身份 + 这一次的处境（平时空）+ 手边有什么 + 本子上记着什么', () => {
   resetIdentityCache()
   clearWakeSection()
   const root = tmp()
@@ -100,12 +104,21 @@ test('attachIdentity：挂三段——身份 + 这一次的处境（平时空）
   const agent = { ctx: { systemPrompt: { section: (o) => calls.push(o) } } }
   const r = attachIdentity(agent, root)
   assert.equal(r.ok, true)
-  assert.equal(calls.length, 3, '身份一段 + 处境一段 + 手边一段')
+  assert.equal(calls.length, 5, '身份一段 + 处境一段 + 手边一段 + 本子目录一段 + 交接页一段')
   const sec = calls[0]
   assert.equal(sec.name, IDENTITY_SECTION)
   assert.equal(sec.order, IDENTITY_ORDER)
   assert.equal(typeof sec.text, 'function', 'text 必须是函数：每轮组装时现读，文件变了立即生效')
   assert.equal(sec.text(), '我是她')
+
+  // 第一段：交接页（2026-11-15，用户 m01722）。平时空；只在换房后他开口的第一轮挂，
+  // 排 8450——在身份段（8500）前面，读起来像「先把上一间屋子接着」，而不是生平里的又一段。
+  const handoff = calls[2]
+  assert.equal(handoff.name, HANDOFF_SECTION)
+  assert.equal(handoff.order, HANDOFF_ORDER)
+  assert.ok(handoff.order < IDENTITY_ORDER, '交接页要排在身份段之前')
+  assert.equal(typeof handoff.text, 'function')
+  assert.equal(handoff.text(), '', '没换房就没有交接页')
 
   // 第二段：这一次的处境。平时空串（等于不存在），唤醒前才填。
   const wake = calls[1]
@@ -119,7 +132,7 @@ test('attachIdentity：挂三段——身份 + 这一次的处境（平时空）
   assert.equal(wake.text(), '')
 
   // 第三段：手边有什么（2026-10-29，用户 m01276）。收不窄的工具靠这段说清。
-  const tools = calls[2]
+  const tools = calls[3]
   assert.equal(tools.name, TOOLS_SECTION)
   assert.equal(tools.order, TOOLS_ORDER)
   assert.equal(typeof tools.text, 'function', '白名单变了下一轮就要生效')
@@ -127,6 +140,26 @@ test('attachIdentity：挂三段——身份 + 这一次的处境（平时空）
   assert.match(txt, /growth_commit/, '要把真放行的工具念出来')
   assert.match(txt, /ops_/, '要点名那些挡不掉、会混进工具表的')
   assert.match(txt, /这件事我做不到/, '和兜底守卫同一句话术')
+
+  // 第四段：本子上记着什么（2026-11-14，用户 m00533）。只说有哪些东西可翻，一个数字都不报
+  // （note.js/appoint.js 的「不吃状态」硬约束）；它排在最末（9500），内容会变——
+  // system prompt 缓存按前缀算，只让它自己失效。
+  const catalog = calls[4]
+  assert.equal(catalog.name, CATALOG_SECTION)
+  assert.equal(catalog.order, CATALOG_ORDER)
+  assert.ok(catalog.order > TOOLS_ORDER, '必须排在手边有什么之后（也就是整份提示词的最末）')
+  assert.equal(typeof catalog.text, 'function', '本子改了下一轮就要生效，不能冻住')
+  assert.equal(catalog.text(), '', '本子是空的就不占段位')
+
+  fs.writeFileSync(join(root, 'notes.json'), JSON.stringify([
+    { id: 'n1', text: '买猫粮', created: new Date().toISOString(), status: 'open' },
+  ]), 'utf8')
+  const filled = catalog.text()
+  assert.match(filled, /你的本子上记着/)
+  assert.match(filled, /便条/)
+  assert.match(filled, /用 her_recall 翻/)
+  assert.doesNotMatch(filled, /\d/, '「不吃状态」：不许报「你还有 N 条未完成」')
+  assert.ok(!filled.includes('{T}'), '挂上来的段不经过 persona 出口，自己就得把称呼填掉')
 })
 
 test('attachIdentity：手边有什么这一段不能漏字面量 {T}（issue #137，2026-11-14）', () => {
@@ -269,7 +302,7 @@ test('registerIdentity：只给她那个 agent 挂（按 cwd 判），别人不�
   handler({ agent: { session: { header: { cwd: join(root, 'other') } }, ctx: { systemPrompt: { section: (o) => others.push(o) } } } })
   handler({ agent: { session: { header: { cwd: '' } }, ctx: { systemPrompt: { section: (o) => others.push(o) } } } })
 
-  assert.equal(mine.length, 3, '她那条会话必须挂上（身份 + 处境 + 手边三段）')
+  assert.equal(mine.length, 5, '她那条会话必须挂上（身份 + 处境 + 手边 + 本子 + 交接页五段）')
   assert.equal(others.length, 0, '用户自己的会话不许挂')
 })
 
@@ -289,16 +322,18 @@ test('index.js：先写身份文本、再注册身份段、最后才建屋子', 
   assert.ok(!/身份文件：宿主每轮会重读它/.test(INDEX), '旧注释里「宿主每轮重读」已经不成立')
 })
 
-test('默认预算 1200 → 1800 → 2400，且三处（配置、常量、界面）一致', () => {
+test('默认预算 1200 → 1800 → 2400 → 2800，且三处（配置、常量、界面）一致', () => {
   // 2026-11-03（用户 m00998）：1800 / 2000 都挤掉「你被打脸过」，2200 反而挤掉
   // 「你对自己的说法」（更糟），2400 才一段不丢。三个数必须一起动，否则界面里
   // 显示的和真正用的不是一个数。
-  assert.equal(DEFAULTS.memory.docBudget, 2400)
-  assert.equal(SELF_DOC_BUDGET, 2400)
-  assert.ok(CLIENT.includes('useState(2400)'), '界面初始值要跟着改')
-  assert.ok(CLIENT.includes("cfg.memory?.docBudget ?? 2400"))
+  // 2026-11-14（用户 m00533）：加「还没收尾的」一行后 2400 又开始挤打脸，提到 2800。
+  assert.equal(DEFAULTS.memory.docBudget, 2800)
+  assert.equal(SELF_DOC_BUDGET, 2800)
+  assert.ok(CLIENT.includes('useState(2800)'), '界面初始值要跟着改')
+  assert.ok(CLIENT.includes("cfg.memory?.docBudget ?? 2800"))
   assert.ok(!CLIENT.includes('useState(1200)'), '旧的 1200 不许残留')
   assert.ok(!CLIENT.includes('useState(1800)'), '旧的 1800 不许残留')
+  assert.ok(!CLIENT.includes('useState(2400)'), '旧的 2400 不许残留')
   // 判断区仍固定 3 条：这一条是「像工作记忆」，与预算无关
   assert.equal(BELIEF_SHOWN, 3)
 })
@@ -706,12 +741,12 @@ test('attachIdentity 顺手挂上组装钩子与正文清洗钩子，且拆卸�
   }
   const r = attachIdentity(agent, root)
   assert.equal(r.ok, true)
-  assert.equal(calls.length, 3, 'assemble 钩子不是 system prompt 的段，不许占段位')
-  // 组装钩子（0.8.5 摘 persona-prefix）与正文清洗钩子（0.9.8 llm/stream）各一条
-  assert.deepEqual(hooks.map((h) => h.evt), ['system-prompt/assemble', 'llm/stream'])
-  for (const h of hooks) assert.equal(h.o?.prepend, true, '两个钩子都要排最外层')
+  assert.equal(calls.length, 5, 'assemble 钩子不是 system prompt 的段，不许占段位；五段是四个文本段加交接页')
+  // 组装钩子（0.8.5 摘 persona-prefix）、正文清洗钩子（0.9.8 llm/stream）、空正文重试（1.0.2）各一条
+  assert.deepEqual(hooks.map((h) => h.evt), ['system-prompt/assemble', 'llm/stream', 'agent/request-error'])
+  for (const h of hooks) assert.equal(h.o?.prepend, true, '三个钩子都要排最外层')
   // mountedCount 只数段与守卫；钩子单独记，但回家时必须一起拆
-  assert.equal(mountedCount(agent), 3)
+  assert.equal(mountedCount(agent), 5)
 })
 
 test('attachAssembleFix：整改过程炸了也必须原样放行（不能让她一整轮没有系统提示词）', async () => {

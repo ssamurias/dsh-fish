@@ -19,7 +19,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { cleanText, clipText, hasLoneSurrogate } from '../lib/clip.js'
-import { renderItem } from '../lib/browse.js'
+import { renderItem, renderMaterial } from '../lib/browse.js'
+import { fishMessage } from '../lib/deliver.js'
+import { appendNote } from '../lib/sessionnote.js'
 import { appendEvent, readEvents } from '../lib/store.js'
 
 const FACE = '\u{1F923}' // 😂 高位 \ud83d + 低位 \ude23 —— 真机上被切开的就是它
@@ -66,6 +68,50 @@ test('renderItem：上游带进来的半个字符不会出现在素材里', () =
   const out = renderItem(pack, 0)
   assert.equal(hasLoneSurrogate(out), false, `素材里还有孤立代理项：${JSON.stringify(out)}`)
   assert.ok(out.includes('\uFFFD'), '孤立代理项应该被换成 U+FFFD，而不是整条丢掉')
+})
+
+test('renderMaterial：整块素材砍到上限时也不劈开字符（issue #141）', () => {
+  // 用 40 个不同的偏移各造一条超长素材：只要有一处切在 emoji 中间，
+  // 旧实现就会漏出孤立代理项。40 个偏移足以覆盖 emoji 串里的奇偶两种切点。
+  for (let pad = 0; pad < 40; pad++) {
+    const pack = {
+      video: { bvid: 'BV1xx411c7mD', title: 'a'.repeat(300 + pad) + FACE.repeat(3200) + '尾巴', up: '', duration: 0, view: 0, like: 0 },
+      tags: [],
+      desc: '',
+      comments: [],
+      pinned: [],
+      disputes: [],
+      danmaku: [],
+      pubdate: null,
+    }
+    const out = renderMaterial([pack])
+    assert.ok(out.length <= 6100, `pad=${pad} 素材超长：${out.length}`)
+    assert.equal(hasLoneSurrogate(out), false, `pad=${pad} 截断后留下了孤立代理项`)
+    assert.ok(out.endsWith('（后面的内容太长，没加载完。）'), `pad=${pad} 缺少截断提示`)
+  }
+})
+
+test('fishMessage：投递出口把孤立代理项换成 U+FFFD（issue #141）', () => {
+  const msg = fishMessage('前半\ud83d结尾', { kind: 'fish-wake' })
+  const text = msg.content[0].text
+  assert.equal(hasLoneSurrogate(text), false, JSON.stringify(text))
+  assert.ok(text.includes('\uFFFD'))
+  // 成对的 emoji 原样保留，不误伤
+  assert.equal(fishMessage(`好笑 ${FACE}`).content[0].text, `好笑 ${FACE}`)
+})
+
+test('appendNote：写进会话的正文不留孤立代理项（issue #141）', () => {
+  let got = null
+  const agent = {
+    session: {
+      log: [{ type: 'system/message' }],
+      append(_type, payload) { got = payload },
+    },
+  }
+  assert.equal(appendNote(agent, '便条\ud83d尾巴').ok, true)
+  const text = got.content[0].text
+  assert.equal(hasLoneSurrogate(text), false, JSON.stringify(text))
+  assert.ok(text.includes('\uFFFD'))
 })
 
 test('事件流：写进去的半个字符，读回来已经洗干净', async () => {

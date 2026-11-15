@@ -84,7 +84,7 @@ test('默认配置里 comment 是关的，且不说话时配额为 0', () => {
 })
 
 test('配额上限被夹住，坏值回退默认', () => {
-  assert.equal(normalizeConfig({ comment: { perDay: 999 } }).comment.perDay, 5)
+  assert.equal(normalizeConfig({ comment: { perDay: 999 } }).comment.perDay, 10)
   assert.equal(normalizeConfig({ comment: { perDay: -3 } }).comment.perDay, 0)
   assert.equal(normalizeConfig({ comment: { replyPerDay: 50 } }).comment.replyPerDay, 10)
   assert.equal(normalizeConfig({ comment: { scanEveryMin: 1 } }).comment.scanEveryMin, 5)

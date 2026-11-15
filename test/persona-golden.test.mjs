@@ -184,7 +184,7 @@ const SCENARIOS = [
   },
   {
     name: '12-continuity',
-    note: '这些天 + 上一个房间里她自己留的最后一句（核心段，被裁一次等于那些天没发生）',
+    note: '这些天（日记与换房时间，核心段，被裁一次等于那些天没发生）',
     model: model({
       day: 66, stage: 3, stageName: '主动', name: '老大',
       beliefs: [belief('b1', '我说话喜欢先给个具体的例子', 5)],
@@ -193,7 +193,7 @@ const SCENARIOS = [
     opts: {
       continuity: {
         diaryCount: 12, diaryFirst: '2026-10-02', diaryLast: '2026-11-12',
-        rotatedWhen: '昨天 22:20', lastWords: '我先去睡了，明天再说。',
+        rotatedWhen: '昨天 22:20',
       },
     },
   },

@@ -51,6 +51,9 @@ test('appendNote：写的是 user/message，带 surfaceOp，id 有前缀', () =>
   assert.equal(ev.opts.surfaceOp, 'append')
   assert.equal(ev.data.role, 'user')
   assert.equal(ev.data.source.kind, 'user')
+  // issue #136：kind 必须保持 'user'（前端只把它画成用户气泡），来源另用
+  // 插件自己的标记认，turns.js 才分得清「不是他来过」。
+  assert.equal(ev.data.source.fish, 'note')
   assert.ok(String(ev.data.id).startsWith('fish-note-1700000000000-'))
   assert.ok(Array.isArray(ev.data.content))
   assert.match(ev.data.content[0].text, /这条对话还给你/)

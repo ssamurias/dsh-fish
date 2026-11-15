@@ -149,7 +149,7 @@ test('/config 白名单收下观测台提交的全部环境键（含 chat 与 me
       bili: { minIntervalMs: 900, jitterMs: 300 },
       notify: { enabled: false },
       chat: { rotateAfter: 30, carry: 6 },
-      memory: { docBudget: 1500 },
+      memory: { docBudget: 1900 },
       comment: { enabled: false, perDay: 1, replyPerDay: 2, replyToReplies: true, scanEveryMin: 30, window: ['20:00', '23:00'] },
     }
     const body = JSON.stringify(patch)
@@ -173,7 +173,7 @@ test('/config 白名单收下观测台提交的全部环境键（含 chat 与 me
     assert.deepEqual(payload.config.window, ['19:00', '22:00'])
     assert.equal(payload.config.chat.rotateAfter, 30)
     assert.equal(payload.config.chat.carry, 6, '换会话带几轮原话必须真的存进去')
-    assert.equal(payload.config.memory.docBudget, 1500)
+    assert.equal(payload.config.memory.docBudget, 1900)
     assert.equal(payload.config.bili.minIntervalMs, 900, '请求间隔必须真的存进去')
     assert.equal(payload.config.bili.jitterMs, 300, '请求抖动必须真的存进去')
   } finally {

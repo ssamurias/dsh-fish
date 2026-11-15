@@ -16,9 +16,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { pickHearSentence, hearTurn, rememberGroupWord, HEAR_SNIPPET, HEAR_MIN_CHARS } from '../lib/hear.js'
+import { pickHearSentence, pickHearStatus, hearTurn, rememberGroupWord, latestHeardId, HEAR_LINK_DAYS, HEAR_SNIPPET, HEAR_MIN_CHARS } from '../lib/hear.js'
 import { hearMark, bumpTurns } from '../lib/home.js'
-import { readEvents } from '../lib/store.js'
+import { readEvents, appendEvent } from '../lib/store.js'
 import { validateEvent, isContactEvent } from '../lib/schema.js'
 import { searchEvents, renderRecall, RECALL_LIMIT, RECALL_DAYS } from '../lib/recall.js'
 import { eventsSince } from '../lib/outing.js'
@@ -337,4 +337,130 @@ test('家里记下的那句也带会话 id：出门/请神算「这一趟多了�
     assert.equal(list.ok, true)
     assert.equal(list.items.some((x) => x.id === a.id), false, '家里那句不该被算进外头那一趟')
   })
+})
+
+// ---------------------------------------------------------------- 短状态句（2026-11-14，用户 m00242）
+
+test('旁听：两个字的状态句「好了」也记得下，接话「嗯」不进', () => {
+  assert.equal(pickHearStatus('好了'), '好了')
+  assert.equal(pickHearStatus('肚子不胀了。'), '肚子不胀了')
+  assert.equal(pickHearStatus('嗯'), '')
+  assert.equal(pickHearStatus('在吗'), '')
+  // 够长的句子走 pickHearSentence，不在这一支里重复处理
+  assert.equal(pickHearStatus('好的，我知道了谢谢你'), '')
+  // 一段里有好几句：交给 pickHearSentence 取最长那句，不从长段里抠碎片
+  assert.equal(pickHearStatus('好了。今天我在想一件事，想了很久'), '')
+})
+
+test('旁听：短状态句跳过「每几轮」的间隔，长句照旧（肚子胀 → 好了）', async () => {
+  await withRoot(async (root) => {
+    const cfg = { memory: { hearEvery: 3 } }
+    // 真实链路里 bumpTurns 先跑，home.json 一定存在
+    await bumpTurns(root, 1)
+    // 第 1 轮的长句：还不到 interval
+    assert.equal(
+      (await hearTurn(root, { text: '今天肚子有点胀，可能是吃多了', turns: 1, day: 3, stage: 1, config: cfg })).written,
+      false,
+    )
+    // 第 2 轮只有两个字：照样记
+    const ok = await hearTurn(root, { text: '好了', turns: 2, day: 3, stage: 1, config: cfg })
+    assert.equal(ok.written, true)
+    assert.equal(ok.text, '好了')
+    const { events } = await readEvents(root)
+    const heard = events.filter((e) => e.type === 'heard')
+    assert.equal(heard.length, 1)
+    assert.equal(heard[0].text, '好了')
+  })
+})
+
+test('旁听：hearEvery=0 时短状态句也不记（这个开关管全部）', async () => {
+  await withRoot(async (root) => {
+    const r = await hearTurn(root, { text: '好了', turns: 9, day: 3, stage: 1, config: { memory: { hearEvery: 0 } } })
+    assert.equal(r.written, false)
+    assert.equal(r.why, 'off')
+  })
+})
+
+// ---------------------------------------------------------------- 短句接回上一句（2026-11-14，用户 m00533）
+
+test('latestHeardId：只接家里最近的一条长话，群里、状态句、7 天前的都不接', () => {
+  const now = Date.now()
+  const ev = (id, text, ts, extra = {}) => ({ id, type: 'heard', text, ts, ...extra })
+  const events = [
+    ev('old', '上个月他说要去体检', at(30)),
+    ev('newer-dull', '嗯', at(1)),                        // 太短、没状态词，本来就不会被写成 heard
+    ev('group', '群里他说今晚加班', at(2), { scene: 'group' }),
+    ev('status', '好了', at(1)),                          // 状态句不接状态句，否则会串成一串
+    ev('long', '今天肚子有点胀，可能是吃多了', at(3)),
+  ]
+  assert.equal(latestHeardId(events, { now }), 'long')
+  assert.equal(latestHeardId([], { now }), '')
+  // 7 天以外的不算
+  assert.equal(latestHeardId([ev('old', '很久以前的一句话', at(HEAR_LINK_DAYS + 1))], { now }), '')
+})
+
+test('旁听：短状态句落库时带 re，指回上一句长话（换房间以后也接得上）', async () => {
+  await withRoot(async (root) => {
+    const cfg = { memory: { hearEvery: 3 } }
+    await bumpTurns(root, 3)
+    const first = await hearTurn(root, { text: '今天肚子有点胀，可能是吃多了', turns: 3, day: 3, stage: 1, config: cfg })
+    assert.equal(first.written, true)
+    // 另一个房间（sessionId 不同）里他回了一句「好了」
+    const second = await hearTurn(root, { text: '好了', turns: 4, day: 3, stage: 1, config: cfg, sessionId: 's-other-room' })
+    assert.equal(second.written, true)
+    const { events } = await readEvents(root)
+    const heard = events.filter((e) => e.type === 'heard')
+    assert.equal(heard.length, 2)
+    assert.equal(heard[1].text, '好了')
+    assert.equal(heard[1].re, heard[0].id, '要指回上一条 heard，读的人才知道「好了」说的是哪件事')
+  })
+})
+
+test('回忆：被接上的那句会带一句「他后来接着说」，brief 档不展开', async () => {
+  await withRoot(async (root) => {
+    const a = await appendEvent({ type: 'heard', text: '今天肚子有点胀，可能是吃多了' }, { day: 3, stage: 1, source: 'system' }, root)
+    await appendEvent({ type: 'heard', text: '好了', re: a.id }, { day: 3, stage: 1, source: 'system' }, root)
+    const { events } = await readEvents(root)
+
+    const { rows } = searchEvents(events, '肚子')
+    const row = rows.find((r) => r.text.includes('肚子'))
+    assert.ok(row?.patched, '被后一句接上的那条要带上后来的说法')
+    assert.equal(row.patched.text, '好了')
+    const out = renderRecall([row], {})
+    assert.match(out, /后来接着说/)
+    assert.match(out, /好了/)
+
+    // 反过来翻「好了」，要能看见它接的是哪一句
+    const back = searchEvents(events, '好了').rows.find((r) => r.text === '好了')
+    assert.ok(back?.reTo)
+    assert.match(renderRecall([back], {}), /接的是/)
+
+    // brief 只报开头，不铺这些关系行
+    assert.doesNotMatch(renderRecall([row], { brief: true }), /后来接着说/)
+  })
+})
+
+// ---------------------------------------------------------------- 本子上的便条与约定（2026-11-14）
+
+test('回忆：便条和约定也翻得到，划掉的会说明「后来你自己划掉了」', async () => {
+  const { searchOps } = await import('../lib/recall.js')
+  const now = Date.now()
+  const iso = (d) => new Date(now - d * DAY).toISOString()
+  const notes = [
+    { id: 'n1', text: '买猫粮', status: 'done', created: iso(5), closedAt: iso(1) },
+    { id: 'n2', text: '写周报', status: 'open', created: iso(2) },
+  ]
+  const appointments = [{ id: 'a1', due: '2026-11-20', what: '带猫复查', status: 'done', closedAt: iso(2) }]
+  assert.match(searchOps({ notes, appointments }, '猫粮')[0], /后来你自己划掉了/)
+  assert.match(searchOps({ notes, appointments }, '周报')[0], /还没划掉/)
+  assert.match(searchOps({ notes, appointments }, '复查')[0], /已经做完了/)
+  // 时间窗：只翻最近 1 天的，那条 2 天前做完的约定就翻不到
+  assert.equal(searchOps({ notes, appointments }, '复查', { now, days: 1 }).length, 0)
+})
+
+test('回忆：事件流翻不到但本子上记着时，不要回「没翻到」', () => {
+  const out = renderRecall([], { ops: ['你记着「买猫粮」——后来你自己划掉了（11 月 13 日）'] })
+  assert.notEqual(out, '你翻了，没翻到。')
+  assert.match(out, /不过你自己的本子上记着/)
+  assert.match(out, /买猫粮/)
 })

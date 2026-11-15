@@ -31,6 +31,7 @@ import { homeStatus } from '../lib/home.js'
 import { appendEvent, readEvents, writeAtomic, paths } from '../lib/store.js'
 import { recentExchanges } from '../lib/talkmem.js'
 import { saveChannel } from '../lib/channels.js'
+import { setWakeSection, getWakeSection, clearWakeSection } from '../lib/identity.js'
 import { deriveSelf } from '../lib/derive.js'
 
 const HER_SESSION = 's-her'
@@ -181,8 +182,12 @@ test('来源判据：真人 / 插件 / 上下文 / 外渠道 分得清', () => {
   // 带 rpcId 的 user 消息就是「有人代他递话」——微信桥、别的桥都算。
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'uuid-2' } }), 'human')
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'wechat-1234' } }), 'human')
-  // 真正认不出来源的只剩没 rpcId 的 append（fish 自己的交接句/便条）
+  // 真正认不出来源的只剩没 rpcId 的 append（possess.js 的交接句）
   assert.equal(classifyMessage({ source: { kind: 'user' } }), 'unknown')
+  // 2026-11-14（issue #136）：便条（sessionnote.js 的 appendNote）必须保留
+  // kind:'user'，前端才画成用户气泡；来源靠 `fish:'note'` 认。它是插件投进去的
+  // 话术，不是他来找过她——归 plugin，不涨轮数、不写 seen。
+  assert.equal(classifyMessage({ source: { kind: 'user', fish: 'note' } }), 'plugin')
   // observe.js 的出门首轮也走 prompt，漏在名单外会掉进 unknown
   assert.equal(classifyMessage({ source: { kind: 'user', rpcId: 'outing-s-her-1700000000000' } }), 'plugin')
 
@@ -1145,6 +1150,37 @@ test('认不出来源：同一个 kind 连着丢十条，日志也只留一行',
   }
 })
 
+test('便条卡片（kind user + fish:note）：不算他来过，也不打「认不出来源」', async () => {
+  const root = await tmpRoot()
+  const lines = []
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: (...a) => lines.push(a.join(' ')) })
+    try {
+      ctx.emit('session/event', session(), {
+        type: 'user/message',
+        data: {
+          id: 'fish-note-1700000000000-abc123',
+          role: 'user',
+          content: [{ type: 'text', text: '（大肥鱼回去了，这条对话还给你。）' }],
+          source: { kind: 'user', fish: 'note' },
+        },
+      })
+      await settled()
+
+      // 2026-11-14（issue #136）：便条已经认得出来，不该再走 unknown 那条日志。
+      assert.equal(lines.filter((l) => l.includes('认不出来源')).length, 0)
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 0, '便条是插件投的，不算他来找过她')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
 test('别的插件往自己的会话里塞 prompt：不算他来过（2026-11-13 用户报）', async () => {
   const root = await tmpRoot()
   const lines = []
@@ -1277,9 +1313,10 @@ test('换会话之后要叫醒新会话，不然人看不见它（issue #14 第�
         return raw.wokeFor === 's-new-1' ? raw : null
       })
       assert.equal(saved.wokeFor, 's-new-1')
-      // 0.8.9 起轮换时还会发一条 `carry-ask-`（问她留不留一句话给下一个房间），
-      // 那条不是叫醒。叫醒只认别的。
-      const wakes = prompted.filter((p) => !String(p.requestId ?? '').startsWith('carry-'))
+      // 2026-11-15（用户 m02909）：`carry-ask-`（问她留不留一句话给下一个房间）
+      // 已经删了。换房之后只该发出这一条叫醒。
+      assert.equal(prompted.length, 1, '换房只发叫醒这一条')
+      const wakes = prompted
       assert.equal(wakes.length, 1, '只该叫一声')
       assert.equal(wakes[0].sessionId, 's-new-1')
       assert.equal(wakes[0].mode, 'queue')
@@ -1597,8 +1634,14 @@ test('rotatedTo 那条隔多久说话都认，carry 也留着', async () => {
       })
       assert.equal(h.sessionId, 's-new-1')
       assert.equal(h.turns, 6)
-      const raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
-      assert.match(String(raw.carry ?? ''), /还没说完的话/, 'carry 是给这间新房间准备的，不能丢')
+      // 交接页只在这一轮出现一次（用户 m01722）：他在这间新房间里说的第一轮结完，
+      // 那页就该撤掉，不能一直挂在 system prompt 里。
+      const gone = await waitFor(async () => {
+        const raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+        return 'carry' in raw ? null : raw
+      })
+      assert.equal(gone.carry, undefined, '第一轮结完，交接页要撤')
+      assert.equal(gone.sessionId, 's-new-1')
     } finally {
       off()
     }
@@ -2097,6 +2140,112 @@ test('「继续」那一轮里他又开口：算新的一轮，照常结账', as
       assert.equal((await utterances(root)).length, 1)
     } finally {
       off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 2026-11-14（外部报告：整轮只有思考、没有正文，日志里一个字都没有）
+// 真机证据：assistant/message 只有 reasoning 块，turn 正常结束，用户看到的是「她没回话」。
+// 根因在模型/宿主那一侧（插件对 assistant 输出只读，也删不了 text 块），改不了；
+// 但「什么都没留」是自己的缺口。这一组钉的是留痕，不是行为：轮次照结、her 照旧为空，
+// 只多一行日志，让下一次同类报告有据可查。
+test('整轮只有思考没有正文：留一行日志，轮次照结、her 为空', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const logs = []
+    const off = registerTurns(ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+    try {
+      ctx.emit('session/event', session(), humanMsg('嗯'))
+      await waitFor(async () => (await seenCount(root)) === 1)
+      ctx.emit(
+        'session/event',
+        session(),
+        herMsg([{ type: 'reasoning', text: '他就说了个「嗯」。别多说，写一句就好。' }], {
+          usage: { inputTokens: 243, outputTokens: 136 },
+        }),
+      )
+      ctx.emit('session/event', session(), TURN_END)
+      await waitTurns(root, 1)
+
+      assert.ok(
+        logs.some((l) => l.includes('只有思考没有正文') && l.includes('136')),
+        `这一步要留痕（日志：${logs.join(' | ') || '空'}）`,
+      )
+      assert.deepEqual(
+        (await recentExchanges(root)).map((r) => [r.me, r.her]),
+        [['嗯', '']],
+        '没写正文也照旧记这一轮（her 为空是既有口径）',
+      )
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('正常说了话的一轮：不打「只有思考没有正文」那行', async () => {
+  const root = await tmpRoot()
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const logs = []
+    const off = registerTurns(ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+    try {
+      ctx.emit('session/event', session(), humanMsg('嗯'))
+      await waitFor(async () => (await seenCount(root)) === 1)
+      ctx.emit(
+        'session/event',
+        session(),
+        herMsg([
+          { type: 'reasoning', text: '想想他这句是什么意思。' },
+          { type: 'text', text: '嗯，我在。' },
+        ]),
+      )
+      ctx.emit('session/event', session(), TURN_END)
+      await waitTurns(root, 1)
+
+      assert.equal(
+        logs.filter((l) => l.includes('只有思考没有正文')).length,
+        0,
+        `正常轮次不该刷这行（日志：${logs.join(' | ') || '空'}）`,
+      )
+      assert.deepEqual(
+        (await recentExchanges(root)).map((r) => [r.me, r.her]),
+        [['嗯', '嗯，我在。']],
+      )
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 2026-11-06 那个「叫醒处境串进下一轮」的老毛病，现在撤得掉，但撤的时候不留痕：
+// 下一次再收到「只思考不说话」的报告，光看日志分不出是不是它。开口时留一行。
+test('他一开口撤掉叫醒处境时留一行（下一次同类报告能对上）', async () => {
+  const root = await tmpRoot()
+  try {
+    clearWakeSection()
+    setWakeSection('这一轮是你自己的，不用回应任何人；不想说就什么都别写。', HER_SESSION)
+    const { ctx } = fakeCtx()
+    const logs = []
+    const off = registerTurns(ctx, { root, log: (...a) => logs.push(a.join(' ')) })
+    try {
+      ctx.emit('session/event', session(), humanMsg('在吗'))
+      await waitFor(() => getWakeSection(HER_SESSION) === '')
+      assert.ok(
+        logs.some((l) => l.includes('处境被撤掉')),
+        `撤掉要留一行（日志：${logs.join(' | ') || '空'}）`,
+      )
+    } finally {
+      off()
+      clearWakeSection()
     }
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })

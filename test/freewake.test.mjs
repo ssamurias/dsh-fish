@@ -159,3 +159,10 @@ test('quietDays：想改自己也是她自己动过，selfmod 照算', () => {
   assert.equal(Math.round(quietDays(events, NOW)), 2)
   assert.equal(freeWakeFor({ events, dk: '2026-11-05', now: NOW }), null)
 })
+
+test('空醒不要材料：桌上什么都没有也照旧空（用户 m01075 回退 m00829 的收紧）', () => {
+  const events = [old(QUIET_DAYS + 1)]
+  assert.equal(freeWakeFor({ events, dk: '2026-11-05', now: NOW }).kind, 'think')
+  // 摆料优先：有材料时仍是 table。
+  assert.equal(freeWakeFor({ tableText: '一句旧的', events, dk: '2026-11-05', now: NOW }).kind, 'table')
+})

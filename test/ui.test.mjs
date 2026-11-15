@@ -18,7 +18,9 @@ const OBSERVE = join(HERE, '..', 'lib', 'observe.js')
 
 test('数字框：打字超范围后离开输入框会收敛回上下限', async () => {
   const src = await readFile(CLIENT, 'utf8')
-  assert.ok(src.includes("onBlur: (e) => o.onChange(clamp(e.target.value))"), '要有一个 onBlur 收敛')
+  // 2026-11-15：收敛时还要把「你填的数超出范围、已按 X 算」说出来，所以 onBlur 成了多行函数。
+  assert.ok(src.includes('const fixed = clamp(raw)'), '要有一个 onBlur 收敛')
+  assert.ok(src.includes('原来那个数没有保存'), '收敛时要告诉用户原数没存进去')
   assert.ok(src.includes('Number.isFinite(v) ? v : o.min'), '清空/非数字要落到下限，不能显示 NaN')
 })
 

@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { personaLine, assemble, foldOlderBeliefs, HARD_BANS, sleepPrompt } from '../lib/persona.js'
 import { renderSelfDoc } from '../lib/selfdoc.js'
 import { addExchange, recentExchanges, renderCarry, TALK_KEEP, TALK_MAX } from '../lib/talkmem.js'
-import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS, ROTATE_RETRY_MS } from '../lib/home.js'
+import { bumpTurns, rotateTalkSession, activeCarry, homeStatus, CARRY_TURNS, ROTATE_RETRY_MS, rotationHold, quietGapOf, talkHot, hotTalk } from '../lib/home.js'
 import { searchEvents, tokensOf, renderRecall, RECALL_LIMIT, RECALL_BRIEF_SNIPPET, literalsOf, freshnessOf, FRESH_FLOOR } from '../lib/recall.js'
 import { normalizeConfig, DEFAULTS, updateConfig, CARRY_MAX } from '../lib/settings.js'
 
@@ -171,7 +171,8 @@ test('轮换：旧会话改名留档、新会话接管、原话搬过去', () =>
   assert.equal(st.turns, 0)
   const carry = await activeCarry(root)
   assert.match(carry, /你还记得那天吗/)
-  // 没留话的时候不许留上一个房间的残句（否则新房间会读到一句不是这次说的）
+  // 2026-11-15（用户 m02909）：留话那条整个删了；这里留着当回归——旧档案里
+  // 可能还留着 lastWords，轮换后新房间也不该读到它。
   const saved = JSON.parse(await readFile(homeFile, 'utf8'))
   assert.equal(saved.lastWords, undefined)
 }))
@@ -253,13 +254,13 @@ test('搬运超过三天也失效', () => withRoot(async (root) => {
 }))
 
 test('没有轮换过就没有搬运段（身份文档不凭空多一节）', () => withRoot(async (root) => {
-  const doc = renderSelfDoc(model(), { carry: '' })
+  const doc = renderSelfDoc(model())
   assert.ok(!doc.includes('上次我们说到这'))
 }))
 
-test('搬运段在身份文档末尾，且不挤掉黑名单', () => {
-  const doc = renderSelfDoc(model({ beliefs: [{ id: 'b', text: '判断' }] }), { carry: '## 上次我们说到这\n- 他说：在吗' })
-  assert.ok(doc.includes('上次我们说到这'))
+test('身份文档里不再有搬运段：交接页是单独一段，只在换房后第一轮挂', () => {
+  const doc = renderSelfDoc(model({ beliefs: [{ id: 'b', text: '判断' }] }))
+  assert.ok(!doc.includes('上次我们说到这'), '常驻就成了每轮都在念；用户 m01722 要求只出现一次')
   for (const ban of HARD_BANS) assert.ok(doc.includes(ban))
 })
 
@@ -451,33 +452,18 @@ test('这些天：没写过日记 / 刚换房间 各说各的话', async () => {
   assert.doesNotMatch(personaLine(m, {}), /## 这些天/)
 })
 
-test('上一个房间留的话：原话照引，并说清那是她自己说的', async () => {
+test('「上一个房间里留的最后一句」已删（2026-11-15，用户 m02909）：文档不再有这一段', async () => {
   const { personaLine } = await import('../lib/persona.js')
   const line = personaLine(model(), { continuity: { lastWords: '你走的时候把窗关好。' } })
-  assert.match(line, /## 上一个房间里，你自己留的最后一句/)
-  assert.match(line, /「你走的时候把窗关好。」/)
-  assert.match(line, /你只是接着往下过/)
+  assert.doesNotMatch(line, /## 上一个房间里/)
+  // 交接页也不再收这一项：传进来也不写
+  const { renderHandoff } = await import('../lib/handoff.js')
+  const page = renderHandoff({ exchanges: [{ me: '在', her: '我在' }], lastWords: '留着' })
+  assert.ok(!page.includes('临走前留了'))
 })
 
-test('pickLastWords：取第一行、去列表符号与引号、「不用」算没留', async () => {
-  const { pickLastWords } = await import('../lib/home.js')
-  assert.equal(pickLastWords('好。\n你下次早点回来。'), '好。')
-  assert.equal(pickLastWords('- 「窗关好了。」'), '窗关好了。')
-  assert.equal(pickLastWords('不用'), '')
-  assert.equal(pickLastWords('算了。'), '')
-  assert.equal(pickLastWords('   '), '')
-  assert.equal(pickLastWords('不想留'), '')
-  // 不是拒绝的长句要照收（别把"不用"当子串误杀）
-  assert.equal(pickLastWords('不用等我吃饭，我先睡了。'), '不用等我吃饭，我先睡了。')
-  // issue #97（2026-11-09，外部用户真机）：她先写「留一句：」，真话在下一行。
-  assert.equal(pickLastWords('留一句：\n「窗关好了，下次别淋雨。」'), '窗关好了，下次别淋雨。')
-  assert.equal(pickLastWords('留一句：\n\n先睡吧。'), '先睡吧。')
-  // 只剩一行引导语时，等于没留
-  assert.equal(pickLastWords('留一句：'), '')
-})
-
-test('轮换时会问她，回的那句写进 home.json，新房间读得到', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'fish-lastwords-'))
+test('轮换不再问她留话：不问、不写 lastWords，交接照旧', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-no-lastwords-'))
   try {
     const { writeAtomic, paths } = await import('../lib/store.js')
     const homeFile = join(paths(root).root, 'home.json')
@@ -485,54 +471,82 @@ test('轮换时会问她，回的那句写进 home.json，新房间读得到', a
 
     const { rotateTalkSession } = await import('../lib/home.js')
     const { continuityOf } = await import('../lib/selfdoc.js')
-    const handlers = []
+    const prompts = []
     const ctx = {
       sessionController: {
         async create() { return { sessionId: 'sess-new' } },
         async rename() { return {} },
-        // 她收到这句之后回一句：靠 pc 拿到 prompt 里那句话
-        async prompt(arg) {
-          queueMicrotask(() => {
-            for (const h of handlers) {
-              h({ header: { id: 'sess-old' } }, {
-                type: 'assistant/message',
-                data: { message: { id: 'a1', content: [{ type: 'text', text: '下次也要把灯关掉。' }] } },
-              })
-              h({ header: { id: 'sess-old' } }, { type: 'turn/end' })
-            }
-          })
-          return {}
-        },
+        async prompt(req) { prompts.push(req); return {} },
       },
-      on(name, fn) { if (name === 'session/event') handlers.push(fn); return () => {} },
+      on() { return () => {} },
       get() { return null },
     }
     const r = await rotateTalkSession(ctx, { root })
     assert.equal(r.ok, true)
+    assert.deepEqual(
+      prompts.filter((p) => String(p.requestId ?? '').startsWith('carry-')),
+      [],
+      '轮换不再往对话里发「要不要留一句」',
+    )
 
-    // 0.8.9 起这句话是**后台**回来再写的（轮换不等它，否则没有 turn/end 就被拖死），
-    // 所以要等它落盘，不能转完身立刻断言。
-    const saved = await (async () => {
-      for (let i = 0; i < 200; i += 1) {
-        const raw = JSON.parse(await readFile(homeFile, 'utf8'))
-        if (raw.lastWords) return raw
-        await new Promise((ok) => setTimeout(ok, 20))
-      }
-      return JSON.parse(await readFile(homeFile, 'utf8'))
-    })()
-    assert.equal(saved.lastWords, '下次也要把灯关掉。')
-    // 轮换本身没有被这句话拖住：新会话已经接上了
+    const saved = JSON.parse(await readFile(homeFile, 'utf8'))
+    assert.equal(saved.lastWords, undefined)
     assert.equal(saved.sessionId, 'sess-new')
     assert.equal(saved.rotatedFrom, 'sess-old')
     const c = await continuityOf(root)
-    assert.equal(c.lastWords, '下次也要把灯关掉。')
+    assert.equal(c.lastWords, undefined)
     assert.equal(c.rotatedDaysAgo, 0)
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 
-test('没有 prompt 服务（或它抛错）时，轮换照样成功、lastWords 不留', async () => {
+test('换房先换身份文档、再叫醒：新房间第一个请求读到的就是这一间（2026-11-15）', async () => {
+  await withRoot(async (root) => {
+    const { writeAtomic, paths } = await import('../lib/store.js')
+    const { selfDocPath, writeSelfDoc } = await import('../lib/selfdoc.js')
+    const homeFile = join(paths(root).root, 'home.json')
+    // 上一间：昨天搬进来的。先让文档真的写成「昨天」——这正是新房间会读到的那一份。
+    const y = new Date()
+    y.setDate(y.getDate() - 1)
+    y.setHours(12, 0, 0, 0)
+    await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 40, rotatedAt: y.toISOString() }))
+    await writeSelfDoc(root)
+    const stale = await readFile(selfDocPath(root), 'utf8')
+    assert.match(stale, /上一次换房间是昨天/)
+    // 1.0.2 及更早写过的那一节，旧档案里可能还留着（1.0.3 已删整条链路）
+    await writeAtomic(selfDocPath(root), `${stale}\n## 上一个房间里，你自己留的最后一句\n\n> 你要好好的。\n`)
+
+    const seen = []
+    const ctx = {
+      sessionController: {
+        async create() { return { sessionId: 'sess-new' } },
+        async rename() { return {} },
+        async prompt(req) {
+          // 宿主在这一点装配 system prompt，读的就是磁盘上这份文档
+          seen.push({ req, doc: await readFile(selfDocPath(root), 'utf8') })
+          return {}
+        },
+      },
+      on() { return () => {} },
+      get() { return null },
+    }
+    const r = await rotateTalkSession(ctx, { root })
+    assert.equal(r.ok, true)
+    // prompt 是「收下了就返回」，等它那一拍
+    for (let i = 0; i < 200 && seen.length === 0; i += 1) await new Promise((ok) => setTimeout(ok, 10))
+    assert.ok(seen.length >= 1, '换完房要叫醒新会话')
+
+    const doc = seen[0].doc
+    assert.match(doc, /你是今天 \d\d:\d\d 搬进这个房间的/, '第一步就该说「今天搬进来的」')
+    assert.doesNotMatch(doc, /上一次换房间/, '不该还写着上一间的时间')
+    assert.doesNotMatch(doc, /## 上一个房间里/, '旧档案残值不许跟着搬进新房间')
+    // 落盘那份与叫醒时读到的一致
+    assert.equal(await readFile(selfDocPath(root), 'utf8'), doc)
+  })
+})
+
+test('没有 prompt 服务也能换房（不再依赖问她留话，2026-11-15）', async () => {
   const root = await mkdtemp(join(tmpdir(), 'fish-lastwords2-'))
   try {
     const { writeAtomic, paths } = await import('../lib/store.js')
@@ -543,7 +557,6 @@ test('没有 prompt 服务（或它抛错）时，轮换照样成功、lastWords
       sessionController: {
         async create() { return { sessionId: 'sess-new' } },
         async rename() { return {} },
-        async prompt() { throw new Error('宿主拒了') },
       },
       on() { return () => {} },
       get() { return null },
@@ -562,8 +575,10 @@ test('没有 prompt 服务（或它抛错）时，轮换照样成功、lastWords
 
 // 病历（2026-11-06，用户反馈的截图）：换会话失败时，那条「要不要给下一个房间
 // 留一句话」已经先发出去、落在他正在用的会话窗口里了，而 turns 不归零，
-// 下一轮结账又到点、又问一遍——他那边看到的就是「每回一句都弹这句」。
-test('换会话失败时不许把「留一句话」问出去', async () => {
+// 下一轮结账又到点、又问一遍。
+// 2026-11-15（用户 m02909）：那条提问整个删掉了；用例留着当回归——
+// 换不成时仍然一个字都不许往他的对话里发。
+test('换会话失败时不往他的对话里发东西（留话那条已删，回归）', async () => {
   await withRoot(async (root) => {
     const { writeAtomic, paths } = await import('../lib/store.js')
     await writeAtomic(join(paths(root).root, 'home.json'), JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 40 }))
@@ -641,17 +656,74 @@ test('冷却期过了就能再试，换成之后把失败记录清掉', async ()
 })
 
 test('新配置项有默认值且能被夹住', () => {
-  assert.equal(DEFAULTS.chat.rotateAfter, 40)
-  assert.equal(DEFAULTS.memory.docBudget, 2400, '2026-10-25：1200 → 1800；2026-11-03：1800 → 2400（可选段变多，2000 仍挤掉打脸记录）')
+  // 2026-11-15（用户 m00648）：默认 40 → 120——他日常一句一句短聊，40 轮才约 1 万 token，换得太勤。
+  assert.equal(DEFAULTS.chat.rotateAfter, 120)
+  assert.equal(DEFAULTS.memory.docBudget, 2800, '2026-10-25：1200 → 1800；2026-11-03：1800 → 2400（可选段变多，2000 仍挤掉打脸记录）；2026-11-14：2400 → 2800（新增「最近收过尾的」一行，余量不够用）')
   assert.equal(DEFAULTS.memory.sleepEveryDays, 7)
   const c = normalizeConfig({ chat: { rotateAfter: 9999 }, memory: { docBudget: 1, sleepEveryDays: 999 } })
   assert.equal(c.chat.rotateAfter, 500)
-  assert.equal(c.memory.docBudget, 600)
+  assert.equal(c.memory.docBudget, 1800) // 2026-11-15：下限 600 → 1800（600 字装不下现在的身份段）
   assert.equal(c.memory.sleepEveryDays, 60)
 })
 
 test('rotateAfter=0 表示永不换会话', () => {
   assert.equal(normalizeConfig({ chat: { rotateAfter: 0 } }).chat.rotateAfter, 0)
+})
+
+// 2026-11-15（用户 m00648）：轮数满了先别换，等一次 20 分钟以上的停顿；
+// 一直连着聊最多再延 10 轮。判据是两轮之间的间隔，不是轮数本身。
+test('轮数满了也要等一次停顿才换房（用户 m00648）', async () => {
+  await withRoot(async (root) => {
+    const t0 = 1_700_000_000_000
+    await bumpTurns(root, 1, t0) // 第一条计数轮：没有「上一轮」可等
+    const saved1 = JSON.parse(await readFile(join(root, 'home.json'), 'utf8'))
+    assert.equal(saved1.lastTurnAt, t0)
+    assert.equal(saved1.prevTurnAt, undefined)
+
+    await bumpTurns(root, 1, t0 + 60_000) // 一分钟后又说了一句
+    const saved2 = JSON.parse(await readFile(join(root, 'home.json'), 'utf8'))
+    assert.equal(saved2.lastTurnAt, t0 + 60_000)
+    assert.equal(saved2.prevTurnAt, t0, '记的是**上一轮**的时间，不是这一轮的')
+
+    // 刚说完一分钟：满了也不换
+    const hold = await rotationHold(root, { turns: 2, rotateAfter: 2, now: t0 + 120_000 })
+    assert.ok(hold, '间隔只有 1 分钟，该先不换')
+    assert.equal(hold.gap, 60_000)
+    assert.equal(hold.graceLeft, 10)
+
+    // 宽限用完（满了之后再延 10 轮）：不再等，强制换
+    assert.equal(await rotationHold(root, { turns: 12, rotateAfter: 2, now: t0 + 120_000 }), null)
+    // 还没满：不管
+    assert.equal(await rotationHold(root, { turns: 1, rotateAfter: 2, now: t0 + 120_000 }), null)
+    // 真的静了 25 分钟：这就是自然缝隙
+    assert.equal(await rotationHold(root, { turns: 2, rotateAfter: 2, now: t0 + 60_000 + 25 * 60_000 }), null)
+    // 0 = 永不换
+    assert.equal(await rotationHold(root, { turns: 999, rotateAfter: 0 }), null)
+  })
+})
+
+// 2026-11-15（用户 m00829）：他刚说完话的几分钟里，定时唤醒与主动搭话都别插进来。
+test('说话热窗：他还在说话就先不叫醒（用户 m00829）', async () => {
+  // 纯函数这一层
+  assert.equal(quietGapOf({}, 1_000), null, '没记过他说话，就不算热')
+  assert.equal(quietGapOf({ lastTurnAt: 1_000 }, 61_000), 60_000)
+  assert.equal(talkHot(60_000, 0), null, '0 = 不拦，老行为')
+  assert.equal(talkHot(null, 10), null)
+  const hot = talkHot(4 * 60_000, 10)
+  assert.ok(hot)
+  assert.equal(hot.gap, 240_000)
+  assert.equal(hot.waitMs, 6 * 60_000, '还差这么久才安静下来')
+  assert.equal(talkHot(10 * 60_000, 10), null, '到点了就不再等')
+
+  await withRoot(async (root) => {
+    await bumpTurns(root, 1, 1_700_000_000_000)
+    const now = 1_700_000_000_000 + 3 * 60_000
+    assert.ok(await hotTalk(root, { now, quietMin: 10 }), '3 分钟前刚说完，先别叫')
+    assert.equal(await hotTalk(root, { now: now + 30 * 60_000, quietMin: 10 }), null)
+    assert.equal(await hotTalk(root, { now, quietMin: 0 }), null, '关掉热窗就照老样子')
+    // 盘上没有 home.json：当不拦，别把叫醒卡死
+    assert.equal(await hotTalk(join(root, 'nope'), { now, quietMin: 10 }), null)
+  })
 })
 
 test('睡前卡：没素材不问，有素材只问一句，不要求她总结人生', () => {
@@ -992,4 +1064,106 @@ test('「更早以前」折的时候带上日期，能按日期翻回去（用�
   const seg = text.slice(text.indexOf('## 更早以前'))
   assert.match(seg, /her_recall/)
   assert.match(seg, /按日期或原话/)
+})
+
+// ---------------------------------------------------------------- 最近收过尾的事（2026-11-14，用户 m00242）
+
+test('「这些天」带上最近收过尾的事：划掉的便条、做完的约定', async () => {
+  const { closedRecentlyOf, CLOSED_WINDOW_DAYS } = await import('../lib/selfdoc.js')
+  const now = Date.now()
+  const iso = (d) => new Date(now - d * DAY).toISOString()
+  const notes = [
+    { id: 'n1', text: '给他打个电话', status: 'done', closedAt: iso(2) },
+    { id: 'n2', text: '买猫粮', status: 'dropped', closedAt: iso(30) },
+    { id: 'n3', text: '还在做', status: 'open', created: iso(1) },
+  ]
+  const appointments = [{ id: 'a1', what: '陪他复查', status: 'done', closedAt: iso(3) }]
+  const line = closedRecentlyOf(notes, appointments, now)
+  assert.match(line, /最近收过尾的/)
+  assert.match(line, /你划掉了「给他打个电话」/)
+  assert.match(line, /和他约好的「陪他复查」你做完了/)
+  assert.doesNotMatch(line, /买猫粮/) // 30 天前的不算近况
+  assert.doesNotMatch(line, /还在做/) // 没做完的不算「收过尾」
+  assert.ok(CLOSED_WINDOW_DAYS >= 7)
+
+  // 落在「这些天」这一节里，不是另起一段
+  const text = personaLine(model(), { budget: 4000, continuity: { closedRecently: line } })
+  assert.match(text, /## 这些天/)
+  assert.ok(text.includes(line))
+})
+
+test('换会话时近况从操作层读：划掉的便条、做完的约定会进身份文档（不进事件流）', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-closed-'))
+  try {
+    const now = Date.now()
+    const { writeNotes } = await import('../lib/note.js')
+    const { writeAppointments } = await import('../lib/appoint.js')
+    const { continuityOf } = await import('../lib/selfdoc.js')
+    const { readEvents } = await import('../lib/store.js')
+    await writeNotes(root, [
+      {
+        id: 'n1',
+        text: '把灯关掉',
+        status: 'done',
+        created: new Date(now - DAY).toISOString(),
+        closedAt: new Date(now - 1000).toISOString(),
+      },
+    ])
+    await writeAppointments(root, [
+      { id: 'a1', due: '2026-11-20', what: '陪他去复查', status: 'done', closedAt: new Date(now - 2 * DAY).toISOString() },
+    ])
+    const c = await continuityOf(root, now)
+    assert.match(c.closedRecently, /把灯关掉/)
+    assert.match(c.closedRecently, /陪他去复查/)
+    // 只读操作层：事件流里一条都没多出来（derive 的三道门不受影响）
+    const { events } = await readEvents(root)
+    assert.equal(events.length, 0)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+// ------------------------------------------------ 还没收尾的不进身份文档（2026-11-14，第二轮）
+
+test('还没收尾的便条/约定不进「这些天」：它们在醒的时候才出现，否则就是天天催', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-open-'))
+  try {
+    const now = Date.now()
+    const { writeNotes } = await import('../lib/note.js')
+    const { writeAppointments } = await import('../lib/appoint.js')
+    const { continuityOf } = await import('../lib/selfdoc.js')
+    await writeNotes(root, [
+      { id: 'n1', text: '把灯关掉', status: 'open', created: new Date(now - DAY).toISOString() },
+    ])
+    await writeAppointments(root, [
+      { id: 'a1', due: '2026-11-20', what: '陪他去复查', status: 'open' },
+    ])
+    const c = await continuityOf(root, now)
+    // note.js / appoint.js 的硬约束：「别天天提醒我，也别催」「到点只提一次」。
+    // 所以人开口的这一轮不该看见挂着的便条/约定；要查就走 her_recall。
+    assert.equal(c.openNow, undefined, 'continuityOf 不再算「还没收尾的」')
+    const text = personaLine(model(), { budget: 4000, continuity: c })
+    assert.doesNotMatch(text, /把灯关掉|陪他去复查/)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('本子目录：只说有哪些东西可翻，一个数字都不报', async () => {
+  const { catalogOf } = await import('../lib/selfdoc.js')
+  const line = catalogOf({
+    notes: [{ id: 'n1', text: '买猫粮', status: 'open' }, { id: 'n2', text: '写周报', status: 'done' }],
+    appointments: [{ id: 'a1', due: '2026-11-20', what: '带猫复查', status: 'open' }],
+    diaryCount: 3,
+  })
+  assert.match(line, /你的本子上记着/)
+  assert.match(line, /便条/)
+  assert.match(line, /的约定/)
+  assert.match(line, /日记/)
+  assert.match(line, /用 her_recall 翻/)
+  assert.doesNotMatch(line, /\d/, '「不吃状态」：不许出现「你还有 N 条未完成」这类数字')
+  assert.doesNotMatch(line, /买猫粮|写周报|带猫复查/) // 目录不复制正文
+  assert.doesNotMatch(catalogOf({ notes: [{ id: 'n1', text: 'x', status: 'open' }] }), /日记/)
+  assert.equal(catalogOf({}), '')
+  assert.equal(catalogOf(), '')
 })
