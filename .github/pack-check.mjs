@@ -36,11 +36,13 @@ const REQUIRED = [
   'media/',
   'scripts/',
   'tools/',
+  // 1.0.2 起文档随包发出：README 里教人打开 docs/，装到本机的人就得真有这几篇。
+  'docs/',
 ];
 
-// 包里不该有的：测试、仓库文档、维护者自己的东西。
-// （docs/ 里是 GitHub 上读的说明，README 用绝对地址链过去，不必进包。）
-const FORBIDDEN = ['test/', 'docs/', '.github/', 'SECURITY.md', 'CONTRIBUTING.md', 'RELEASE.md'];
+// 包里不该有的：测试、仓库维护者的东西。
+// （docs/ 从 1.0.2 起进包，理由见上；README 仍然用 GitHub 绝对地址，npm 页面上也能点。）
+const FORBIDDEN = ['test/', '.github/', 'SECURITY.md', 'CONTRIBUTING.md', 'RELEASE.md'];
 
 const bad = [];
 for (const p of REQUIRED) if (!has(p)) bad.push('缺了 ' + p);
