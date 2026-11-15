@@ -16,7 +16,7 @@ import { mkdtemp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { grabFrames, sampleTimes, normalizeAt, watchBlocked } from '../lib/video.js'
+import { grabFrames, sampleTimes, normalizeAt, watchBlocked, headersFor } from '../lib/video.js'
 import { detectFfmpeg, mediaDir } from '../lib/media.js'
 
 const BVID = 'BV1ph4y1g75E'
@@ -208,24 +208,32 @@ test('源码守门：不给 ffmpeg 任何文件路径输出（issue #13 的核�
   }
 })
 
-test('源码守门：给了 CA 就必须同时开校验（光给 -ca_file 是空转）', async () => {
-  // 2026-10-30 实测：ffmpeg 默认 tls_verify=0，根本不校验证书。
-  // 只传 -ca_file 而不传 -tls_verify 1，CA 用不上——传一个**不存在**的 CA 文件
-  // 都照样出图，stderr 只有一句 `Error while reading file.`。
-  // 所以这两个参数必须成对出现，否则用户设了 DSH_FISH_CA_FILE 却没有校验效果。
+test('源码守门 / headersFor：不把登录 cookie 交给 ffmpeg（2026-11-16 外部安全报告）', async () => {
+  // ffmpeg 的 -headers 原样发给播放地址那个主机，跟随后续重定向也照带；
+  // 播放地址可能指向第三方 CDN，证书不校验时谁都能冒充。整串 cookie
+  // （SESSDATA 登录态 + bili_jct 写操作 token）不该出现在这里。
+  const h = headersFor('BV1ph4y1g75E')
+  assert.match(h, /^Referer: https:\/\/www\.bilibili\.com\/video\/BV1ph4y1g75E/)
+  assert.match(h, /User-Agent:/)
+  assert.doesNotMatch(h, /cookie/i, 'ffmpeg 的 -headers 绝不能带凭据')
+
+  const src = await readFile(new URL('../lib/video.js', import.meta.url), 'utf8')
+  assert.doesNotMatch(src, /headersFor\(bvid, cookie\)/, 'headersFor 不该再收 cookie 参数')
+  assert.doesNotMatch(src, /Cookie: \$\{cookie\}/, '不该再把整串 cookie 拼进请求头')
+})
+
+test('源码守门：证书校验默认就开，CA 只是追加项', async () => {
+  // 2026-11-16 起反过来：https 默认 `-tls_verify 1`。
+  // 以前是「给了 CA 才校验」，只传 -ca_file 不开校验时 CA 根本用不上
+  // （2026-10-30 实测：传一个不存在的 CA 文件也照样出图）。
   const src = await readFile(new URL('../lib/video.js', import.meta.url), 'utf8')
 
-  // 只数带引号的代码字面量，注释里提到的名字不算（否则注释写两遍就误报）
   const ca = (src.match(/'-ca_file'/g) ?? []).length
-  const verify = (src.match(/'-tls_verify'/g) ?? []).length
-  assert.equal(ca, 1, `-ca_file 只该出现一处（成对写好），实际 ${ca}`)
-  assert.equal(verify, ca, `-ca_file 与 -tls_verify 必须成对（ca=${ca}, verify=${verify}）`)
-
-  // 成对还不够，顺序也得对：同一行里 -tls_verify 1 在前、-ca_file 在后
+  assert.equal(ca, 1, `-ca_file 只该出现一处（紧随默认校验之后），实际 ${ca}`)
   assert.match(
     src,
-    /if \(caFile\) netArgs\.push\('-tls_verify', '1', '-ca_file', caFile\)/,
-    '给了 caFile 就该在同一处同时加 -tls_verify 1 和 -ca_file',
+    /if \(https\) \{\s*netArgs\.push\('-tls_verify', '1'\)\s*if \(caFile\) netArgs\.push\('-ca_file', caFile\)/,
+    'https 默认开校验；给了 caFile 再追加 -ca_file',
   )
 })
 
