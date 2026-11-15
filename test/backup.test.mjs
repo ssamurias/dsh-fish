@@ -231,6 +231,15 @@ test('界面与路由都接上了（别只写了个模块）', async () => {
   assert.match(o, /readBody\(req, restoreLimit, \{ mojibake: false \}\)/)
 })
 
+test('备份卡把「这两项也管云端」写在脸上（2026-11-16，用户 m00979）', async () => {
+  // 云端推的就是自动备份写出的那份文件，所以「仅核心」「不含附件」改完云端也跟着变。
+  // 开关名原先只写「自动备份」，读的人会以为云端另有一套——这三句掉一句就等于又说不清了。
+  const c = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(c, /自动备份与云端只保留核心数据/)
+  assert.match(c, /自动备份与云端不含媒体与桥接附件/)
+  assert.match(c, /这一段三个开关同时管两个地方/)
+})
+
 test('备份：事件流再大也要进包，别的超限文件才 skipped（issue #65）', async () => {
   const root = await mkdtemp(join(tmpdir(), 'fish-backup-big-'))
   try {
@@ -850,6 +859,63 @@ test('人选了跳过：坏文件不写回去，其余照常恢复，回执点�
     await assert.rejects(readFile(join(dest, 'home', '她的身份.md'), 'utf8'))
   } finally {
     await rm(dest, { recursive: true, force: true })
+  }
+})
+
+test('凭据默认擦干净：B 站 cookie 与云端目标令牌 / 密码 / 请求头都成空值，withSecrets 才原样带（2026-11-16，用户 m00712）', async () => {
+  const root = await makeRoot()
+  try {
+    await writeFile(join(root, 'owner.json'), JSON.stringify({
+      mid: '123', name: '主人', cookie: 'SESSDATA=abc; bili_jct=def', adoptedAt: '2026-10-01',
+    }))
+    await writeFile(join(root, 'config.json'), JSON.stringify({
+      chat: { rotateAfter: 120 },
+      cloud: {
+        enabled: true,
+        targets: [
+          { kind: 'github', repo: 'a/b', token: 'ghp_secret' },
+          { kind: 'webdav', url: 'https://dav.example.com', pass: 'p@ss' },
+          { kind: 'http', url: 'https://x.example.com', headers: 'Authorization: Bearer tk' },
+          { kind: 'email', host: 'smtp.example.com', pass: 'smtp-code' },
+        ],
+      },
+    }))
+    const b = await collectBackup(root)
+    const owner = JSON.parse(b.files.find((x) => x.path === 'owner.json').data)
+    assert.equal(owner.cookie, '')
+    // 擦的是凭据，不是人：昵称、领养日这些照旧在包里
+    assert.equal(owner.name, '主人')
+    assert.equal(owner.adoptedAt, '2026-10-01')
+    const cfg = JSON.parse(b.files.find((x) => x.path === 'config.json').data)
+    assert.deepEqual(cfg.cloud.targets.map((t) => [t.token ?? '', t.pass ?? '', t.headers ?? '']), [
+      ['', '', ''], ['', '', ''], ['', '', ''], ['', '', ''],
+    ])
+    // 非凭据字段（仓库、地址、主机）不动，恢复后还能照着重新填
+    assert.equal(cfg.cloud.targets[0].repo, 'a/b')
+    assert.equal(cfg.cloud.targets[1].url, 'https://dav.example.com')
+    assert.equal(cfg.chat.rotateAfter, 120)
+    // 包里的体积按擦过之后算：擦掉的字节不该继续占额度
+    assert.equal(b.files.find((x) => x.path === 'owner.json').size, Buffer.byteLength(JSON.stringify(owner, null, 2), 'utf8'))
+
+    const full = await collectBackup(root, { withSecrets: true })
+    assert.match(JSON.parse(full.files.find((x) => x.path === 'owner.json').data).cookie, /bili_jct=def/)
+    assert.equal(JSON.parse(full.files.find((x) => x.path === 'config.json').data).cloud.targets[0].token, 'ghp_secret')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('凭据文件结构读不出来：宁可不装进包，也不赌它干净（2026-11-16，用户 m00712）', async () => {
+  const root = await makeRoot()
+  try {
+    await writeFile(join(root, 'owner.json'), '{"cookie": "SESSDATA=abc", ')
+    const b = await collectBackup(root)
+    assert.ok(!b.files.some((x) => x.path === 'owner.json'), '解析不了就不进包')
+    assert.ok(b.skipped.some((s) => s.startsWith('owner.json') && s.includes('擦不干净')), `skipped 要说明为什么，实际是 ${b.skipped}`)
+    // 别的文件照常装，不因为这一个坏了就整份作废
+    assert.ok(b.files.some((x) => x.path === 'events.jsonl'))
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
 })
 

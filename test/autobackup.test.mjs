@@ -543,6 +543,51 @@ test('核心备份带上顶层状态文件（#142 审查补齐）', async () => 
   }
 })
 
+test('凭据开关只管自动与云端：默认擦掉 cookie，打开才原样带（2026-11-16，用户 m00712）', async () => {
+  const root = await makeRoot()
+  try {
+    await writeFile(join(root, 'owner.json'), JSON.stringify({
+      mid: '123', name: '主人', cookie: 'SESSDATA=abc; bili_jct=def',
+    }))
+    // 默认（旧配置里没有这个键也一样）：包里留着主人资料，但 cookie 是空的。
+    const off = await runLatestBackup(root, { config: cfgOf({}) })
+    const offBundle = (await readAutoBackup(off.name, root)).bundle
+    const offOwner = offBundle.files.find((file) => file.path === 'owner.json')
+    assert.ok(offOwner, '主人资料本身还要在——擦的是凭据，不是人')
+    assert.equal(JSON.parse(offOwner.data).name, '主人')
+    assert.equal(JSON.parse(offOwner.data).cookie, '')
+
+    // 打开之后原样带：要连登录一起搬机器的人走这条。
+    const on = await runLatestBackup(root, { config: cfgOf({ withSecrets: true }) })
+    const onOwner = (await readAutoBackup(on.name, root)).bundle.files.find((file) => file.path === 'owner.json')
+    assert.equal(JSON.parse(onOwner.data).cookie, 'SESSDATA=abc; bili_jct=def')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('「仅核心」加「带凭据」：主人资料跟着进包；不带凭据时它根本不进包（2026-11-16，用户 m00871）', async () => {
+  const root = await makeRoot()
+  try {
+    await writeFile(join(root, 'owner.json'), JSON.stringify({
+      mid: '123', name: '主人', cookie: 'SESSDATA=abc; bili_jct=def',
+    }))
+    // 不带凭据：仅核心就是仅核心，主人资料不在包里，连擦过的空壳都不留。
+    const off = await runLatestBackup(root, { config: cfgOf({ coreOnly: true }) })
+    const offFiles = (await readAutoBackup(off.name, root)).bundle.files.map((file) => file.path)
+    assert.ok(!offFiles.includes('owner.json'), '没开凭据时主人资料不进包')
+
+    // 带凭据：B 站登录只存在 owner.json 里，开了开关就得带上它，否则对登录态等于空转；
+    // 而 config.json（云端目标令牌）本来就是核心文件，不能变成「令牌进了包、cookie 没进」。
+    const on = await runLatestBackup(root, { config: cfgOf({ coreOnly: true, withSecrets: true }) })
+    const onOwner = (await readAutoBackup(on.name, root)).bundle.files.find((file) => file.path === 'owner.json')
+    assert.ok(onOwner, '开了凭据，主人资料要跟着核心数据一起进包')
+    assert.equal(JSON.parse(onOwner.data).cookie, 'SESSDATA=abc; bili_jct=def')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('自动备份跳过附件类型与大文件，但事件流和头像例外', async () => {
   const root = await makeRoot()
   try {
