@@ -24,5 +24,16 @@
       "inject": []
     }
   },
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "dsh-fish"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {}
 }

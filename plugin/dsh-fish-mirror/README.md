@@ -27,6 +27,20 @@
 
 ## 边界
 
-- **只读**：不写事件流、不写配置、不改头像。看没看过由她自己用 `growth_commit` 记。
+- **只读两样东西**：`avatar.*` 或 `mirror.*`（见上）。不读 `events.jsonl`、`config.json`、`state.json`、`她的身份.md`，也不写任何文件。
 - **不替她解释**：工具只给路径和事实（多大、什么时候放的），不说「这就是你」。
 - 真正「看见」靠宿主提供的 `read_image`；宿主没有这个工具时，她只能拿到路径。
+
+## 数据目录
+
+插件包不写死任何本机路径。`root` 的取值顺序：插件配置 → `DSH_FISH_HOME` → `~/.dsh-fish`。
+
+数据目录不在默认位置时，在自己的 **profile** 的 `cordis.patch.yml` 里覆盖（不要改插件包）：
+
+```yaml
+- id: fish-mirror
+  name: dsh-fish-mirror
+  config:
+    root: <你的数据目录>
+```
+
