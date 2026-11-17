@@ -378,8 +378,6 @@ npm 装的话脚本在 `node_modules/@ssamurias/dsh-fish/tools/check-install.mjs
 
 ## 观测台在哪
 
-「记忆 → 会话压力」提供 [当前状态、历史比较与归因、指标诊断和公式试算](https://github.com/zifa25796/dsh-fish/blob/codex/session-pressure-v1-1/docs/session-pressure-ui-v0.3.md)。实现口径见 [技术设计 v1.1](https://github.com/zifa25796/dsh-fish/blob/codex/session-pressure-v1-1/docs/session-pressure-design-v1.1.md)。
-
 **设置 → 大肥鱼**（`settings.section`）。
 
 不在浏览器里直连 `/dsh-fish`——那条路由被 connection 的信任栅栏守着，要的是 App 内置的登录 cookie，浏览器地址栏直接敲只会拿到 401（已从 `app.asar` 的 `requestRejection` → `admit` → `browserAuth.isAuthenticated` 链路确认）。`/dsh-fish` 现在只返回一句「搬进 App 了」。
