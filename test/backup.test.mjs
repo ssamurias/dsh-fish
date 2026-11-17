@@ -71,7 +71,9 @@ test('备份：该拿的都拿到，日志与旧备份不进包', async () => {
     assert.ok(b.excluded.some((s) => s.startsWith('logs/')), b.excluded.join('|'))
     assert.ok(b.excluded.some((s) => s.startsWith('backups/')), b.excluded.join('|'))
     assert.deepEqual(b.skipped, [], '这份档每个该带的文件都带上了，skipped 应该是空的')
-    assert.match(backupFileName(new Date('2026-10-25T00:31:00Z')), /^大肥鱼-20261025-\d{4}\.json$/)
+    const instant = new Date('2026-10-25T00:31:00Z')
+    const localDay = [instant.getFullYear(), String(instant.getMonth() + 1).padStart(2, '0'), String(instant.getDate()).padStart(2, '0')].join('')
+    assert.match(backupFileName(instant), new RegExp(`^大肥鱼-${localDay}-\\d{4}\\.json$`))
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }

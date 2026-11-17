@@ -10,6 +10,7 @@
  */
 
 import test from 'node:test'
+process.env.TZ = 'Asia/Shanghai'
 import assert from 'node:assert/strict'
 
 import { buildHooks, hookStats, overlap, hookDate, LEVEL2_MIN } from '../lib/hook.js'

@@ -12,6 +12,8 @@
  */
 
 import { test } from 'node:test'
+// 固定本文件日期断言的时区，避免 CI 默认 UTC 与原始 +08:00 样本错日。
+process.env.TZ = 'Asia/Shanghai'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

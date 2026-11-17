@@ -47,6 +47,14 @@ function mount(routes) {
       hooks[i] = { fn, deps }
       return fn
     },
+    useMemo(fn, deps) {
+      const i = hi++
+      const s = hooks[i]
+      if (s && same(s.deps, deps)) return s.value
+      const value = fn()
+      hooks[i] = { value, deps }
+      return value
+    },
     useEffect(fn, deps) {
       const i = hi++
       const s = hooks[i]

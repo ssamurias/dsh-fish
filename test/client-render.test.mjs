@@ -58,6 +58,11 @@ function miniReact() {
       if (changed(c.deps, deps)) { c.fn = fn; c.deps = deps }
       return c.fn
     },
+    useMemo(fn, deps) {
+      const c = slot(() => ({ value: fn(), deps }))
+      if (changed(c.deps, deps)) { c.value = fn(); c.deps = deps }
+      return c.value
+    },
     useEffect(fn, deps) {
       const c = slot(() => ({ first: true, deps: undefined, i: cursor - 1 }))
       if (c.first || !deps || changed(c.deps, deps)) {
