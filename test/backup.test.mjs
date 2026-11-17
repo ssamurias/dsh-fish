@@ -117,6 +117,27 @@ test('会话压力观测进入全量和核心备份，新旧恢复保留原有�
   }
 })
 
+test('会话压力观测坏掉时，恢复照常完成，不把整次恢复判失败', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'fish-pressure-bad-'))
+  try {
+    const source = join(parent, 'source')
+    const dest = join(parent, 'dest')
+    for (const root of [source, dest]) {
+      await mkdir(dirname(join(root, PRESSURE_OBSERVATIONS)), { recursive: true })
+      await writeFile(join(root, 'events.jsonl'), '')
+    }
+    const incoming = { observedSince: 9, records: { room: { 2: { seq: 2, tokens: 30 } } } }
+    await writeFile(join(source, PRESSURE_OBSERVATIONS), JSON.stringify(incoming))
+    await writeFile(join(dest, PRESSURE_OBSERVATIONS), '{不是 json')
+    const bundle = await collectBackup(source, { include: ['events.jsonl', PRESSURE_OBSERVATIONS] })
+    const result = await restoreBackup(bundle, dest)
+    assert.equal(result.ok, true)
+    assert.deepEqual(JSON.parse(await readFile(join(dest, PRESSURE_OBSERVATIONS))), incoming)
+  } finally {
+    await rm(parent, { recursive: true, force: true })
+  }
+})
+
 test('校验：格式不对、空包、路径穿越、比程序新，全都要拦', () => {
   const ok = { format: BACKUP_FORMAT, schema: 1, files: [{ path: 'events.jsonl', enc: 'utf8', data: '' }] }
   assert.equal(checkBundle(ok).ok, true)
