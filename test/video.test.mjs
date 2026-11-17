@@ -275,9 +275,10 @@ test('grabFrames：帧与拼图都从 stdout 拿，mp4 在本地也能跑通（�
   assert.doesNotMatch(r.path, /\\/)
   assert.match(r.path, /^.+media\/sheet-BV1ph4y1g75E-.+\.png$/)
 
-  const st = await stat(r.path.replace(/\//g, '\\'))
+  const nativePath = process.platform === 'win32' ? r.path.replace(/\//g, '\\') : r.path
+  const st = await stat(nativePath)
   assert.ok(st.size > 1024, `拼图应该不是空的，实际 ${st.size} 字节`)
-  const buf = await readFile(r.path.replace(/\//g, '\\'))
+  const buf = await readFile(nativePath)
   assert.equal(buf.subarray(0, 8).toString('hex'), PNG_MAGIC.toString('hex'))
 
   // 旧实现会在 media/ 下留 tmp-* 临时帧目录；新实现不落中间文件

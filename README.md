@@ -378,7 +378,7 @@ npm 装的话脚本在 `node_modules/@ssamurias/dsh-fish/tools/check-install.mjs
 
 ## 观测台在哪
 
-「记忆 → 会话压力」提供 [当前状态、历史比较与归因、指标诊断和公式试算](docs/session-pressure-ui-v0.3.md)。实现口径见 [技术设计 v1.1](docs/session-pressure-design-v1.1.md)。
+「记忆 → 会话压力」提供 [当前状态、历史比较与归因、指标诊断和公式试算](https://github.com/zifa25796/dsh-fish/blob/codex/session-pressure-v1-1/docs/session-pressure-ui-v0.3.md)。实现口径见 [技术设计 v1.1](https://github.com/zifa25796/dsh-fish/blob/codex/session-pressure-v1-1/docs/session-pressure-design-v1.1.md)。
 
 **设置 → 大肥鱼**（`settings.section`）。
 
@@ -413,7 +413,7 @@ npm 装的话脚本在 `node_modules/@ssamurias/dsh-fish/tools/check-install.mjs
 lib/        插件本体，139 个模块。入口是 index.js，她看到的那段提示词在 persona.js，
             她唯一的写入口是 capture.js，四条禁令在 rules.js，默认值只在 settings.js；
             浏览器那半边（设置 → 大肥鱼）在同目录的 client.js
-test/       192 个测试文件，node --test 直接跑，全量 2814 条
+test/       197 个测试文件，node --test 直接跑，全量 2847 条
 media/      README 与设置页用到的图
 scripts/    安装与迁移脚本（fix-legacy-link.mjs）
 tools/      命令行自检（check-install.mjs，零依赖，插件没加载也能跑）
