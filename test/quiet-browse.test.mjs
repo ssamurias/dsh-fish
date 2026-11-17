@@ -125,6 +125,8 @@ test('browseGapMs：一天几次要摊开；极端值有上下限', () => {
   assert.equal(browseGapMs(24), 30 * 60_000)
   assert.equal(browseGapMs(100), 30 * 60_000)
   assert.equal(browseGapMs(0), 12 * 60 * 60_000)
+  // 2026-11-17（用户 1.0.3 报告第 4 条）：按实际醒着窗口摊，17 小时、4 次 → 255 分钟。
+  assert.equal(browseGapMs(4, 17 * 60), 255 * 60_000)
 })
 
 test('quietBrowse：tick 传进来的是毫秒数，也要认（别把时钟悄悄换成「此刻」）', async () => {
@@ -146,6 +148,7 @@ test('browseDigestLine：空的不带；最多六条，其余只说「等」；�
   const line = browseDigestLine(many)
   assert.match(line, /翻到了 7 条/)
   assert.match(line, /《0号》/)
+  assert.match(line, /《0号》 BV0/, '标题后面要带 BV，不然她打不开')
   assert.match(line, /《5号》/)
   assert.match(line, /等/)
   assert.doesNotMatch(line, /《6号》/, '第七个不该被念出来')
@@ -207,6 +210,17 @@ test('pendingGlances：跨天的照样排着；念过的划掉；看过的画面
   // 七天之内的都在，七年前的不要
   const old = [{ type: 'meta', ts: new Date(now - 8 * 86_400_000).toISOString(), text: 'browse:2026-11-03 [{"bvid":"BV5eeeeeeeee"}]' }]
   assert.deepEqual(pendingGlances(old, { now }).map((x) => x.bvid), [])
+})
+
+test('pendingGlances：what=video 判断过的 judged: 不再当积压', () => {
+  const now = Date.parse('2026-11-11T21:00:00+08:00')
+  const at = (h) => new Date(now - h * 3600_000).toISOString()
+  const events = [
+    { type: 'meta', ts: at(3), text: 'browse:2026-11-11 [{"bvid":"BV1aaaaaaaaa","title":"判断过"},{"bvid":"BV2bbbbbbbbb","title":"没判断"}]' },
+    // 她点名 what=video 打开过的那条，算判断过
+    { type: 'meta', ts: at(2), text: 'judged:BV1aaaaaaaaa 判断过' },
+  ]
+  assert.deepEqual(pendingGlances(events, { now }).map((x) => x.bvid), ['BV2bbbbbbbbb'])
 })
 
 test('pendingGlances：念不完的留着，下一次醒来接着排（不因为「上次醒来太早」被滤掉）', () => {

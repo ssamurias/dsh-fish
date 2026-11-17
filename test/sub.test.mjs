@@ -123,14 +123,15 @@ test('查字幕：给三句、带时间点，并只落一行 subs: 索引', asyn
   })
 })
 
-test('没有字幕就说没有，不猜内容，也不记索引', async () => {
+test('没有字幕也不把话说死：说清可能是这次没拿到，不猜内容，也不记索引', async () => {
   await withRoot(async (root) => {
     const client = fakeClient({
       subtitle: async () => ({ ok: false, code: 'NO_SUB', data: [] }),
     })
     const r = await subOnce({ bvid: BVID, client, root, cfg: {} })
     assert.equal(r.ok, false)
-    assert.match(r.note, /没有字幕/)
+    assert.match(r.note, /字幕轨/)
+    assert.match(r.note, /别猜/)
     const seen = await readEvents(root)
     assert.equal(seen.events.filter((e) => String(e.text ?? '').startsWith('subs:')).length, 0)
   })
@@ -315,6 +316,7 @@ test('字幕要登录才给、而登录还有效：说清是接口没给轨道�
     assert.equal(r.ok, false)
     assert.match(r.note, /没把这条的字幕轨给这次请求/)
     assert.doesNotMatch(r.note, /登录过期/)
+    assert.doesNotMatch(r.note, /没有就是没有/)
   })
 })
 
@@ -327,6 +329,7 @@ test('字幕要登录才给、登录已经过期：直说 cookie 过期了', asy
     const r = await subOnce({ bvid: BVID, client, root, cfg: {} })
     assert.equal(r.ok, false)
     assert.match(r.note, /登录过期/)
+    assert.doesNotMatch(r.note, /没有就是没有/)
   })
 })
 
@@ -339,5 +342,33 @@ test('轨道有、正文没拉下来：说清是正文没拉到，不是没有�
     assert.equal(r.ok, false)
     assert.match(r.note, /正文没拉下来/)
     assert.doesNotMatch(r.note, /本来就没有字幕轨/)
+    assert.doesNotMatch(r.note, /没有就是没有/)
+  })
+})
+
+// 2026-11-17（用户 1.0.3 报告第 3 条）：B 站偶尔先给空轨道、过一阵又能拿到。
+// 「这次没拿到」不能写成「这条本来就没有」，否则她会拿一次失败当结论。
+test('这次没给字幕：不把「没拿到」说成「本来没有」', async () => {
+  await withRoot(async (root) => {
+    const client = fakeClient({
+      subtitle: async () => ({ ok: false, code: 'NO_SUB', data: [] }),
+    })
+    const r = await subOnce({ bvid: BVID, client, root, cfg: {} })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /这次没取到字幕/)
+    assert.match(r.note, /过一阵可以再试/)
+    assert.doesNotMatch(r.note, /本来就没有字幕轨/)
+  })
+})
+
+test('字幕失败原因不明：也不把话说死', async () => {
+  await withRoot(async (root) => {
+    const client = fakeClient({
+      subtitle: async () => ({ ok: false, code: 'SOMETHING', data: [] }),
+    })
+    const r = await subOnce({ bvid: BVID, client, root, cfg: {} })
+    assert.equal(r.ok, false)
+    assert.match(r.note, /这次没拿到/)
+    assert.doesNotMatch(r.note, /没有就是没有/)
   })
 })

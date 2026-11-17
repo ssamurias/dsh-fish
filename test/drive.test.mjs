@@ -16,14 +16,14 @@ test('一件记录都没有：不急着动', () => {
 })
 
 test('从来没主动过：从出生那一刻算起，不是永远停在 0.00', () => {
-  const born8 = driveOf({ events: [{ type: 'seed', text: '', ts: NOW - 8 * HOUR }], now: NOW })
-  assert.equal(born8.ready, true)
-  assert.ok(Math.abs(born8.value - 0.96) < 1e-9)
+  const born13 = driveOf({ events: [{ type: 'seed', text: '', ts: NOW - 13 * HOUR }], now: NOW })
+  assert.equal(born13.ready, true)
+  assert.ok(Math.abs(born13.value - 1) < 1e-9)
 
-  const born2 = driveOf({ events: [{ type: 'seed', text: '', ts: NOW - 2 * HOUR }], now: NOW })
-  assert.equal(born2.ready, false)
-  assert.ok(Math.abs(born2.value - 0.24) < 1e-9)
-  assert.match(born2.why, /还没攒够/)
+  const born5 = driveOf({ events: [{ type: 'seed', text: '', ts: NOW - 5 * HOUR }], now: NOW })
+  assert.equal(born5.ready, false)
+  assert.ok(Math.abs(born5.value - 5 * DRIVE.growthPerHour) < 1e-9)
+  assert.match(born5.why, /还没攒够/)
 })
 
 test('刚出生就动过：出生锚点让位给最近那次行动', () => {
@@ -44,24 +44,24 @@ test('刚动过：两小时之内一律不动', () => {
   assert.match(r.why, /两小时/)
 })
 
-test('底噪按小时线性长：3 小时还没到，7 小时到了', () => {
-  const three = driveOf({ events: [spend(3)], now: NOW })
-  assert.equal(three.ready, false)
-  assert.ok(Math.abs(three.value - 0.36) < 1e-9)
-  const seven = driveOf({ events: [spend(7)], now: NOW })
-  assert.equal(seven.ready, true)
-  assert.ok(Math.abs(seven.value - 0.84) < 1e-9)
-  assert.equal(seven.why, '')
+test('底噪按小时线性长：5 小时还没到，10 小时到了', () => {
+  const five = driveOf({ events: [spend(5)], now: NOW })
+  assert.equal(five.ready, false)
+  assert.ok(Math.abs(five.value - 5 * DRIVE.growthPerHour) < 1e-9)
+  const ten = driveOf({ events: [spend(10)], now: NOW })
+  assert.equal(ten.ready, true)
+  assert.ok(Math.abs(ten.value - 10 * DRIVE.growthPerHour) < 1e-9)
+  assert.equal(ten.why, '')
 })
 
-test('桌上有东西：冲动把「该醒」提前（但封顶 0.3）', () => {
-  const plain = driveOf({ events: [spend(4.5)], now: NOW })
-  const withDesk = driveOf({ events: [spend(4.5)], now: NOW, desk: { gaps: 2, stale: 3, echo: true } })
+test('桌上有东西：冲动把「该醒」提前（但封顶 0.4）', () => {
+  const plain = driveOf({ events: [spend(5)], now: NOW })
+  const withDesk = driveOf({ events: [spend(5)], now: NOW, desk: { gaps: 2, stale: 3, echo: true } })
   assert.equal(plain.ready, false)
   assert.equal(withDesk.ready, true)
   assert.equal(withDesk.boosts, DRIVE.boostCap)
   // 没有回音时只有两笔小的
-  const half = driveOf({ events: [spend(4.5)], now: NOW, desk: { gaps: 1, stale: 0 } })
+  const half = driveOf({ events: [spend(5)], now: NOW, desk: { gaps: 1, stale: 0 } })
   assert.ok(Math.abs(half.boosts - DRIVE.boostGap) < 1e-9)
 })
 
@@ -96,7 +96,7 @@ test('活得越久，攒得越快一点：成长档位抬高底噪速度', () =>
   const one = driveOf({ events: [spend(3)], now: NOW, stage: 1 })
   const four = driveOf({ events: [spend(3)], now: NOW, stage: 4 })
   assert.ok(four.value > one.value)
-  assert.ok(Math.abs(four.speed - 0.12 * (1 + 0.06 * 3)) < 1e-9)
+  assert.ok(Math.abs(four.speed - DRIVE.growthPerHour * (1 + 0.06 * 3)) < 1e-9)
   // 封顶在阈值之内：四档也不会几小时就顶穿
   assert.equal(driveOf({ events: [spend(3)], now: NOW, stage: 4 }).ready, false)
 })

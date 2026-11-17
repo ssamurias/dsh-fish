@@ -69,8 +69,8 @@ test('便条：关掉的时刻解析不出来就不写日期，行还在', async
       normalizeNote({ text: '没记时刻的', status: 'dropped', reason: '算了' }),
     ])
     const all = await herTool(root)({ action: 'list', filter: 'all' })
-    assert.match(all, /^✓ 时刻坏了的$/m)
-    assert.match(all, /^✗ 没记时刻的—— 算了$/m)
+    assert.match(all, /^#\S+ ✓ 时刻坏了的$/m)
+    assert.match(all, /^#\S+ ✗ 没记时刻的—— 算了$/m)
   })
 })
 

@@ -72,7 +72,7 @@
 node --test
 ```
 
-当前基线 **2814 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
+当前基线 **2905 个**，独立进程跑 `node --test` 应全绿。任何一条红都不许提交——包括看起来"不是我弄的"那条。
 
 按环境挑跑法：
 
@@ -249,7 +249,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 落地链路：`lib/contract.js` 的 `coerceMaterial()` → `lib/sources.js` 的 `sourceMaterial()`（内置来源优先，设置里同名覆盖不了 B 站的分级）→ `renderMaterialText()` 渲染（只标「谁写的」，不给她看等级数字）→ 记账 `meta mat:<source>:<key>` → `her_recall` 翻得到，`quote_one`、判断冲突、八股统计可用。
 
 - **得到什么**：她以后能翻到这句话（60 天内、最多 30 条），能引原句，能进八股统计。
-- **得不到什么**：不占身份文档 2400 字预算、不进 beliefs/stance、不算成长。契约管**质量**不管**频率**——它保证拿到的东西可核对，管不了她会不会去调。
+- **得不到什么**：不占身份文档 2800 字预算、不进 beliefs/stance、不算成长。契约管**质量**不管**频率**——它保证拿到的东西可核对，管不了她会不会去调。
 - **明确不做**：不开通用 `read_source` 入口。每个来源的清洗规则不同，通用口只能保证「进得来」、保证不了「好进」。没按契约返回的第三方内容，就当普通工具结果。
 
 参考：`docs/素材契约.md`（给第三方看的完整说明）、`lib/contract.js`（实现）、`test/contract.test.mjs`（14 条）。
@@ -289,7 +289,7 @@ qq_send_message, qq_get_unread_messages, qq_reply
 - [ ] 没有新增人格设置入口
 - [ ] 新输入口都过了 `lib/guard.js`
 - [ ] 加 / 改名 / 删了工具，`test/toolmap.test.mjs` 的 `MAP`（或 `lib/toolreg.js` 的 `SCENE_TOOLS`）跟着改了（见 §8）
-- [ ] `node --test` 2814 全绿
+- [ ] `node --test` 2905 全绿
 - [ ] 界面文案没有「他」「四道门」「三道门」；给她看的文本里指主人的字写的是 `{T}` 而不是写死「他」（见 §4）
 - [ ] 改了 `EVENT_SCHEMA_VERSION` 的话，`CHANGELOG.md` 里写了迁移说明
 - [ ] 没动包名；真要动，先看下面「包名与装法」那节

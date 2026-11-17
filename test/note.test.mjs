@@ -163,14 +163,14 @@ test('到期的摆出来：按日子排，写「晚了几天」，不催人', ()
   const text = renderNotes(list, new Date(2026, 10, 4))
   const lines = text.split('\n')
   assert.equal(lines[0], '（压着两张便条）')
-  assert.equal(lines[1], '11-01 说要看的那篇，晚了三天。')
-  assert.equal(lines[2], '11-03 答应给他的那张图，晚了一天。')
+  assert.match(lines[1], /^#\S+ 11-01 说要看的那篇（最后动过：3 天前），晚了三天。$/)
+  assert.match(lines[2], /^#\S+ 11-03 答应给他的那张图（最后动过：3 天前），晚了一天。$/)
   assert.doesNotMatch(text, /逾期|请尽快|紧急/)
 })
 
 test('当天到期的就是今天，不算晚', () => {
   const text = renderNotes([note({ due: '2026-11-04' })], new Date(2026, 10, 4))
-  assert.match(text, /11-04 一件事，就是今天。/)
+  assert.match(text, /11-04 一件事（最后动过：3 天前），就是今天。/)
 })
 
 test('一次最多五张，剩下的只报数', () => {
@@ -183,7 +183,7 @@ test('一次最多五张，剩下的只报数', () => {
   // 标题 + 5 张 + 一句「还有…」
   assert.equal(lines.length, 1 + NOTE_SHOW_MAX + 1)
   assert.match(lines[lines.length - 1], /还有三条没列出来/)
-  assert.equal((text.match(/^11-/gm) ?? []).length, NOTE_SHOW_MAX)
+  assert.equal((text.match(/^\S+ 11-/gm) ?? []).length, NOTE_SHOW_MAX)
 })
 
 test('过期不删：renderNotes 不改输入，条目一条不动', () => {
@@ -354,11 +354,11 @@ test('走一遍：记一张，醒来读到字，照着划掉，下次醒来就�
     assert.equal(await call({ text: '把借的伞还回去', due: '2026-11-01' }), '[记下了：把借的伞还回去]')
 
     const wake = await wakeOf(root, now)
-    assert.doesNotMatch(wake, /note-/, '醒来那段不带 id，所以她只能靠字')
+    assert.doesNotMatch(wake, /note-/, '醒来那段不带后台 id，只带她看得见的短编号')
     const line = wake.split('\n')[1]
-    assert.equal(line, '11-01 把借的伞还回去，晚了四天。')
+    assert.match(line, /^#\S+ 11-01 把借的伞还回去（最后动过：今天），晚了四天。$/)
 
-    const closed = await call({ text: wordsOn(line), status: 'done' })
+    const closed = await call({ id: line.match(/^#\S+/)[0], status: 'done' })
     assert.equal(closed, '[划掉了]')
     assert.doesNotMatch(closed, /\d/, '回执里不带数字（不吃状态）')
     assert.equal(await wakeOf(root, now), '', '划掉之后不再摆出来')
@@ -396,7 +396,8 @@ test('重名时先划最早记下的那张，一次只划一张', async () => {
     assert.match(await wakeOf(root, now), /压着两张便条/)
 
     assert.equal(await call({ text: '交水费', status: 'done' }), '[划掉了]')
-    assert.equal(await wakeOf(root, now), '（压着一张便条）\n11-02 交水费，晚了三天。')
+    assert.match(await wakeOf(root, now), /压着一张便条/)
+    assert.match(await wakeOf(root, now), /11-02 交水费（最后动过：今天），晚了三天。/)
 
     assert.equal(await call({ text: '交水费', status: 'done' }), '[划掉了]')
     assert.equal(await wakeOf(root, now), '')
@@ -433,13 +434,13 @@ test('桌上满了也划得掉：记不进去的时候，照醒来那行字划',
     assert.match(await call({ text: '再来一张' }), /^\[没记下：.*堆满/)
 
     const line = (await wakeOf(root, now)).split('\n')[1]
-    assert.equal(await call({ text: wordsOn(line), status: 'done' }), '[划掉了]')
+    assert.equal(await call({ id: line.match(/^#\S+/)[0], status: 'done' }), '[划掉了]')
     assert.equal(await wakeOf(root, now), '')
     assert.equal((await readNotes(root)).length, NOTES_MAX, '划掉不等于删掉')
   })
 })
 
-test('划不掉时回一句人话，回执写「没划掉」，不再要 id，也不多记一张', async () => {
+test('划不掉时回一句人话，回执写「没划掉」，不只要原话，也不多记一张', async () => {
   await withRoot(async (root) => {
     const { call } = herTool(root)
     const now = new Date(2026, 10, 5)
@@ -456,7 +457,7 @@ test('划不掉时回一句人话，回执写「没划掉」，不再要 id，�
       assert.doesNotMatch(said, /\d/, '回执里不带数字（不吃状态）')
       assert.doesNotMatch(said, /记下了|错误|非法|无效/)
     }
-    assert.match(answers[1], /一字不差/, '要告诉她差在哪，不然她只能瞎试')
+    assert.match(answers[1], /#编号/, '要告诉她还能按编号指，不然她只能瞎试')
 
     const back = await readNotes(root)
     assert.equal(back.length, 1)
@@ -489,16 +490,16 @@ test('id 这条路还在：回执同样写划掉，没对上 id 但给了原话�
   })
 })
 
-test('说明书和工具描述都告诉她怎么划掉，不再叫她报看不到的 id', async () => {
+test('说明书和工具描述都告诉她按 #编号 或原话指认，不再只说一字不差', async () => {
   await withRoot(async (root) => {
     const { def } = herTool(root)
     for (const said of [NOTE_BRIEF, def.description]) {
       assert.match(said, /text/)
-      assert.match(said, /status: ?"done"/)
-      assert.match(said, /原样/)
-      assert.doesNotMatch(said, /id/i)
+      assert.match(said, /#编号/)
+      assert.match(said, /原话/)
     }
-    assert.match(def.parameters.properties.text.description, /当时记的那句话/, '参数说明不能再说划掉时不用给')
+    assert.match(NOTE_BRIEF, /status: ?"done"/)
+    assert.match(def.parameters.properties.text.description, /#编号/, '参数说明要给她一条不用抄原话的路')
   })
 })
 
@@ -546,7 +547,9 @@ test('翻桌子：默认只看还没关掉的，有日子的排前面，没日�
     const b = await def.execute({ text: '已经做完的' }, { session: {} })
     await call({ id: b.id, status: 'done' })
 
-    assert.equal(await call({ action: 'list' }), '11-16 十一月十六的事\n（没日子）没日子的那件')
+    const listed = await call({ action: 'list' })
+    assert.match(listed, /^\S+ 11-16 十一月十六的事（最后动过：今天）$/m)
+    assert.match(listed, /^\S+ （没日子） 没日子的那件（最后动过：今天）$/m)
   })
 })
 
@@ -620,7 +623,7 @@ test('改一句：按原话找到同一张，日子能给空串去掉，改过�
     assert.equal(n.text, '周一交那份东西')
     assert.ok(!n.due, '空串就是没有日子')
     assert.ok(n.revisedAt, '改过要留个痕，不然事件流里看不出改了什么')
-    assert.equal(await call({ action: 'list' }), '（没日子）周一交那份东西')
+    assert.match(await call({ action: 'list' }), /^#\S+ （没日子） 周一交那份东西（最后动过：今天）$/m)
     assert.match(await call({ action: 'update', text: '没这句', newText: '别的' }), /^\[没改：便条里没有这一张/)
   })
 })
@@ -751,6 +754,62 @@ test('进展：事情变了就改那句，之前记的进展原样留着', async
     const [n] = await readNotes(root)
     assert.equal(n.text, '只翻剩下的 50%，前面那半不翻了')
     assert.deepEqual(n.progress.map((p) => p.text), ['翻到第三页'], '改的是那句，不是做过的事')
+  })
+})
+
+test('在等的便条上桌：不进 nudge，行里写「在等」和最后动过', () => {
+  const n = normalizeNote({
+    text: '等他的回信',
+    waiting: '他说周五前给答复',
+    created: '2026-11-04T00:00:00.000Z',
+  })
+  const now = new Date(2026, 10, 5)
+  const wake = renderNotes([n], now)
+  assert.match(wake, /^（压着一张便条）\n/)
+  assert.match(wake, /#\S+ 在等：他说周五前给答复——等他的回信（最后动过：昨天）$/)
+  assert.doesNotMatch(wake, /隔些天提一次/, '在等的事已经上桌，不该再走「隔些天提一次」那条')
+  assert.equal(pickNudge([n], now, new Map()), null, '在等的便条不混进「隔些天提一次」的池子')
+})
+
+test('在等 + 到期日：两样都摆出来，不二选一', () => {
+  const n = normalizeNote({
+    text: '等他的回信',
+    waiting: '他说周五前给答复',
+    due: '2026-11-04',
+    created: '2026-11-01T00:00:00.000Z',
+  })
+  const wake = renderNotes([n], new Date(2026, 10, 5))
+  assert.match(wake, /在等：他说周五前给答复——等他的回信/)
+  assert.match(wake, /到期：11-04，晚了一天/)
+})
+
+test('划掉时顺手写一句怎么算完的：done 行带这句话，不回显数字', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    await call({ text: '把借的伞还回去' })
+
+    assert.equal(await call({ text: '把借的伞还回去', status: 'done', note: '放门口了' }), '[划掉了]')
+    const list = await call({ action: 'list', filter: 'all' })
+    assert.match(list, /#\S+ ✓ 把借的伞还回去（\d\d-\d\d 划掉：放门口了）/)
+    assert.doesNotMatch(list, /\d+\s*条/, '回看不报条数')
+
+    const [n] = (await readNotes(root)).filter((x) => x.status === 'done')
+    assert.equal(n.doneNote, '放门口了')
+  })
+})
+
+test('在等的说明也能只改它：newText 不给，别的字不动', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    await call({ text: '等回复', waiting: '等邮件' })
+
+    assert.equal(await call({ action: 'update', text: '等回复', waiting: '等电话' }), '[改好了]')
+    const [n] = await readNotes(root)
+    assert.equal(n.text, '等回复')
+    assert.equal(n.waiting, '等电话')
+
+    assert.equal(await call({ action: 'update', text: '等回复', waiting: '' }), '[改好了]')
+    assert.equal((await readNotes(root))[0].waiting, '', 'waiting 可以清掉，退回普通便条')
   })
 })
 

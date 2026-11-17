@@ -132,6 +132,38 @@ test('破折号后面带引号的称呼能认出来（issue #97）', () => {
   assert.equal(pickName('说你让我叫你老大——可这句不是我从你嘴里听见的'), '老大')
 })
 
+// 2026-11-17（外部 1.0.2 报告）：称呼提取在「名字」后面没有分隔符时会零距离截字，
+// 「他...自己的名字里取」被截成「里取」，还高置信覆盖旧称呼；「那就叫：阿辰」
+// 又没有入口。这条锁住两端的修复。
+test('名字后面没有分隔符不许截；「就叫/改成」带冒号能定名（外部 1.0.2 报告）', () => {
+  // 误抽：名字后面直接跟「里取」，不是名字
+  assert.equal(pickName('还是从他自己的名字里取，不是我凭空造一个'), null)
+  assert.equal(pickName('他给了自己的名字里取，不是我凭空造一个'), null)
+
+  // 明确分隔符仍然认
+  assert.equal(pickName('他给了自己的名字：时梦尘，说他认这个名字。'), '时梦尘')
+  assert.equal(pickName('他给了自己的名字「时梦尘」'), '时梦尘')
+
+  // 声明入口：带冒号的「就叫 / 改成」、带时间壳的「改成」
+  assert.equal(pickName('那就叫：阿辰'), '阿辰')
+  assert.equal(pickName('以后就改成阿辰'), '阿辰')
+  assert.equal(pickName('改成：阿辰'), '阿辰')
+  assert.equal(pickName('从今天起就改成阿辰'), '阿辰')
+  assert.equal(pickNameHit('那就叫：阿辰').confident, true)
+
+  // 不能因此误收：裸的「就叫外卖」「把颜色改成蓝色」
+  assert.equal(pickName('那就叫外卖'), null)
+  assert.equal(pickName('把颜色改成蓝色'), null)
+
+  // 整条链路：先误抽「里取」，再说「那就叫：阿辰」，后者高置信覆盖
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_bad', 'utterance', 2, '还是从他自己的名字里取，不是我凭空造一个。'),
+    ev('ev_good', 'utterance', 3, '那就叫：阿辰。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿辰')
+})
+
 test('needs 只有三个键，且绝不出现好感度类字段', () => {
   const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' }), ev('ev_a', 'utterance', 2, '我不喜欢被催。')]
   const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })

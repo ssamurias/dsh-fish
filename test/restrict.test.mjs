@@ -78,7 +78,7 @@ test('清单里她该有的工具都在，且不含危险口子', () => {
     assert.ok(!HER_TOOLS.includes(name), `清单里不该有 ${name}`)
     assert.ok(!HER_TOOLS.includes(name), `清单里不该有 ${name}`)
   }
-  for (const name of ['schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete']) {
+  for (const name of ['schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit']) {
     assert.ok(!HER_TOOLS.includes(name), `${name} 默认不放：谁想用，自己加白名单`)
   }
 })

@@ -489,12 +489,12 @@ test('换新会话带几轮原话：有自己的说明，写 0 等于不带', as
   assert.match(hint, /0 = 不带/)
 })
 
-test('记得很牢不是永远：90 天没碰会掉档，身份段只列 5 条', async () => {
+test('记得很牢不是永远：90 天没碰会掉档，身份段只列 3 条', async () => {
   const { render } = await mount({ state: stateWith(), tab: 'memory', mem: { events: 3, diaries: 0 } })
   const c = card(render(), '记忆')
   assert.doesNotMatch(c.all, /固定只代表她忘不掉/, '固定会掉档，也可能被挤出身份段')
   assert.match(c.all, /90 天没再被提起或检验/)
-  assert.match(c.all, /最多列 5 条/)
+  assert.match(c.all, /最多列 3 条/)
 })
 
 // ---------------------------------------------------------------------------
@@ -531,7 +531,6 @@ test('数字越界时，报错里的名字和控件上的一样', async () => {
     ['bili', '随机多等'],
     ['bili', '每天回复几条'],
     ['memory', '聊满多少轮换新会话'],
-    ['memory', '换新会话时带几轮原话'],
     ['memory', '身份段字数'],
   ]) {
     const box = await typeOutOfRange(tab, label)

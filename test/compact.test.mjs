@@ -89,22 +89,23 @@ test('墓碑一句话、带指纹、够短（折叠的意义就是省）', () =>
   const text = tombstoneText()
   assert.match(text, new RegExp(TOMBSTONE_MARKER.replace(/[[\]]/g, '\\$&')))
   assert.ok(text.length < 120, `墓碑不许比一轮本身还长：${text.length} 字`)
-  // 三个意思缺一不可：这是她自己的一轮；内容是被收起（不是没发生）；
-  // 想回去看的时候有路走（her_recall）。
-  assert.match(text, /她自己/)
-  assert.match(text, /不是没发生/)
-  assert.match(text, /her_recall/)
+  // 三个意思：这是她自己醒的一轮；她没说什么；这部分只是收起，不是没发生。
+  assert.match(text, /醒过来看了一圈/)
+  assert.match(text, /没有说什么/)
+  assert.match(text, /收起来了/)
+  // 2026-11-17（用户 m03985）：不再写「用 her_recall 翻」——真机上她几乎不翻，
+  // 写了等于给一个她不会走的入口。折叠只省篇幅，不替她承诺回查。
+  assert.doesNotMatch(text, /her_recall/)
   // 2026-11-12（用户 m00497）：原来这里写「不必回头补」——那是在替她决定「不用查」。
-  // 折叠只该省篇幅，不该把追溯也省掉，所以这句话不许回来。
   assert.doesNotMatch(text, /不必回头补/)
 })
 
-test('墓碑写下折叠发生在哪一刻，她才好按这个时间翻回去', () => {
+test('墓碑写下折叠发生在哪一刻', () => {
   // 用本地时间构造，别让测试跟着机器的时区走。
   const at = new Date(2026, 10, 6, 2, 14).getTime()
   const text = tombstoneText({ at })
   assert.match(text, /11-06 02:14 那一次/)
-  assert.match(text, /her_recall/)
+  assert.doesNotMatch(text, /her_recall/)
   // 没给时刻时不能编一个出来。
   assert.doesNotMatch(tombstoneText(), /\d\d-\d\d \d\d:\d\d/)
 })

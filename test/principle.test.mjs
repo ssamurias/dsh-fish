@@ -75,7 +75,11 @@ test('页签顺序：插件 → 原理 → 数据 → 反馈；出门排在「�
   const ids = [...tabs[1].matchAll(/\['([a-z]+)', '[^']+'\]/g)].map((m) => m[1])
   // 2026-10-28 用户要求加第 9 个页签「反馈」（开发者 QQ + 交流群二维码），排在最后；
   // 出门页从 2026-10-30（用户 m01904）起对所有人可见，2026-10-30（m02207）挪到「上网」和「记忆」之间。
+  // 2026-11-16（用户 m02813 / m02816）加过第 10 个页签「说明」；同一天晚上（m03816）用户改主意：
+  // 「我不想要这个wiki独立成一个说明页签，我想要放在原理页签的最上面，也就是三张图上方。」
+  // 所以现在没有独立页签，说明入口是原理页第一块（见下面那条断言）。
   assert.deepEqual(ids, ['now', 'grow', 'home', 'bili', 'outing', 'memory', 'env', 'principle', 'data', 'feedback'])
+  assert.ok(!ids.includes('wiki'), '说明不再是独立页签')
   // 门从「藏页签」改成「页面里一次性确认」：说明卡没点过，三个入口按钮先灰着。
   assert.ok(!cl.includes('const [devMode, setDevMode] = useState(null)'), '不再有藏页签的 devMode 开关')
   assert.ok(cl.includes('...TABS.map(([id, name]) =>'), '页签栏不过滤，出门页常驻')
@@ -92,6 +96,24 @@ test('页签顺序：插件 → 原理 → 数据 → 反馈；出门排在「�
   assert.ok(cl.includes("showTab('principle') ? principlePage : null"), '必须真的挂上渲染')
   assert.ok(cl.indexOf("showTab('principle')") > cl.indexOf("showTab('env')"), '原理在插件之后')
   assert.ok(cl.indexOf("showTab('principle')") < cl.indexOf("showTab('data')"), '原理在数据之前')
+})
+
+test('说明入口在原理页最上面、三张图上方，是一条点了由浏览器打开的链接（2026-11-16 用户 m03816）', async () => {
+  const cl = await readFile(CLIENT, 'utf8')
+  // 1) 原理页第一块就是它，而且排在三张图之前
+  const page = cl.indexOf('const principlePage = h(')
+  const link = cl.indexOf('h(WikiLink),')
+  const figures = cl.indexOf("三张图看懂她怎么长大")
+  assert.ok(page > 0 && link > page, 'WikiLink 必须挂在原理页里')
+  assert.ok(link < figures, '它必须在三张图上方——用户原话「放在原理页签的最上面，也就是三张图上方」')
+  // 2) 不是搜索框：App 里没有输入框，只有一条链接 + 一个「存一份」
+  assert.ok(cl.includes('href: url'), '链接地址来自 /wiki.data 的 url')
+  assert.ok(cl.includes("target: '_blank'"), '要交给系统浏览器打开，不是 App 内导航')
+  assert.ok(!cl.includes("placeholder: '搜一个词"), '设置页里不再有搜索框')
+  assert.ok(!cl.includes('WikiPanel'), '原来那一整页说明的组件已经撤掉')
+  // 3) 地址从服务端现取，不写死：端口被占时它会换一个
+  assert.ok(cl.includes("jget('/wiki.data')"), '地址与服务状态都从 /wiki.data 来')
+  assert.ok(!/127\.0\.0\.1:17321/.test(cl), '客户端不许写死端口（会与服务端实际端口脱节）')
 })
 
 test('原理页把理论出处写全了', async () => {

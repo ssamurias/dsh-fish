@@ -130,8 +130,10 @@ test('反馈页：开发者 QQ + 群二维码都自带，不引外链（2026-10-
   // 二维码必须走插件自己的 /media 路由。群图挂在第三方图床上，图挂了这页就没用了。
   assert.ok(src.includes("src: `${API}/media/feedback-qr.jpg`"), '二维码要走 /media 路由')
   assert.ok(src.includes('1264518494'), '开发者 QQ 号要在页面上')
-  // 2026-11-02：1 群满了，换成新建的 2 群（781084960）。
-  assert.ok(src.includes('781084960'), '群号要在页面上（二维码扫不出来时的兜底）')
+  // 2026-11-17：换到 3 群。这个群没开「搜群号进群」，页面上就不能再写群号
+  // （写了等于让人去搜一个搜不到的东西），只能提示扫码。
+  assert.ok(!src.includes('781084960'), '页面上不许再写旧的 2 群群号')
+  assert.ok(src.includes('只能扫码进群'), '要说明这个群只能扫码')
   assert.ok(!/feedback-qr[^`'"]*https?:\/\//.test(src), '二维码不许改成外链')
   // 页签必须真的挂进渲染树，否则源码里有、界面上点不到。
   assert.ok(/showTab\('feedback'\) \? feedbackPage : null/.test(src), '反馈页要挂进渲染树')

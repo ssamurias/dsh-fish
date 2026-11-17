@@ -20,7 +20,7 @@ import { Readable } from 'node:stream'
 import { registerObserve } from '../lib/observe.js'
 import { makeWork } from '../lib/works.js'
 
-function harness(root) {
+function harness(root, deps = {}) {
   const routes = new Map()
   const ctx = {
     get(name) {
@@ -32,7 +32,7 @@ function harness(root) {
       return undefined
     },
   }
-  registerObserve(ctx, { root })
+  registerObserve(ctx, { root, ...deps })
 
   async function call(method, path, body) {
     const base = path.split('?')[0]
@@ -100,4 +100,32 @@ test('作品路由：清单带 kind / 读回给 file 与说明 / 出图只认 wo
 
   const missing = await call('GET', '/work-file?p=works/nope/1.png')
   assert.equal(missing.status, 404)
+})
+
+test('作品路由：清单写一行目录；/works-open 只交给服务端算好的目录', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-fish-works-open-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const made = await makeWork(root, { title: '一盏纸灯', text: '先这样。', now: Date.now() })
+  assert.equal(made.ok, true)
+
+  // 测试里绝不能真去调 explorer（会弹一堆窗口），所以注入一个记名的假动作。
+  const opened = []
+  const { call } = harness(root, { openFolder: (dir) => { opened.push(dir); return true } })
+
+  const list = await call('GET', '/works?limit=5')
+  assert.equal(list.status, 200)
+  assert.ok(list.json.dir.endsWith('works'), `清单里要给作品目录：${list.json.dir}`)
+
+  const one = await call('POST', '/works-open', { p: '../..' })
+  assert.equal(one.status, 200)
+  assert.equal(one.json.ok, true)
+  assert.deepEqual(opened, [list.json.dir], '打开的就是服务端算出来的那个目录，客户端传的路径不算数')
+
+  const bad = await call('GET', '/works-open')
+  assert.equal(bad.status, 405, '只认 POST')
+
+  const { call: plain } = harness(root, { openFolder: () => false })
+  const fail = await plain('POST', '/works-open', {})
+  assert.equal(fail.json.ok, false)
+  assert.match(fail.json.error, /打不开文件夹/, '打不开时要直说，别让人以为点坏了')
 })

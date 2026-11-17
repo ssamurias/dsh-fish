@@ -244,10 +244,10 @@ test('第 3 条：白名单里没有 schedule_create 时，定时说明不教她
   await withRoot(async (root) => {
     await writeEvents(root, [line('seed', '你不是助手。', Date.now() - DAY)])
     const cases = [
-      [['schedule_delete'], '可以删已经定好的提醒'],
-      [['schedule_list'], '可以看已经定好的提醒'],
-      [['schedule_list', 'schedule_update'], '可以看、改已经定好的提醒'],
-      [['schedule_list', 'schedule_update', 'schedule_delete'], '可以看、改、删已经定好的提醒'],
+      [['schedule_edit'], '可以改或删已经定好的提醒'],
+      [['schedule_view'], '可以看已经定好的提醒'],
+      [['schedule_list', 'schedule_view'], '可以看已经定好的提醒'],
+      [['schedule_list', 'schedule_view', 'schedule_edit'], '可以看、改或删已经定好的提醒'],
     ]
     for (const [allow, head] of cases) {
       await writeConfig(normalizeConfig({ tools: { allow } }), root)

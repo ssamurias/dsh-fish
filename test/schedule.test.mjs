@@ -25,7 +25,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const libDir = join(here, '..', 'lib')
 
 test('默认不放：四个定时工具不在 HER_TOOLS 里（默认工具数保持不变）', () => {
-  for (const n of ['schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete']) {
+  for (const n of ['schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit']) {
     assert.ok(SCHEDULE_TOOLS.includes(n), `清单里得留着 ${n}`)
     assert.ok(!HER_TOOLS.includes(n), `${n} 不该默认出现：谁想用，自己加白名单（m04504）`)
   }

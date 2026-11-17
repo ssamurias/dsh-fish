@@ -64,7 +64,9 @@ async function setup(proactive = {}, { history = true } = {}) {
   await writeConfig(normalizeConfig({ window: ['00:00', '23:59'], browse: { enabled: false }, comment: { enabled: false }, proactive: { enabled: true, ...proactive } }), root)
   writeFileSync(join(root, 'home.json'), JSON.stringify({ sessionId: 's-main', wsId: 'w', title: 't', preset: '' }))
   if (history) await appendEvent({ type: 'utterance', text: '那个讲海的视频到底是谁拍的？我一直没弄明白为什么它会火？' }, { day: 1, stage: 1, source: 'tool' }, root)
-  offset = 30 * HOUR
+  // 2026-11-17（用户 m03985）：新料门只认 24h 内的东西。这里把基线放在 20 小时前，
+  // 那条没答案的问题才算「新料」；再远就只剩旧句子，主动回合本来就不该起。
+  offset = 20 * HOUR
   return root
 }
 const metas = async (root) => (await readEvents(root)).events.filter((e) => e.type === 'meta').map((e) => String(e.text).split(':')[0])
@@ -97,12 +99,13 @@ async function run(proactive, turn) {
   return out
 }
 
-test('默认配置行为不变：只调工具没写正文，记没开口，还折', async () => {
+test('只调工具没写正文：这一轮留着，不折、不记开口', async () => {
   const r = await run({}, { tool: 'send_chat' })
-  assert.ok(r.meta.includes('proactive-silent'))
+  // 2026-11-17（用户 m03985）：动过手就不是空转，不能折掉；但也不算开口。
   assert.ok(!r.meta.includes('proactive-turn'))
-  assert.ok(r.folded > 0)
-  // issue #41 起处境段不再说「他看得见」（装了渠道路由插件时它不成立）
+  assert.ok(!r.meta.includes('proactive-silent'))
+  assert.equal(r.folded, 0)
+  assert.ok(r.logs.some((l) => l.includes('做了件事')))
   assert.match(r.section, /落进你们俩这条对话里/)
 })
 
@@ -113,10 +116,11 @@ test('配了 sendTools：发送工具成功就算开口，不折', async () => {
   assert.equal(r.folded, 0)
 })
 
-test('发送失败不算开口', async () => {
+test('发送失败：不算开口，也不折掉这次尝试', async () => {
   const r = await run({ sendTools: ['send_chat'] }, { tool: 'send_chat', isError: true })
-  assert.ok(r.meta.includes('proactive-silent'))
   assert.ok(!r.meta.includes('proactive-turn'))
+  assert.ok(!r.meta.includes('proactive-silent'))
+  assert.equal(r.folded, 0)
 })
 
 test('配了 sendTools：只写正文不算开口，正文到不了人', async () => {
@@ -124,16 +128,15 @@ test('配了 sendTools：只写正文不算开口，正文到不了人', async (
   assert.ok(r.meta.includes('proactive-silent'))
   assert.ok(!r.meta.includes('proactive-turn'))
   // 日志照实说，不说成「没什么要说的」
-  const line = r.logs.find((l) => l.includes('没有开口')) ?? ''
+  const line = r.logs.find((l) => l.includes('没说什么')) ?? ''
   assert.match(line, /只写了正文，没发出去/)
   assert.doesNotMatch(line, /没什么要说的/)
 })
 
 test('配了 sendTools：发送失败再写一句正文，也不算开口', async () => {
   const r = await run({ sendTools: ['send_chat'] }, { tool: 'send_chat', isError: true, text: '发不出去，算了，等会儿再说吧。' })
-  assert.ok(r.meta.includes('proactive-silent'))
   assert.ok(!r.meta.includes('proactive-turn'))
-  assert.match(r.logs.find((l) => l.includes('没有开口')) ?? '', /只写了正文，没发出去/)
+  assert.equal(r.folded, 0)
 })
 
 test('没配 sendTools：正文还是算开口', async () => {
@@ -161,9 +164,11 @@ test('代码模式里的发送：嵌套派发按真正的工具名认', async ()
   clearWakeSection()
 })
 
-test('调了别的工具不算开口', async () => {
+test('调了别的工具不算开口，但这一轮留着', async () => {
   const r = await run({ sendTools: ['send_chat'] }, { tool: 'read' })
-  assert.ok(r.meta.includes('proactive-silent'))
+  assert.ok(!r.meta.includes('proactive-turn'))
+  assert.ok(!r.meta.includes('proactive-silent'))
+  assert.equal(r.folded, 0)
 })
 
 test('发了消息再写一句「没什么要说的」，也算开口：发出去的不会因为正文收回', async () => {
@@ -238,7 +243,9 @@ test('监听返回的 Promise：按不忙算，拒绝被接住，不会变成未
 })
 
 test('别的插件说忙：日志写清是谁说的', async () => {
-  const root = await setup({})
+  // 2026-11-17：新料门（fresh）上线后，桌上只有 20 小时前那条旧问题会被判「没有新东西」，
+  // 走不到 busy 检查。开「动手回合」绕过新料门/空桌门，专门验 busy 那条日志。
+  const root = await setup({ allowDoing: true })
   const h = host({ bail: () => true })
   const logs = []
   const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: (...a) => logs.push(a.join(' ')) })

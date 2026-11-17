@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os'
 
 import {
   BACKOFF_MS,
+  CLOUD_FILE_LIMIT_BYTES,
   QUEUE_FILE,
   cloudDue,
   cloudLine,
@@ -26,6 +27,7 @@ import {
   drainQueue,
   isOurs,
   newestLocal,
+  packSizeProblem,
   pushTo,
   queuePath,
   readyTargets,
@@ -617,4 +619,12 @@ test('GitHub Release 附件上传成功后按份数清理，保留其他附件',
   assert.equal(assets.length, 2)
   privateRepo = false
   assert.equal((await pushTo(root, target, local.name, config)).ok, false)
+})
+
+test('云上单份超过 50MB 先拦住，40MB 起提醒（issue #145）', () => {
+  assert.equal(packSizeProblem(0), '')
+  assert.equal(packSizeProblem(CLOUD_FILE_LIMIT_BYTES), '')
+  assert.match(packSizeProblem(CLOUD_FILE_LIMIT_BYTES + 1), /超过单文件 50MB/)
+  // 提醒归提醒，40MB 本身仍然允许传。
+  assert.equal(packSizeProblem(40 * 1024 * 1024), '')
 })

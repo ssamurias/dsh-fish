@@ -92,7 +92,7 @@ test('issue #64：定时工具只说她真的拿得到的那几个', async () =>
     const two = await briefLine()
     assert.match(two, /你还有两个工具/)
     assert.ok(two.includes('schedule_create') && two.includes('schedule_list'))
-    assert.ok(!two.includes('schedule_update'), '没放行的不能念')
+    assert.ok(!two.includes('schedule_view'), '没放行的不能念')
 
     await writeConfig(normalizeConfig({ tools: { allow: ['schedule_create'] } }), root)
     await writeSelfDoc(root)

@@ -78,6 +78,9 @@ test('what=video：按 BV 号看指定的那一条，详情只取一次', async 
     const look = texts.find((t) => t.startsWith(`look:${dateKey()} ${v().bvid}`))
     assert.ok(look, 'look: 这一行必须落下来')
     assert.match(look, /\{"title":/)
+    // 2026-11-17（用户 m01528）：what=video 是她自己判断过的一条，要落 judged:，
+    // 整理回合不再把它当「还没看过」重新摆。
+    assert.ok(texts.some((t) => t.startsWith(`judged:${v().bvid}`)), 'what=video 要落 judged:')
     const info = JSON.parse(look.slice(look.indexOf('{')))
     // what=video 这条路上标题来自详情接口（`标题 BV…`），不是列表里那份——
     // 断言成「跟 picks 里给她看的那份一致」比钉死某个字面更稳。
@@ -186,6 +189,37 @@ test('resolveUrl：跟随关了就从正文里抠，抠不到就说不是视频'
   const bad = await c2.resolveUrl('https://b23.tv/xyz')
   assert.equal(bad.ok, false)
   assert.equal(bad.code, 'NOT_VIDEO')
+})
+
+// ---------------------------------------------------------------- judged 边界
+// 2026-11-17（用户 m01710）：只把 what=video 和 bili_watch 算「判断过」；
+// search/related/home 是列表，插件替她筛的，只算「翻到过」，不能写 judged:——
+// 否则整理回合没摆过的那条会被当成「她已经判断过」，绕过「每条至少摆一次」。
+test('search/related/home：只记翻到过（look:），不记 judged:', async () => {
+  const modes = [
+    ['search', { keyword: '日常' }],
+    ['related', { bvid: 'BV1xx411c7mD' }],
+    ['home', {}],
+  ]
+  for (const [what, extra] of modes) {
+    await withRoot(async (root) => {
+      const list = [v({ bvid: 'BV1aa411c7mD' }), v({ bvid: 'BV1bb411c7mD' })]
+      const c = fakeClient({
+        search: async () => ({ ok: true, data: list }),
+        related: async () => ({ ok: true, data: list }),
+        popular: async () => ({ ok: true, data: list }),
+      })
+      const r = await lookOnce({
+        what, ...extra, root, client: c,
+        cfg: normalizeConfig({ browse: { topN: 4, deepRead: 0, danmaku: 0 } }),
+      })
+      assert.equal(r.ok, true, r.note)
+      const { events } = await readEvents(root)
+      const texts = events.filter((e) => e.type === 'meta').map((e) => String(e.text ?? ''))
+      assert.ok(texts.some((t) => t.startsWith('look:')), `${what} 要记 look:`)
+      assert.equal(texts.filter((t) => t.startsWith('judged:')).length, 0, `${what} 不该记 judged:`)
+    })
+  }
 })
 
 // ---------------------------------------------------------------- issue #16 第二半

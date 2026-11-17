@@ -6,10 +6,12 @@ import { join } from 'node:path'
 
 import {
   HANDOFF_LIMIT,
+  HANDOFF_LIMIT_MAX,
   armHandoff,
   buildHandoff,
   disarmHandoff,
   handoffArmed,
+  handoffLimit,
   handoffTextSync,
   renderHandoff,
   resetHandoff,
@@ -123,3 +125,34 @@ test('handoffTextSync：读 home.json 里的 carry，读不到就是空串', () 
   await writeFile(join(paths(root).root, 'home.json'), JSON.stringify({ wsId: 'ws', sessionId: 's', carry: '## 上次停在这\n- 旧话' }), 'utf8')
   assert.match(handoffTextSync(root), /旧话/)
 }))
+
+test('交接页上限：3 轮 400 字，轮数越多放宽，1200 封顶', () => {
+  assert.equal(handoffLimit(0), HANDOFF_LIMIT)
+  assert.equal(handoffLimit(3), 400)
+  assert.equal(handoffLimit(6), 640)
+  assert.equal(handoffLimit(12), 1120)
+  assert.equal(handoffLimit(20), HANDOFF_LIMIT_MAX)
+  assert.equal(handoffLimit(999), HANDOFF_LIMIT_MAX)
+})
+
+test('交接页：carry 真的决定摆几轮（2026-11-17，用户 m04639）', () => {
+  const rows = Array.from({ length: 9 }, (_, i) => ({ at: '2026-11-14T12:00:00.000Z', me: `第${i}句` }))
+  const three = renderHandoff({ exchanges: rows, carry: 3 })
+  const six = renderHandoff({ exchanges: rows, carry: 6 })
+  assert.ok(three.includes('第8句'), '最后一轮总在')
+  assert.ok(!three.includes('第3句'), '3 轮只再往前看两轮')
+  assert.ok(six.includes('第3句'), '6 轮能看到更早')
+  assert.ok(six.includes('第8句'))
+  assert.ok(six.length > three.length, '带得越多，页面越长')
+})
+
+test('交接页：carry=0 不摆原话，但还挂着的事照留', () => {
+  const text = renderHandoff({
+    exchanges: two,
+    notes: [{ id: 'n1', text: '买猫粮', status: 'open' }],
+    carry: 0,
+  })
+  assert.doesNotMatch(text, /今天有点累/)
+  assert.doesNotMatch(text, /那就早点睡/)
+  assert.match(text, /买猫粮/)
+})

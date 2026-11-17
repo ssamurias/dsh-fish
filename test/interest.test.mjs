@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { INTEREST_MIN_HITS, hasInterest, interestOf, renderInterest, topicsOf } from '../lib/interest.js'
+import { INTEREST_GATE_VALUE, interestGateOf, INTEREST_MIN_HITS, hasInterest, interestOf, renderInterest, topicsOf } from '../lib/interest.js'
 
 const DAY = 86_400_000
 const NOW = Date.parse('2026-11-05T09:00:00+08:00')
@@ -105,4 +105,48 @@ test('认领一次 + 聊天复述一次，还是只算一次，凑不够「反�
 test('selfmod 只挡 utterance：拒绝里反复说到的还算', () => {
   const refused = (daysAgo) => ({ ...said('有人想把我改成别的样子', daysAgo), type: 'refusal', flags: ['selfmod'] })
   assert.equal(interestOf([refused(1), refused(2)], NOW).length, 1)
+})
+
+// 兴趣门（2026-11-17，用户 m04366）：同一件事反复出现、七天没因它起过、
+// 劲儿到 0.9 才允许为它单独起一轮。
+const gateOn = { proactive: { interestGate: true } }
+const threeTimes = () => [
+  said('我在想那只猫到底去过哪里', 6),
+  said('我在想那只猫到底去过哪里', 3),
+  said('我在想那只猫到底去过哪里', 1),
+]
+const turn = (daysAgo = 0, hoursAgo = 0) => ({ type: 'meta', text: 'interest-turn:x:1', ts: NOW - daysAgo * DAY - hoursAgo * 3600_000 })
+
+test('兴趣门默认关着，劲儿再高也不起', () => {
+  const r = interestGateOf({ events: threeTimes(), now: NOW, config: {}, value: 1 })
+  assert.equal(r.ok, false)
+  assert.match(r.why, /关/)
+})
+
+test('劲儿不到 0.9 不为兴趣起一轮', () => {
+  const r = interestGateOf({ events: threeTimes(), now: NOW, config: gateOn, value: INTEREST_GATE_VALUE - 0.01 })
+  assert.equal(r.ok, false)
+})
+
+test('只反复两次还不够，三次才够', () => {
+  const two = [said('我在想那只猫到底去过哪里', 6), said('我在想那只猫到底去过哪里', 3)]
+  assert.equal(interestGateOf({ events: two, now: NOW, config: gateOn, value: 1 }).ok, false)
+  const r = interestGateOf({ events: threeTimes(), now: NOW, config: gateOn, value: 1 })
+  assert.equal(r.ok, true)
+  assert.ok(r.label.length > 0)
+})
+
+test('七天里已经为它起过一轮：不再起', () => {
+  const r = interestGateOf({ events: [...threeTimes(), turn(2)], now: NOW, config: gateOn, value: 1 })
+  assert.equal(r.ok, false)
+})
+
+test('今天已经为兴趣起过一轮：不再起', () => {
+  const r = interestGateOf({ events: [...threeTimes(), turn(0, 2)], now: NOW, config: gateOn, value: 1 })
+  assert.equal(r.ok, false)
+})
+
+test('八天前起过的那一轮不算冷却', () => {
+  const r = interestGateOf({ events: [...threeTimes(), turn(8)], now: NOW, config: gateOn, value: 1 })
+  assert.equal(r.ok, true)
 })

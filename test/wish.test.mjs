@@ -206,7 +206,8 @@ test('调度器摆桌子、算劲儿、散尾三处都拿白名单剔一遍（is
   const calls = code.match(/(?<!function )\btoolInHandNow\(/g) ?? []
   assert.equal(calls.length, 3, '漏一处，桌上还会摆已经到手的东西')
   assert.match(code, /const hasForDrive = toolInHandNow\(homeSid, \{ unverified: true \}\)/, '劲儿：家里那条，核实不了先拿白名单顶')
-  assert.match(code, /wish: wishesOf\(events, \{ now, has: hasForDrive \}\)/, '劲儿：算出来的要真传给 wishesOf')
+  assert.match(code, /const wishes = wishesOf\(events, \{ now, has: hasForDrive \}\)/, '劲儿：算出来的要真传给 wishesOf')
+  assert.match(code, /wish: wishes\.length/, '劲儿：wishesOf 的结果要进桌子')
   assert.match(code, /const inHand = toolInHandNow\(sessionId, \{ agent: live\.agent \}\)/, '主动回合：先按接上的那条会话算一份手边')
   assert.match(code, /const loose = looseEnds\(events, \{ now, has: inHand \}\)/, '主动回合：悬着的事按同一份手边剔')
   assert.match(code, /wishes: wishesOf\(evc, \{ now: now\.getTime\(\), has: toolInHandNow\(sessionId, \{ agent: live\.agent \}\) \}\)/, '叫醒：桌子按接上的那条会话剔')

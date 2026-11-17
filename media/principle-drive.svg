@@ -22,7 +22,7 @@
 
     <rect x="80" y="262" width="312" height="92" rx="10" fill="#f0fdfa" stroke="#99f6e4"/>
     <text x="96" y="288" font-size="15" font-weight="700" fill="#0f766e">底噪</text>
-    <text x="96" y="312" font-size="14" fill="#44403c">每小时 +0.12，几周不动也会自己涨</text>
+    <text x="96" y="312" font-size="14" fill="#44403c">每小时 +0.08，几周不动也会自己涨</text>
     <text x="96" y="336" font-size="13" fill="#78716c">保证她不会因为「没素材」永远沉默</text>
 
     <text x="80" y="384" font-size="15" font-weight="700" fill="#1c1917">桌上真有东西时，再加一笔</text>
@@ -42,7 +42,7 @@
     <text x="96" y="630" font-size="13.5" fill="#44403c">下一次攒得慢（×0.7）</text>
     <text x="96" y="650" font-size="13" fill="#78716c">打扰是有成本的，不是想说话就该说</text>
 
-    <text x="80" y="700" font-size="13" fill="#78716c">门槛 0.8，约 6.7 小时底噪攒满；</text>
+    <text x="80" y="700" font-size="13" fill="#78716c">门槛 0.8，约 10 小时底噪攒满；</text>
     <text x="80" y="722" font-size="13" fill="#78716c">攒满只说明「可以开」，不说明「必须说」。</text>
   </g>
 

@@ -24,6 +24,8 @@ import {
   BELIEFS_SECTION,
   CATALOG_ORDER,
   CATALOG_SECTION,
+  CUE_ORDER,
+  CUE_SECTION,
   HANDOFF_SECTION,
   HANDOFF_ORDER,
   HOST_PERSONA_SECTION,
@@ -93,7 +95,7 @@ test('identityText：读到文件内容，改文件后（mtime 变）能拿到�
   assert.equal(identityText(root), '第二版身份')
 })
 
-test('attachIdentity：挂五段——交接页 + 身份 + 这一次的处境（平时空）+ 手边有什么 + 本子上记着什么', () => {
+test('attachIdentity：挂六段——交接页 + 身份 + 这一次的处境（平时空）+ 手边有什么 + 旧话 + 本子上记着什么', () => {
   resetIdentityCache()
   clearWakeSection()
   const root = tmp()
@@ -104,7 +106,7 @@ test('attachIdentity：挂五段——交接页 + 身份 + 这一次的处境（
   const agent = { ctx: { systemPrompt: { section: (o) => calls.push(o) } } }
   const r = attachIdentity(agent, root)
   assert.equal(r.ok, true)
-  assert.equal(calls.length, 5, '身份一段 + 处境一段 + 手边一段 + 本子目录一段 + 交接页一段')
+  assert.equal(calls.length, 6, '身份一段 + 处境一段 + 手边一段 + 旧话一段 + 本子目录一段 + 交接页一段')
   const sec = calls[0]
   assert.equal(sec.name, IDENTITY_SECTION)
   assert.equal(sec.order, IDENTITY_ORDER)
@@ -141,10 +143,17 @@ test('attachIdentity：挂五段——交接页 + 身份 + 这一次的处境（
   assert.match(txt, /ops_/, '要点名那些挡不掉、会混进工具表的')
   assert.match(txt, /这件事我做不到/, '和兜底守卫同一句话术')
 
-  // 第四段：本子上记着什么（2026-11-14，用户 m00533）。只说有哪些东西可翻，一个数字都不报
+  // 第四段：这一句碰到的旧话（1.0.4）。平时空串，等于不存在。
+  const cue = calls[4]
+  assert.equal(cue.name, CUE_SECTION)
+  assert.equal(cue.order, CUE_ORDER)
+  assert.equal(typeof cue.text, 'function', '每一句都要现算，不能冻住')
+  assert.equal(cue.text(), '', '这一句没碰到旧话就不占段位')
+
+  // 第五段：本子上记着什么（2026-11-14，用户 m00533）。只说有哪些东西可翻，一个数字都不报
   // （note.js/appoint.js 的「不吃状态」硬约束）；它排在最末（9500），内容会变——
   // system prompt 缓存按前缀算，只让它自己失效。
-  const catalog = calls[4]
+  const catalog = calls[5]
   assert.equal(catalog.name, CATALOG_SECTION)
   assert.equal(catalog.order, CATALOG_ORDER)
   assert.ok(catalog.order > TOOLS_ORDER, '必须排在手边有什么之后（也就是整份提示词的最末）')
@@ -302,7 +311,7 @@ test('registerIdentity：只给她那个 agent 挂（按 cwd 判），别人不�
   handler({ agent: { session: { header: { cwd: join(root, 'other') } }, ctx: { systemPrompt: { section: (o) => others.push(o) } } } })
   handler({ agent: { session: { header: { cwd: '' } }, ctx: { systemPrompt: { section: (o) => others.push(o) } } } })
 
-  assert.equal(mine.length, 5, '她那条会话必须挂上（身份 + 处境 + 手边 + 本子 + 交接页五段）')
+  assert.equal(mine.length, 6, '她那条会话必须挂上（身份 + 处境 + 手边 + 旧话 + 本子 + 交接页六段）')
   assert.equal(others.length, 0, '用户自己的会话不许挂')
 })
 
@@ -741,12 +750,12 @@ test('attachIdentity 顺手挂上组装钩子与正文清洗钩子，且拆卸�
   }
   const r = attachIdentity(agent, root)
   assert.equal(r.ok, true)
-  assert.equal(calls.length, 5, 'assemble 钩子不是 system prompt 的段，不许占段位；五段是四个文本段加交接页')
+  assert.equal(calls.length, 6, 'assemble 钩子不是 system prompt 的段，不许占段位；六段是五个文本段加交接页')
   // 组装钩子（0.8.5 摘 persona-prefix）、正文清洗钩子（0.9.8 llm/stream）、空正文重试（1.0.2）各一条
   assert.deepEqual(hooks.map((h) => h.evt), ['system-prompt/assemble', 'llm/stream', 'agent/request-error'])
   for (const h of hooks) assert.equal(h.o?.prepend, true, '三个钩子都要排最外层')
   // mountedCount 只数段与守卫；钩子单独记，但回家时必须一起拆
-  assert.equal(mountedCount(agent), 5)
+  assert.equal(mountedCount(agent), 6)
 })
 
 test('attachAssembleFix：整改过程炸了也必须原样放行（不能让她一整轮没有系统提示词）', async () => {

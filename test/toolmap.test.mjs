@@ -83,7 +83,7 @@ test('说明书的字数：长不等于有用', () => {
 
 test('划掉和放下仍然只靠她看得见的那句话', () => {
   // 纸条编号她看不到，叫她报编号等于指一条走不通的路（note.test.mjs 也守着这条）。
-  assert.match(NOTE_BRIEF, /原样/)
+  assert.match(NOTE_BRIEF, /原话/)
   assert.match(NOTE_BRIEF, /为什么放下/)
   assert.doesNotMatch(NOTE_BRIEF, /\bid\b/i)
 })
