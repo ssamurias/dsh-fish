@@ -18,6 +18,7 @@ import { join, dirname } from 'node:path'
 
 import {
   BACKUP_FORMAT,
+  PRESSURE_OBSERVATIONS,
   collectBackup,
   checkBundle,
   restoreBackup,
@@ -73,6 +74,44 @@ test('备份：该拿的都拿到，日志与旧备份不进包', async () => {
     assert.match(backupFileName(new Date('2026-10-25T00:31:00Z')), /^大肥鱼-20261025-\d{4}\.json$/)
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('会话压力观测进入全量和核心备份，新旧恢复保留原有观测', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'fish-pressure-backup-'))
+  try {
+    const source = join(parent, 'source')
+    const dest = join(parent, 'dest')
+    for (const root of [source, dest]) {
+      await mkdir(dirname(join(root, PRESSURE_OBSERVATIONS)), { recursive: true })
+      await writeFile(join(root, 'events.jsonl'), '')
+      await writeFile(join(root, 'logs', 'debug.log'), 'local only')
+    }
+    const existing = { observedSince: 15, records: { room: { 7: { seq: 7, tokens: 80 } } },
+      compactionPairs: { room: { 8: { before: 80, after: 50 } } } }
+    const old = await collectBackup(source)
+    await writeFile(join(dest, PRESSURE_OBSERVATIONS), JSON.stringify(existing))
+    assert.equal((await restoreBackup(old, dest)).ok, true)
+    assert.deepEqual(JSON.parse(await readFile(join(dest, PRESSURE_OBSERVATIONS))), existing)
+
+    const incoming = { observedSince: 10, records: { room: [{ seq: 3, tokens: 25 }, { seq: 7, tokens: 65 }] },
+      compactionPairs: { room: { 4: { before: 25, after: 18 } } } }
+    await writeFile(join(source, PRESSURE_OBSERVATIONS), JSON.stringify(incoming))
+    const full = await collectBackup(source, { skipAttachments: true })
+    const core = await collectBackup(source, { include: ['events.jsonl', PRESSURE_OBSERVATIONS] })
+    for (const bundle of [full, core]) {
+      assert.ok(bundle.files.some(file => file.path === PRESSURE_OBSERVATIONS))
+      assert.ok(!bundle.files.some(file => file.path === 'logs/debug.log'))
+    }
+    const result = await restoreBackup(core, dest)
+    assert.equal(result.ok, true)
+    const merged = JSON.parse(await readFile(join(dest, PRESSURE_OBSERVATIONS)))
+    assert.equal(merged.observedSince, 10)
+    assert.deepEqual(merged.records.room, { 3: { seq: 3, tokens: 25 }, 7: { seq: 7, tokens: 80 } })
+    assert.deepEqual(merged.compactionPairs.room, { ...incoming.compactionPairs.room, ...existing.compactionPairs.room })
+    assert.deepEqual(JSON.parse(await readFile(join(result.quarantined, PRESSURE_OBSERVATIONS))), existing)
+  } finally {
+    await rm(parent, { recursive: true, force: true })
   }
 })
 
