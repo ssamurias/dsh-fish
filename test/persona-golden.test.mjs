@@ -20,6 +20,8 @@
  *   3. 不要为了让快照变绿去改断言。快照的意义就是逼你看一眼 diff。
  */
 import test from 'node:test'
+// 快照样本固定使用 +08:00，不能随 CI 运行机器的本地时区漂移。
+process.env.TZ = 'Asia/Shanghai'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
