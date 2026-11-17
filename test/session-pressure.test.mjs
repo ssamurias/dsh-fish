@@ -283,7 +283,7 @@ test('observer stores one numeric sample per session event and leaves the home f
         { header: { id: 'archived-only', cwd: join(root, 'home') } },
         { header: { id: 'unrelated', cwd: join(root, 'other') } },
       ], readTitleSnapshots: async ids => ids.map(sessionId => ({
-        sessionId, status: 'fulfilled', value: { title: { title: 'Title ' + sessionId } },
+        sessionId, status: 'fulfilled', value: { title: { title: sessionId === 'archived-only' ? 'password=synthetic' : 'Title ' + sessionId } },
       })), observeSession: async id => ({ header: { origin: id === 'child' ? 'subagent' : undefined },
         cursor: 0, events: [] }) },
     })[name],
@@ -312,6 +312,7 @@ test('observer stores one numeric sample per session event and leaves the home f
   assert.deepEqual(view.usage.history.map(row => [row.id, row.archived, row.selected]),
     [['active', false, true], ['older', true, false], ['archived-only', false, false], ['previous', true, true]])
   assert.equal(view.usage.history.find(row => row.id === 'older').title, 'Title older')
+  assert.equal(view.usage.history.find(row => row.id === 'archived-only').title, null)
   assert.equal(await observer.select('unrelated', true), false)
   assert.equal(await observer.select('older', true), true)
   await observer.waitForIdle()
