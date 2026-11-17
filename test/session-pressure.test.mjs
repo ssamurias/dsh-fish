@@ -449,3 +449,31 @@ test('diagnostics distinguish missing headers, zero cache coverage, and compacti
   assert.equal(read('E', '匹配到后续成功的失败尝试用量'), 25)
   assert.deepEqual(analysis.compactionEvents, { started: 1, succeeded: 0, failed: 1, summaries: 0, prunes: 1 })
 })
+
+test('view 只认她这间房的会话：房外请求返回 not-fish（2026-11-17 用户 m02719）', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-pressure-scope-'))
+  t.after(async () => {
+    // 后台还有缓存写入时 rmdir 会输 ENOTEMPTY，重试几次再放弃（Windows 上偶发）。
+    for (let i = 0; i < 8; i += 1) {
+      try { await rm(root, { recursive: true, force: true }); return } catch { await new Promise(resolve => setTimeout(resolve, 50)) }
+    }
+  })
+  await mkdir(join(root, 'home'), { recursive: true })
+  await writeFile(join(root, 'home.json'), JSON.stringify({ sessionId: 'active', pressureRoomIds: ['active'] }))
+  const dir = join(root, 'logs', 'session-pressure')
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'samples.json'), JSON.stringify({ observedSince: 0, records: {} }))
+  const services = {
+    sessionQuery: {
+      listSessions: async () => [{ header: { id: 'active', cwd: join(root, 'home') } }],
+      observeSession: async () => ({ header: {}, cursor: 0, events: [] }),
+    },
+  }
+  const observer = registerSessionPressure({ get: (name) => services[name] }, root)
+  t.after(observer.dispose)
+  const outside = await observer.view(false, 'another-workspace')
+  assert.equal(outside.availability, 'not-fish')
+  assert.equal(outside.sessionId, 'another-workspace')
+  const inside = await observer.view(false, 'active')
+  assert.notEqual(inside.availability, 'not-fish')
+})

@@ -17,7 +17,14 @@ const CLIENT = new URL('../lib/client.js', import.meta.url)
 
 async function stateNames() {
   const src = await readFile(CLIENT, 'utf8')
-  const body = src.slice(src.indexOf('function FishSection()'))
+  // 只数 FishSection 自己：对话页的小胶囊/页签是另外两个组件（2026-11-17），
+  // 它们不在这条渲染路径上，混进来会让「数出来的」永远多于「真调到的」。
+  const start = src.indexOf('function FishSection()')
+  // 下一个顶层函数（4 个空格缩进）就是第一个组件外面；对话页的小胶囊/页签是另外两个
+  // 组件（2026-11-17），它们不在这条渲染路径上，混进来会让「数出来的」永远多于「真调到的」。
+  const rest = src.slice(start)
+  const next = rest.search(/\n    function \w+/)
+  const body = next > 0 ? rest.slice(0, next) : rest
   const names = []
   for (const line of body.split('\n')) {
     const m = line.match(/^\s*const \[(\w*),\s*set\w+\] = useState\(/)

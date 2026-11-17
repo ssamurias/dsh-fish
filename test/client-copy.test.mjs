@@ -28,9 +28,14 @@ function stateIndex(src) {
   const start = src.indexOf('function FishSection()')
   const end = src.indexOf('function apply(ctx)', start)
   assert.ok(start > 0 && end > start, '要能定位 FishSection')
+  // FishSection 之后、apply 之前还定义着别的组件（压力胶囊等），它们自己的 useState
+  // 不该算进设置页的下标表；切到 FishSection 自己的结尾。
+  const body = src.slice(start, end)
+  const cut = body.indexOf('\n    function ')
+  const scope = cut > 0 ? body.slice(0, cut) : body
   const out = {}
   let i = 0
-  for (const line of src.slice(start, end).split('\n')) {
+  for (const line of scope.split('\n')) {
     if (/^\s*\/\//.test(line) || !line.includes('useState(')) continue
     const m = line.match(/const \[(\w*),\s*set\w+\] = useState\(/)
     if (m && m[1]) out[m[1]] = i

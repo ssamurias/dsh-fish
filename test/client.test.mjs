@@ -101,186 +101,36 @@ test('client.js 能被 ModuleLoader 装载，且导出了 apply / inject', async
   assert.equal(typeof exports.FishSection, 'function')
 })
 
-test('回测图和明细随公式、事件及共同样本联动', async () => {
-  const snapshot = { inputs: { capacity: { occupancy: 50, growth: 1 }, request: {
-    window: 1000, all: { rounds: 1, cached: 0, knownMiss: 500, unknownInput: 0, output: 100 },
-    recent: { rounds: 1, cached: 0, knownMiss: 500, unknownInput: 0, output: 100 },
-  }, structure: [.4, .2, .03] } }
-  const points = Array.from({ length: 30 }, (_, i) => ({ round: i + 1,
-    snapshot: i === 7 ? null : snapshot, markers: i === 24 ? [{ type: '压缩成功' }] : [] }))
-  const react = fakeReact({ 46: 'memory', 47: { usage: { history: [{ id: 'past', title: '历史一', selected: true }] } },
-    51: 'history', 52: true, 59: { historyPage: 'backtest' }, 60: { past: { status: 'analyzed', points } } })
-  const { exports } = await loadClient({ react })
-  const render = () => { react.resetCursor(); return exports.FishSection() }
-  const nodes = (node, type) => [...(node?.type === type ? [node] : []),
-    ...(node?.children ?? []).flatMap(child => nodes(child, type))]
-  const chart = (page, name) => nodes(page, 'svg').find(node => node.props['aria-label'] === name)
-  const control = (page, label, type) => nodes(nodes(page, 'label').find(node => node.children.some(child =>
-    typeof child === 'string' && child.trim() === label)), type)[0]
-  const initial = render()
-  assert.ok(chart(initial, 'MAE 对比'))
-  assert.ok(chart(initial, '预测偏差'))
-  assert.match(textOf(chart(initial, '真实压力与预测压力')).join(' '), /第 25 轮 · 实际 .*预测 .*误差/)
-  const analyze = nodes(initial, 'button').find(node => textOf(node).includes('分析本次预测误差'))
-  analyze.props.onClick()
-  const attribution = render()
-  assert.match(textOf(attribution).join(' '), /预测误差归因.*第 20 → 25 轮/)
-  assert.ok(chart(attribution, '预测误差贡献'))
-  nodes(attribution, 'button').find(node => textOf(node).includes('预测回测')).props.onClick()
-  control(render(), '综合公式', 'select').props.onChange({ currentTarget: { value: 'B' } })
-  const planB = render()
-  assert.notDeepEqual(textOf(chart(planB, '真实压力与预测压力')), textOf(chart(initial, '真实压力与预测压力')))
-  control(planB, '事件分组', 'select').props.onChange({ currentTarget: { value: 'before' } })
-  const before = render()
-  assert.ok(chart(before, '真实压力与预测压力'))
-  control(before, '共同样本比较', 'input').props.onChange({ currentTarget: { checked: true } })
-  const common = render()
-  assert.equal(chart(common, '真实压力与预测压力'), undefined)
-  assert.equal(nodes(chart(common, 'MAE 对比'), 'rect').length, 0)
-  assert.match(textOf(common).join(' '), /回测统计明细/)
-})
 
-test('计算页独立保留三个子模块和三个综合公式', async () => {
-  const react = fakeReact({ 46: 'memory', 51: 'calculation', 52: true })
+test('设置页不再画会话压力图，压力入口挪到对话页（2026-11-17 用户 m02888）', async () => {
+  const react = fakeReact({})
   const { exports } = await loadClient({ react })
-  const page = textOf(exports.FishSection()).join(' ')
-  for (const label of ['C + G · 容量压力', 'U + A + K · 当前会话请求负担',
-    'T + E · 当前会话结构与稳定性', '综合压力公式', '恢复全部实验默认值',
-    'A · 分层加权 · — / 100', 'B · 非线性合成 · — / 100', 'C · 容量主导修正 · — / 100']) {
-    assert.ok(page.includes(label), label)
-  }
-  assert.equal(page.match(/重置默认参数/g)?.length, 3)
-  assert.doesNotMatch(page, /历史同轮次对比|历史预测回测|综合负担评分/)
-})
-
-test('趋势图支持公式切换、同轮中位线、多会话、范围与真实事件', async () => {
-  const route = '["demo","small",1000]'
-  const snapshot = (id, rounds) => ({ id, rounds, route, diagnosticsVersion: 'diagnostics-v1', versions: {},
-    inputs: { capacity: { occupancy: 50, growth: 1 }, structure: [.4, .2, .03],
-      request: { window: 1000, all: { rounds: 1, knownMiss: 500, cached: 0, unknownInput: 0, output: 100 },
-        recent: { rounds: 1, knownMiss: 500, cached: 0, unknownInput: 0, output: 100 } } } })
-  const point = (id, round, markers = []) => ({ round, markers, snapshot: snapshot(id, round) })
-  const react = fakeReact({ 46: 'memory', 47: { usage: { history: [
-    { id: 'now', current: true, title: '现在' }, { id: 'past', selected: true, title: '以前' },
-  ] } }, 51: 'history', 52: true, 59: { multi: false, median: true }, 60: {
-    now: { status: 'analyzed', points: [point('now', 1), { round: 2, markers: [], snapshot: null },
-      point('now', 3, [{ type: '压缩成功', tokenChange: -50 }])] },
-    past: { status: 'analyzed', points: [point('past', 1), point('past', 2)] },
-  } })
-  const { exports } = await loadClient({ react })
-  const render = () => { react.resetCursor(); return exports.FishSection() }
-  const collect = (node, type) => [
-    ...(node?.type === type ? [node] : []),
-    ...(node?.children ?? []).flatMap(child => collect(child, type)),
-  ]
-  const chart = tree => collect(tree, 'svg').find(node => node.props['aria-label'] === '用户已完成轮次与压力分')
-  let page = render()
-  assert.equal(collect(chart(page), 'polyline').length, 9)
-  assert.match(textOf(page).join(' '), /压缩成功 · −50\.0 Token/)
-  let controls = collect(page, 'select').filter(node => textOf(node).includes('A · 分层加权'))
-  controls[0].props.onChange({ currentTarget: { value: 'B' } })
-  page = render()
-  assert.equal(collect(chart(page), 'polyline').length, 3)
-  const mode = collect(page, 'select').find(node => textOf(node).includes('多 Session'))
-  mode.props.onChange({ currentTarget: { value: 'multi' } })
-  page = render()
-  const pastLabel = collect(page, 'label').find(node => textOf(node).join('').trim() === '以前')
-  collect(pastLabel, 'input')[0].props.onChange({ currentTarget: { checked: true } })
-  page = render()
-  assert.equal(collect(chart(page), 'polyline').length, 3)
-  assert.ok(textOf(page).includes('以前'))
-  const paths = tree => collect(chart(tree), 'polyline').map(node => node.props.points)
-  const before = paths(page)
-  const tabButton = (tree, label) => collect(tree, 'button').find(node => textOf(node).join('') === label)
-  tabButton(page, '计算').props.onClick()
-  page = render()
-  for (const value of [.4, .7, .2, .9]) {
-    const weight = collect(page, 'label').find(node => textOf(node).join('').startsWith('容量权重 w_c'))
-    collect(weight, 'input')[0].props.onChange({ currentTarget: { valueAsNumber: value } })
-    page = render()
-  }
-  tabButton(page, '历史').props.onClick()
-  page = render()
-  assert.notDeepEqual(paths(page), before)
-  const range = collect(page, 'select').find(node => textOf(node).includes('最近 10 轮'))
-  range.props.onChange({ currentTarget: { value: '10' } })
-  assert.equal(collect(chart(render()), 'polyline').length, 3)
-})
-
-test('当前页仅展示三套评分、近期曲线和紧凑诊断，详情迁到指标页', async () => {
-  const react = fakeReact({ 46: 'memory', 47: { load: { factors: [{ id: 'U', available: true, baseline: 1,
-    current: 742.5, weight: 1 }] }, usage: { history: [{ id: 'now', title: '当前房间', current: true }] } },
-    52: true })
-  const { exports } = await loadClient({ react })
-  const render = () => { react.resetCursor(); return exports.FishSection() }
-  const nodes = (node, type) => [...(node?.type === type ? [node] : []),
-    ...(node?.children ?? []).flatMap(child => nodes(child, type))]
-  const page = render()
-  const home = textOf(page).join(' ')
-  assert.match(home, /A · 分层加权.*B · 非线性合成.*C · 容量主导修正/)
-  assert.match(home, /压力走势.*压力构成.*关键诊断/)
-  assert.match(home, /当前实时压力.*最近完成轮变化.*轮末历史同轮次/)
-  assert.doesNotMatch(home, /综合负担评分|历史峰值|742\.5|历史预测回测|工具结果分析|完整公式/)
-  nodes(page, 'button').find(node => textOf(node).join('') === '指标').props.onClick()
-  const metrics = textOf(render()).join(' ')
-  assert.match(metrics, /工具结果分析.*逐轮诊断记录/)
-  assert.match(metrics, /C · 上下文容量.*G · 增长负担.*U · Token 总消耗.*A · 请求放大.*T · 工具结果残留.*K · 缓存复用负担.*E · 失败与恢复/)
-})
-
-test('首页容量建议只使用实际读数，保留高分和工具占用说明', async () => {
-  const data = { usage: { history: [{ id: 'now', current: true, title: '当前房间' }],
-    structurePressure: { currentShare: .95, repeatedShare: .95, retryShare: .95 },
-    dictionary: [
-      { id: 'C', rows: [{ label: '窗口占用率', value: .30, unit: '%' }] },
-      { id: 'G', rows: [{ label: '平均净增长', scope: '最近 5 轮', value: .002,
-        raw_value: { comparablePairs: 2, compacted: true } }] },
-    ] } }
-  const react = fakeReact({ 46: 'memory', 47: data, 50: { occupancy: 100, growth: 5 }, 52: true,
-    58: { A: { wc: 1, wr: 0, wq: 0 }, B: { wc: 1, wr: 0, wq: 0 }, C: {} } })
-  const { exports } = await loadClient({ react })
-  const page = textOf(exports.FishSection()).join(' ')
-  assert.match(page, /继续使用.*当前窗口已使用 30\.0%/)
-  assert.match(page, /工具结果约占宿主可见请求的一半或更多/)
-  assert.match(page, /100\.0 \/ 100/)
-  assert.match(page, /预计 5 轮后 31\.0%.*预计 10 轮后 32\.0%/)
-  assert.match(page, /趋势可能不稳定/)
-  assert.match(page, /暂无可比样本/)
-  assert.doesNotMatch(page, /强烈建议切换|立即换房|建议准备新会话/)
-})
-
-test('五个不同长度的会话独立绘图，查看轮次更新样本数', async () => {
-  const lengths = { now: 63, a: 107, b: 59, c: 5, d: 50 }
-  const ids = Object.keys(lengths)
-  const snapshot = (id, rounds) => ({ id, rounds, route: id === 'd' ? '["demo","small",500]' : '["demo","small",1000]',
-    configurationChanged: id === 'a' || id === 'd', diagnosticsVersion: 'diagnostics-v1', versions: {},
-    inputs: { capacity: { occupancy: 50, growth: 1 }, structure: [.4, .2, .03],
-      request: { window: 1000, all: { rounds: 1, knownMiss: 500, cached: 0, unknownInput: 0, output: 100 },
-        recent: { rounds: 1, knownMiss: 500, cached: 0, unknownInput: 0, output: 100 } } } })
-  const trendData = Object.fromEntries(ids.map(id => [id, { status: 'analyzed',
-    points: Array.from({ length: lengths[id] }, (_, i) => ({ round: i + 1, markers: [], snapshot: snapshot(id, i + 1) })) }]))
-  const comparison = { rounds: 63, current: snapshot('now', 63), history: ids.slice(1).map(id => ({
-    id, title: id, snapshot: lengths[id] >= 63 ? snapshot(id, 63) : null, reason: 'short',
-  })) }
-  const react = fakeReact({ 46: 'memory', 47: { usage: { comparison,
-    history: ids.map(id => ({ id, title: id, current: id === 'now', selected: true })) } }, 51: 'history', 52: true,
-  59: { open: true, multi: true, ids }, 60: trendData })
-  const { exports } = await loadClient({ react })
-  const render = () => { react.resetCursor(); return exports.FishSection() }
+  const page = exports.FishSection()
   const collect = (node, type) => [...(node?.type === type ? [node] : []),
     ...(node?.children ?? []).flatMap(child => collect(child, type))]
-  const page = render()
-  const chart = collect(page, 'svg').find(node => node.props['aria-label'] === '用户已完成轮次与压力分')
-  assert.deepEqual(collect(chart, 'polyline').map(node => node.props.points.split(' ').length), [63, 107, 59, 5, 50])
-  collect(page, 'button').find(node => textOf(node).includes('同轮次比较')).props.onClick()
-  const same = render()
-  assert.match(textOf(same).join(' '), /查看第 63 轮 · 可比较历史会话 1 个/)
-  const slider = collect(same, 'label').find(node => textOf(node).join('').trim() === '当前查看轮次')
-  collect(slider, 'input')[0].props.onChange({ currentTarget: { valueAsNumber: 40 } })
-  const at40 = render()
-  assert.match(textOf(at40).join(' '), /查看第 40 轮 · 可比较历史会话 3 个/)
-  const strict = collect(at40, 'label').find(node => textOf(node).join('').trim() === '仅同配置')
-  collect(strict, 'input')[0].props.onChange({ currentTarget: { checked: true } })
-  assert.match(textOf(render()).join(' '), /查看第 40 轮 · 可比较历史会话 2 个/)
+  assert.equal(collect(page, 'svg').find(node => node.props['aria-label'] === '用户已完成轮次与压力分'), undefined)
+})
+
+test('压力报表要用的 pressureScore 在客户端有定义（2026-11-18 点开胶囊消失）', async () => {
+  // 之前逐轮曲线调了服务端的 pressureScore，浏览器里没有这个函数 → ReferenceError
+  // → 整棵标题栏子树被卸载，胶囊跟着消失。
+  const src = await readFile(CLIENT, 'utf8')
+  assert.ok(src.includes('function pressureScore(tokens, threshold)'), '客户端要有自己的 pressureScore')
+})
+
+test('压力胶囊点得开：reload 三件套必须接住，弹层用固定定位（2026-11-17 真机点开空白、胶囊消失）', async () => {
+  // 现场事实：usePressure 返回 [data, failed, reload]，胶囊只解构了两个，
+  // 点开时压力主体拿到 undefined → ReferenceError → 整个标题栏子树被卸载，胶囊也一起没了。
+  // 这里钉住这两条：三件套要接住、弹层不能留在标题栏的 overflow 里。
+  const src = await readFile(CLIENT, 'utf8')
+  assert.ok(src.includes('const [data, failed, reload] = usePressure(sessionId, open)'), 'reload 必须从 usePressure 里接住')
+  assert.ok(src.includes('reload: reload'), '弹层主体必须把 reload 传进去')
+  const chip = src.slice(src.indexOf('function PressureChip(props) {'), src.indexOf('function pressureAdvice(data) {'))
+  assert.ok(chip.includes("h('dialog'"), '弹层要用原生 dialog：标题栏的祖先会裁剪普通定位的弹层')
+  assert.ok(chip.includes('showModal()'), '点开时要把 dialog 提到 top layer')
+  assert.ok(chip.includes('pressurePalette('), '面板颜色要按当前主题的明暗自己算，不能只读宿主变量')
+  assert.ok(chip.includes('--dsh-surface'), '面板要把一整套主题变量从根上传下去，浅色深色都能看清')
+  assert.ok(src.includes("::backdrop{background:transparent}"), '宿主的深色 backdrop 会把弹层盖住，要显式设透明')
 })
 
 test('apply 注册到 settings.section，id 与 label 都对', async () => {
@@ -292,8 +142,9 @@ test('apply 注册到 settings.section，id 与 label 都对', async () => {
     effect: (fn) => { fn(); return () => {} },
     slots: {
       inject(name, fn, label) {
-        assert.equal(name, 'settings.section')
-        assert.equal(label, 'dsh-fish: settings section')
+        // 2026-11-17：除了设置页，还注册了对话页的小胶囊与压力页签。
+        assert.ok(['settings.section', 'conversation.session.header.actions', 'conversation.view'].includes(name), name)
+        assert.ok(String(label).startsWith('dsh-fish:'), label)
         fn()
         return () => {}
       },
@@ -305,11 +156,12 @@ test('apply 注册到 settings.section，id 与 label 都对', async () => {
   }
   exports.apply(ctx)
 
-  assert.equal(registered.length, 1)
-  assert.equal(registered[0].meta.name, 'settings.section')
-  assert.equal(registered[0].meta.id, 'fish')
-  assert.equal(typeof registered[0].meta.label, 'function')
-  assert.equal(registered[0].meta.label(), '大肥鱼')
+  const fish = registered.find(item => item.meta.name === 'settings.section')
+  assert.ok(fish, '设置页仍要注册')
+  assert.equal(registered.length, 2)
+  assert.equal(fish.meta.id, 'fish')
+  assert.equal(typeof fish.meta.label, 'function')
+  assert.equal(fish.meta.label(), '大肥鱼')
 })
 
 test('组件在"还没有数据"时也能渲染，不抛错', async () => {
