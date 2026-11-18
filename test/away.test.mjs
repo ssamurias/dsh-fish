@@ -202,9 +202,14 @@ test('先记账再建会话：会话还没有 cwd 也认得出是出门，并把
     assert.equal(sections.length, 6, "这种情况也要挂身份、处境、手边、旧话、本子目录与交接页六段")
     assert.equal(guarded, true, '兜底守卫也要挂上')
 
-    // bind 是异步写的，等一拍再看台账
-    await new Promise((r) => setTimeout(r, 50))
-    const { outings } = await readOutings(root)
+    // bind 是异步写的（钩子不能等），这里等它落盘；CI 的 node 20 上 50ms 不够，
+    // 所以轮询到条件成立为止（最多 2 秒），不在慢机器上假红。
+    const deadline = Date.now() + 2000
+    let outings = []
+    do {
+      await new Promise((r) => setTimeout(r, 20))
+      ;({ outings } = await readOutings(root))
+    } while (Date.now() < deadline && outings[0]?.sessionId !== 'session-out-1')
     assert.equal(outings[0].sessionId, 'session-out-1', '会话 id 要补进台账')
   } finally {
     rmSync(root, { recursive: true, force: true })
