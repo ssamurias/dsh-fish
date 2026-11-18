@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseRefusal, classifyReaction, REACTIONS, REACTION_HURTS } from '../lib/refuse.js'
+import { parseRefusal, classifyReaction, REACTIONS, REACTION_HURTS, talksAbout, isHisReaction } from '../lib/refuse.js'
 import { validateEvent } from '../lib/schema.js'
 import { deriveSelf, DAY_MS } from '../lib/derive.js'
 import { personaLine } from '../lib/persona.js'
+import { withinReactionWindow } from '../lib/say.js'
 
 // P1 第二块（2026-10-24 用户批准）：拒绝要有形状，他听完的反应要有归因。
 
@@ -135,4 +136,48 @@ test('身份文档不再重复附一段截断副本（issue #97）', () => {
   const section = text.slice(text.indexOf('## 你拒绝过'))
   assert.doesNotMatch(section, /（你不想接受：/, '截断副本不该再出现')
   assert.ok(section.includes(long), '原话要完整留着')
+})
+
+// ---- 反应归因：只看他本人、只认他真在说这件事（2026-11-18 加拿大反馈之后） ----
+// 原来 `recordReaction` 挑出「最近一次没被回过的拒绝」就归因，不看是谁说的、说什么。
+// 他在聊晚饭也会被记成「他坚持了」，身份文档里于是出现「他没收回」这种没发生过的事。
+test('talksAbout：他这句话里得真出现那件事的名字', () => {
+  const r = { object: '吃辣', quote: '我不想吃辣' }
+  assert.equal(talksAbout('那还是吃辣吧', r), true)
+  assert.equal(talksAbout('今晚吃点什么', r), false)
+  // 「还是」两个字不能当证据
+  assert.equal(talksAbout('还是算了', r), false)
+  // 标点、空白不算内容
+  assert.equal(talksAbout('吃 辣 ？', r), true)
+  // 太短的 object 不比，免得一个字命中半段聊天
+  assert.equal(talksAbout('好', { object: '好' }), false)
+})
+
+test('talksAbout：只沾到四个字不算，至少连着五个字（2026-11-18 用户 m01161 第四条）', () => {
+  // 原来 4 字就认：「不想吃」能把「我不想吃辣」算出来，他聊晚饭也会命中。
+  const r = { object: '叫任何人老大', quote: '我不叫任何人老大' }
+  assert.equal(talksAbout('叫任何人', r), false, '四个字只是沾边')
+  assert.equal(talksAbout('叫任何人老', r), true, '连着五个字才算在说这件事')
+  assert.equal(talksAbout('我不叫任何人老大', r), true, '整段说出来当然算')
+
+  const s = { object: '不想去参加聚会' }
+  assert.equal(talksAbout('不想去', s), false)
+  assert.equal(talksAbout('不想去参加', s), true)
+})
+
+test('反应窗口：六小时内才算，隔天再提是另一件事（2026-11-18 用户 m01161 第四条）', () => {
+  const now = Date.parse('2026-11-18T20:00:00+08:00')
+  const at = (ms) => new Date(now - ms).toISOString()
+  assert.equal(withinReactionWindow(at(5 * 3_600_000), now), true, '五小时前还在窗里')
+  assert.equal(withinReactionWindow(at(7 * 3_600_000), now), false, '七小时前已经翻篇')
+  assert.equal(withinReactionWindow(at(-3_600_000), now), false, '时间在未来的不算')
+  assert.equal(withinReactionWindow('', now), false, '解析不出时间的不算')
+})
+
+test('isHisReaction：群友/外客的话不算对她的反应', () => {
+  const r = { object: '吃辣' }
+  assert.equal(isHisReaction('还是吃辣吧', r, { owner: true }), true)
+  assert.equal(isHisReaction('还是吃辣吧', r, { owner: false }), false, '不是他本人说的，不记')
+  assert.equal(isHisReaction('还是吃辣吧', r), false, '默认不是他')
+  assert.equal(isHisReaction('今晚吃什么', r, { owner: true }), false, '他没提这件事，也不记')
 })

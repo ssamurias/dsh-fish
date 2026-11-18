@@ -225,3 +225,75 @@ test('钩子：动手回合里第二次消耗被拦，成功的才写 did:', asy
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('classOf：read_image 归 self，不算「做」了一件（2026-11-18 修）', () => {
+  // 「看」不是「做」：读图不该占动手回合的那一件，也不该背同图冷却。
+  assert.equal(classOf('read_image'), 'self')
+  // 设置里的显式覆盖仍然优先：谁想把它按消耗类算，可以自己写回去。
+  assert.equal(classOf('read_image', { proactive: { toolClasses: { read_image: 'consume' } } }), 'consume')
+})
+
+test('钩子：动手回合里先读图，不占额度也不拦；接着抽帧照样放行', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'fish-doing-'))
+  try {
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      proactive: { allowDoing: true },
+      video: { enabled: true },
+    }))
+    const handlers = new Map()
+    const ctx = { on: (name, fn) => { handlers.set(name, fn); return () => {} } }
+    registerDoingHooks(ctx, { root })
+    clearDoingTurn()
+    markDoingTurn('s1', Date.now())
+
+    const pre = handlers.get('tools/pre-execute')
+    const exec = (name, callId, args = {}) => ({
+      name,
+      callId,
+      agent: { session: 's1' },
+      call: { arguments: JSON.stringify(args) },
+    })
+
+    const seen = await pre(exec('read_image', 'c1', { path: 'C:\\pics\\a.png' }), () => 'passed')
+    assert.equal(seen, 'passed', '读图不该被「一轮一件」拦住')
+    const watched = await pre(exec('bili_watch', 'c2', { bvid: 'BV1xx411c7mD' }), () => 'passed')
+    assert.equal(watched, 'passed', '先读图没有占掉那一件，接着抽帧还能做')
+  } finally {
+    clearDoingTurn()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('钩子：同一张图昨天看过，今天照样能再读', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'fish-doing-'))
+  try {
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ proactive: { allowDoing: true } }))
+    // 昨天那次读图留下的 did:（当时按消耗类记的）。今天再读同一张，不该撞 3 天冷却。
+    const yesterday = Date.now() - DAY
+    const line = {
+      id: 'd-old',
+      v: 1,
+      ...did({ tool: 'read_image', key: 'read_image:C:\\pics\\a.png', ts: yesterday }),
+    }
+    writeFileSync(join(root, 'events.jsonl'), `${JSON.stringify(line)}\n`)
+
+    const handlers = new Map()
+    const ctx = { on: (name, fn) => { handlers.set(name, fn); return () => {} } }
+    registerDoingHooks(ctx, { root })
+    clearDoingTurn()
+    markDoingTurn('s1', Date.now())
+
+    const pre = handlers.get('tools/pre-execute')
+    const res = await pre({
+      name: 'read_image',
+      callId: 'c1',
+      agent: { session: 's1' },
+      call: { arguments: JSON.stringify({ path: 'C:\\pics\\a.png' }) },
+    }, () => 'passed')
+    assert.equal(res, 'passed', '同图冷却只该管「做」的事，不该管看图')
+  } finally {
+    clearDoingTurn()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+

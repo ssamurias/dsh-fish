@@ -43,9 +43,9 @@ test('两张图可以点开放大：灯箱带缩放与拖动', () => {
   assert.ok(CLIENT.includes("if (e.key === 'Escape') setZoom(null)"))
   assert.ok(CLIENT.includes('滚轮缩放 ${Math.round(zoom.scale * 100)}%'))
   // 三张图都走 zoomable，不再是裸 img
-  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-loop.svg?v=20261114`'))
-  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-memory.svg?v=20261114`'))
-  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-drive.svg?v=20261114`'))
+  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-loop.svg?v=20261118`'))
+  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-memory.svg?v=20261118`'))
+  assert.ok(CLIENT.includes('zoomable(`${API}/media/principle-drive.svg?v=20261118`'))
 })
 
 test('开发者留言：整页最下面收尾，署名居右', () => {

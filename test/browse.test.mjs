@@ -374,6 +374,20 @@ test('阶段 1 的候选不再固定：分数并列时不会每次都是同样�
   assert.ok(fromOld < 4, `四条不该全来自入站必刷：${list.map((x) => x.bvid).join(',')}`)
 })
 
+test('候选数按 BV 去重：热门和搜索撞上同一条，只算一条（2026-11-18）', async () => {
+  const cfg = normalizeConfig({ browse: { topN: 4, keywords: ['辣'] } })
+  const same = [v({ bvid: 'BVsame' })]
+  const c = fakeClient({
+    precious: async () => ({ ok: true, data: same }),
+    popular: async () => ({ ok: true, data: same }),
+    ranking: async () => ({ ok: true, data: same }),
+    search: async () => ({ ok: true, data: same }),
+  })
+  const stats = {}
+  await candidates(c, { stage: 1 }, cfg, { rand: seededRand(), stats })
+  assert.equal(stats.total, 1, '同一条视频不该被算两次')
+})
+
 // ---------------------------------------------------------------- 她自己看（bili_look）
 
 test('lookOnce：home 能拿到素材', async () => {

@@ -37,34 +37,37 @@
       <text x="94" y="546">够不着的事、撞过的墙</text>
     </g>
 
-    <rect x="80" y="580" width="312" height="84" rx="10" fill="#fffbeb" stroke="#fde68a"/>
-    <text x="96" y="606" font-size="15" font-weight="700" fill="#b45309">上次开口，没人接</text>
+    <rect x="80" y="580" width="312" height="104" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+    <text x="96" y="606" font-size="15" font-weight="700" fill="#b45309">上次没被接住</text>
     <text x="96" y="630" font-size="13.5" fill="#44403c">下一次攒得慢（×0.7）</text>
-    <text x="96" y="650" font-size="13" fill="#78716c">打扰是有成本的，不是想说话就该说</text>
+    <text x="96" y="650" font-size="13" fill="#78716c">刚被驳回的 12 小时里更慢（×0.55）</text>
+    <text x="96" y="670" font-size="13" fill="#78716c">打扰是有成本的，不是想说话就该说</text>
 
-    <text x="80" y="700" font-size="13" fill="#78716c">门槛 0.8，约 10 小时底噪攒满；</text>
-    <text x="80" y="722" font-size="13" fill="#78716c">攒满只说明「可以开」，不说明「必须说」。</text>
+    <text x="80" y="706" font-size="13" fill="#78716c">门槛 0.8；连续两次没开口后 0.9。</text>
+    <text x="80" y="726" font-size="13" fill="#78716c">约 10 小时底噪攒满，攒满只说明「可以开」，</text>
+    <text x="80" y="746" font-size="13" fill="#78716c">不说明「必须说」。</text>
   </g>
 
   <!-- 中：这一轮开不开 -->
   <g>
     <rect x="452" y="176" width="440" height="600" rx="16" fill="#ffffff" stroke="#d6d3d1"/>
     <text x="476" y="212" font-size="22" font-weight="700" fill="#0f766e">这一轮开不开</text>
-    <text x="476" y="238" font-size="14" fill="#78716c">四个条件同时成立，才开一轮；开不开 ≠ 说什么</text>
+    <text x="476" y="238" font-size="14" fill="#78716c">四个条件一起看，缺一件就不开；开不开 ≠ 说什么</text>
 
     <g font-size="14" fill="#44403c">
       <rect x="476" y="258" width="392" height="36" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
-      <text x="492" y="281">① 在她的醒着时段里</text>
+      <text x="492" y="281">① 醒着时段里，今天还有额度（0–6 次）</text>
       <rect x="476" y="302" width="392" height="36" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
-      <text x="492" y="325">② 今天还有额度（默认 0–6 次）</text>
+      <text x="492" y="325">② 确实有一阵没说话（默认 6 小时）</text>
       <rect x="476" y="346" width="392" height="36" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
-      <text x="492" y="369">③ 确实有一阵没说话（默认 6 小时）</text>
+      <text x="492" y="369">③ 桌上至少有一件真能说 / 能做的事</text>
       <rect x="476" y="390" width="392" height="36" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
-      <text x="492" y="413">④ 桌上至少有一件真能说 / 能做的事</text>
+      <text x="492" y="413" font-size="13">④ 24 小时内有新事（兴趣门 / 动手可例外）</text>
     </g>
 
     <rect x="476" y="448" width="392" height="52" rx="10" fill="#f5f5f4" stroke="#d6d3d1"/>
-    <text x="492" y="480" font-size="14" fill="#57534e">空桌不醒：宁可这一轮不叫她，也不拿废话凑数。</text>
+    <text x="492" y="468" font-size="13" fill="#57534e">空桌不醒；24 小时没新事也不醒。</text>
+    <text x="492" y="488" font-size="13" fill="#57534e">宁可这一轮不叫她，也不拿废话凑数。</text>
 
     <line x1="672" y1="500" x2="672" y2="514" stroke="#0f766e" stroke-width="2"/>
     <line x1="569" y1="514" x2="775" y2="514" stroke="#0f766e" stroke-width="2"/>
@@ -102,22 +105,23 @@
       <rect x="944" y="382" width="376" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
       <text x="958" y="404">她自己记下的便条（最多两张，不催）</text>
       <rect x="944" y="424" width="376" height="34" rx="8" fill="#fafaf9" stroke="#e7e5e4"/>
-      <text x="958" y="446">兴趣只排序：先摆最近总回到的那件事</text>
+      <text x="958" y="446">兴趣默认只排序；开门后 0.9 可单独起一轮</text>
     </g>
+    <text x="958" y="476" font-size="12" fill="#78716c">（默认关；3 次以上、7 天没起过、一天一次）</text>
 
-    <text x="944" y="496" font-size="22" font-weight="700" fill="#b45309">什么拦着</text>
+    <text x="944" y="522" font-size="22" font-weight="700" fill="#b45309">什么拦着</text>
     <g font-size="13.5" fill="#44403c">
-      <rect x="944" y="512" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
-      <text x="958" y="534">一天 0–6 次；两次至少隔 45 分钟</text>
-      <rect x="944" y="554" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
-      <text x="958" y="576">消耗类一天 1 次；同一件 3 天内不重复</text>
-      <rect x="944" y="596" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
-      <text x="958" y="618">连着三次同类 → 停一周</text>
-      <rect x="944" y="638" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
-      <text x="958" y="660">一轮只做一件；第二次直接拦下</text>
+      <rect x="944" y="538" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="958" y="560">一天 0–6 次；两次至少隔 45 分钟</text>
+      <rect x="944" y="580" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="958" y="602">消耗类一天 1 次；同一件 3 天内不重复</text>
+      <rect x="944" y="622" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="958" y="644">连着三次同类 → 停一周</text>
+      <rect x="944" y="664" width="376" height="34" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="958" y="686">一轮只做一件；第二次直接拦下</text>
     </g>
-    <text x="944" y="700" font-size="13" fill="#78716c">额度是环境的边界，不写进人格；</text>
-    <text x="944" y="722" font-size="13" fill="#78716c">额度用完，只能来问你（1 天 1 次）。</text>
+    <text x="944" y="726" font-size="13" fill="#78716c">额度是环境的边界，不写进人格；</text>
+    <text x="944" y="748" font-size="13" fill="#78716c">额度用完，只能来问你（1 天 1 次）。</text>
   </g>
 
   <!-- 底部 -->

@@ -8,6 +8,7 @@ import {
   stanceLine,
   stanceSection,
   stanceSummary,
+  stanceDetail,
   STANCE_MAX,
   STANCE_PROMPT_MAX,
 } from '../lib/stance.js'
@@ -219,6 +220,10 @@ function refusal(o = {}) {
     object: o.object ?? '老大',
     quote: o.quote ?? o.what ?? '不叫。',
     reaction: o.reaction ?? null,
+    // 2026-11-18：来源与改口是 derive.js 算出来挂在元素上的，测试直接给。
+    refs: o.refs ?? [],
+    fromOwner: o.fromOwner ?? null,
+    revisedVerdict: o.revisedVerdict ?? null,
   }
 }
 
@@ -274,7 +279,9 @@ test('渲染只写「那次」，不带次数、不带数字', () => {
     ],
   }))
   const line = stanceLine(r[0])
-  assert.equal(line, '- 他让你叫老大，你没叫。他没收回，你也没改口。')
+  // 2026-11-18（用户 m01161）：不再写「他没收回」——那是替{T}安的动作。
+  // 只写事件流里真有的：他因此不好受/走开过（hurt/leave）。
+  assert.equal(line, '- 你说过「不叫」，这件事你没答应。那天之后你没改口。')
   assert.ok(!/[0-9]/.test(line))
   assert.ok(!line.includes('次'))
 })
@@ -299,7 +306,7 @@ test('「我绝不…」在前、同一件事的拒绝在后：两条都在，�
   assert.ok(r.every((s) => !s.changedFrom), '同向的两条谁也不是谁的「以前」')
   const text = stanceSection(r)
   assert.ok(text.includes('- 我绝不吃辣'), '她自己说的那句还在')
-  assert.ok(text.includes('- 他让你吃辣，你没答应。这件事你一直没改口。'))
+  assert.ok(text.includes('- 你说过「我不想吃辣」，这件事你没答应。这件事你一直没改口。'))
   assert.ok(!text.includes('改过口'))
 })
 
@@ -374,7 +381,7 @@ test('升格之后「你拒绝过」不再重复摆同一件事', () => {
     absenceDays: 0,
   })
   const text = sections.map((s) => s.text).join(String.fromCharCode(10))
-  assert.ok(text.includes('他让你叫老大，你没叫。'), '立场里写「那次」')
+  assert.ok(text.includes('你说过「不叫」，这件事你没答应。'), '立场里写「那次」')
   assert.ok(!text.includes('## 你拒绝过'), '同一件事不重复写两遍')
 })
 
@@ -408,6 +415,189 @@ test('清单排到第 9 条以后的拒绝没摆进「我站哪边」，就得�
 
   // 少一组判断，它是第 8 条：摆进「我站哪边」，「你拒绝过」照旧不重复
   const fits = doc(nevers(STANCE_PROMPT_MAX - 1))
-  assert.ok(fits.stand.includes('- 他让你叫老大，你没叫。这件事你一直没改口。'))
+  assert.ok(fits.stand.includes('- 你说过「不叫」，这件事你没答应。这件事你一直没改口。'))
   assert.equal(fits.refused, '')
+})
+
+// ---- 谁先提的：写在事件里，不是措辞里二选一（2026-11-18，加拿大反馈带出来的） ----
+// 旧句式把「他要求→她拒绝」当成所有拒绝的来路。她也会自己起念（刷到一条视频就不想去、
+// 学到一个东西就说不用），写成「他让你…」就是替她记了一件没发生的事。
+test('拒绝记了来源才写「他那天说过…」，没记就只写她自己的话', () => {
+  const withSource = stanceLine({
+    kind: 'refused',
+    object: '吃辣',
+    quote: '我不想吃辣',
+    fromOwner: { id: 'ev_h1', text: '今晚去吃火锅吧' },
+    heHeld: false,
+    hadReaction: false,
+  })
+  assert.equal(
+    withSource,
+    '- 他那天说过「今晚去吃火锅吧」，你说过「我不想吃辣」，这件事你没答应。这件事你一直没改口。',
+  )
+
+  // 没挂 refs：不替她补一个请求，只说她自己说过什么。
+  const own = stanceLine({ kind: 'refused', object: '去参加', quote: '我不去', heHeld: false, hadReaction: false })
+  assert.equal(own, '- 你说过「我不去」，这件事你没答应。这件事你一直没改口。')
+  assert.ok(!own.includes('他让你'), '没来源就不写「他让你」')
+})
+
+test('关系句只写事件里真有的：坚持、那天之后、过去了——不替他安「没收回」', () => {
+  const insist = stanceLine({
+    kind: 'refused',
+    object: '叫老大',
+    quote: '不叫',
+    fromOwner: { id: 'ev_h1', text: '叫一声老大' },
+    pushed: 'insist',
+    heHeld: true,
+    hadReaction: true,
+  })
+  assert.ok(insist.includes('又提过，你没改口。'), '2026-11-18（用户 m01161）：不写「没收回」')
+  assert.ok(!insist.includes('没收回'), '「{T}没收回」是我们替他安的动作，事件流里没有')
+  assert.ok(!/\d/.test(insist) && !insist.includes('次'), '只写「那次」不写次数')
+
+  const hurt = stanceLine({
+    kind: 'refused',
+    object: '叫老大',
+    quote: '不叫',
+    pushed: 'hurt',
+    heHeld: true,
+    hadReaction: true,
+  })
+  assert.ok(hurt.includes('那天之后你没改口。'))
+
+  // 他回过话，但不是坚持（leave / other）——一次松口不算一直站住。
+  const gone = stanceLine({
+    kind: 'refused',
+    object: '叫老大',
+    quote: '不叫',
+    fromOwner: { id: 'ev_h1', text: '叫一声老大' },
+    heHeld: false,
+    hadReaction: true,
+  })
+  assert.ok(gone.includes('后来那件事过去了。'))
+  assert.ok(!gone.includes('没收回'))
+})
+
+test('她本人推翻过的拒绝不再写进立场（省得文档里又有「我改过口」又有「一直没改口」）', () => {
+  const m = model({
+    refusals: [
+      refusal({ at: '2026-10-01T10:00:00Z', reaction: 'insist' }),
+      refusal({ at: '2026-10-08T10:00:00Z' }),
+      refusal({ at: '2026-10-09T10:00:00Z', revisedVerdict: 'refuted' }),
+    ],
+  })
+  const list = buildStances(m)
+  assert.equal(list.length, 1)
+  assert.equal(list[0].members.length, 2, '被推翻的那条不进成员')
+})
+
+test('来源只认 heard（他本人），群里那句不算「对她说的」', () => {
+  // derive.js 那边已经把 group 场景的 heard 滤掉了，这里锁的是 stance 只吃 fromOwner。
+  const plain = stanceLine({
+    kind: 'refused',
+    object: '吃辣',
+    quote: '我不想吃辣',
+    fromOwner: null,
+    heHeld: false,
+    hadReaction: false,
+  })
+  assert.ok(plain.startsWith('- 你说过「我不想吃辣」'))
+})
+
+test('引用里的话剪到 60 字以内，剪断处留「…」', () => {
+  // 2026-11-18（用户 m01161 第二条）：40 字会剪掉限定条件（「只在…的时候」），
+  // 读起来比原话更绝对；放到 60 字，剪断处补「…」让人看得出这是半句。
+  const long = stanceLine({
+    kind: 'refused',
+    object: '那件事',
+    quote: `我不想去${'那种地方'.repeat(30)}`,
+    fromOwner: { id: 'ev_h1', text: `你今晚能不能${'别这样'.repeat(20)}` },
+    heHeld: false,
+    hadReaction: false,
+  })
+  assert.ok(!long.includes('那种地方'.repeat(30)))
+  assert.ok(long.includes('那种地方'.repeat(10)), `40 字版本会把她前十个字的限定条件剪掉：${long}`)
+  assert.ok(long.includes('…'), '剪断了要留标记，否则像她只说了半句')
+  assert.ok(long.length < 260, `太长：${long.length}`)
+})
+
+test('同一天记两次不算「反复过」：要跨天、而且他真有过反应才升格', () => {
+  // 2026-11-18（用户 m01161 第五条）：两次都发生在同一天，多半是同一场对话里说了两遍，
+  // 不是「一直这样」；升格成立场要有跨天证据。
+  const sameDay = model({
+    refusals: [
+      refusal({ id: 's1', at: '2026-10-01T10:00:00Z', act: '', object: '吃辣', what: '我不想吃辣', quote: '我不想吃辣', reaction: 'insist' }),
+      refusal({ id: 's2', at: '2026-10-01T14:00:00Z', act: '', object: '吃辣', what: '我不想吃辣', quote: '我不想吃辣' }),
+    ],
+  })
+  assert.deepEqual(buildStances(sameDay), [], '同一天两次，还不到「我站住过」')
+
+  const crossDay = model({
+    refusals: [
+      refusal({ id: 'c1', at: '2026-10-01T10:00:00Z', act: '', object: '吃辣', what: '我不想吃辣', quote: '我不想吃辣', reaction: 'insist' }),
+      refusal({ id: 'c2', at: '2026-10-03T14:00:00Z', act: '', object: '吃辣', what: '我不想吃辣', quote: '我不想吃辣' }),
+    ],
+  })
+  assert.equal(buildStances(crossDay).length, 1, '跨天两次、且他坚持过，才升格')
+})
+
+// ---- 2026-11-18（用户 m01161）九条改动：并组、去重、可核对 ----
+
+test('并组要同一个动作：对象像但动作不同，是两件事（0.6 + act 一致）', () => {
+  // 「不叫老大」和「不喊老大」字面很像（similarity 0.6+），但一个是不叫、一个是不喊；
+  // 合成一条会写成「你说过「老大」」这种谁也对不上的话。
+  const m = model({
+    refusals: [
+      refusal({ id: 'a1', at: '2026-10-01T10:00:00Z', act: '叫', object: '老大', reaction: 'insist' }),
+      refusal({ id: 'a2', at: '2026-10-03T10:00:00Z', act: '叫', object: '老大' }),
+      refusal({ id: 'b1', at: '2026-10-01T10:00:00Z', act: '喊', object: '老大', reaction: 'insist' }),
+      refusal({ id: 'b2', at: '2026-10-04T10:00:00Z', act: '喊', object: '老大' }),
+    ],
+  })
+  const list = buildStances(m)
+  assert.equal(list.length, 2, '两个动作各成一条，不合并')
+  assert.deepEqual(list.map((s) => s.act).sort(), ['叫', '喊'])
+})
+
+test('同一句话被记成判断又记成拒绝：只留判断那条（近似逐字重复才去）', () => {
+  const m = model({
+    beliefs: [belief('我绝不吃辣', { id: 'b1' }), belief('我绝不吃辣', { id: 'b2', since: '2026-10-02' })],
+    refusals: [
+      refusal({ id: 'r1', at: '2026-10-05T10:00:00Z', what: '我绝不吃辣', quote: '我绝不吃辣', act: '', object: '吃辣', reaction: 'insist' }),
+      refusal({ id: 'r2', at: '2026-10-06T10:00:00Z', what: '我绝不吃辣', quote: '我绝不吃辣', act: '', object: '吃辣' }),
+      refusal({ id: 'r3', at: '2026-10-07T10:00:00Z', what: '我绝不吃辣', quote: '我绝不吃辣', act: '', object: '吃辣' }),
+    ],
+  })
+  const list = buildStances(m)
+  assert.deepEqual(list.map((s) => s.kind), ['never'], '同一条证据不写两遍')
+})
+
+test('措辞不同的同一件事：两条都留（一条是她说的，一条是她没做的）', () => {
+  const m = model({
+    beliefs: [belief('我绝不吃辣', { id: 'b1' }), belief('我绝不吃辣', { id: 'b2', since: '2026-10-02' })],
+    refusals: [
+      refusal({ id: 'r1', at: '2026-10-05T10:00:00Z', what: '我不想吃辣', quote: '我不想吃辣', act: '', object: '吃辣', reaction: 'insist' }),
+      refusal({ id: 'r2', at: '2026-10-06T10:00:00Z', what: '我不想吃辣', quote: '我不想吃辣', act: '', object: '吃辣' }),
+    ],
+  })
+  assert.deepEqual(buildStances(m).map((s) => s.kind).sort(), ['never', 'refused'])
+})
+
+test('her_stance 的明细：每条列出哪几次、哪几天来的，超出 8 条的标出来', () => {
+  const words = ['吃辣', '熬夜', '叫老大', '点外卖', '看恐怖片', '坐飞机', '喝酒', '早起', '开会']
+  const refusals = []
+  words.forEach((object, i) => {
+    refusals.push(refusal({ id: `r${i}a`, at: `2026-10-0${i + 1}T10:00:00Z`, act: '', object, what: `我不想${object}`, quote: `我不想${object}`, reaction: 'insist' }))
+    refusals.push(refusal({ id: `r${i}b`, at: `2026-10-1${i % 8}T10:00:00Z`, act: '', object, what: `我不想${object}`, quote: `我不想${object}` }))
+  })
+  const rows = stanceDetail(model({ refusals }))
+  assert.equal(rows.length, 9, '清单上的全给她看，包括排在 8 条后面的')
+  assert.equal(rows.filter((r) => r.shown).length, STANCE_PROMPT_MAX, '文档里只写前 8 条')
+  assert.equal(rows.at(-1).shown, false, '第 9 条排在后面，要标出来')
+  const first = rows[0]
+  assert.ok(first.members.length >= 2, '每一条都要列出它是由哪几次长出来的')
+  assert.match(first.members[0].id, /^r\d+a$/)
+  assert.match(first.members[0].at, /^\d{2}-\d{2}$/, '日期写成月日，按本地日历')
+  assert.ok(first.members[0].text.length > 0, '要带原话')
 })

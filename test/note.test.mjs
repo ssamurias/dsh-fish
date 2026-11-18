@@ -30,6 +30,7 @@ import {
   normalizeNote,
   isDue,
   daysBetween,
+  ageLabel,
   renderNotes,
   pickNudge,
   nudgeSeen,
@@ -59,7 +60,20 @@ function fakeCtx() {
   }
 }
 
-const note = (over = {}) => normalizeNote({ text: '一件事', created: '2026-11-01T00:00:00.000Z', ...over })
+/**
+ * 夹具按**本地**日历日造时刻。
+ *
+ * 便条里存的是 `toISOString()`，即 UTC 那一刻；而「最后动过几天」按**本地**那天算。
+ * 夹具若写死 `T00:00:00.000Z`，在 UTC-5 会落到前一天，「3 天前」就被算成「4 天前」
+ * （2026-11-18，加拿大反馈：`TZ=America/Toronto` 下三条便条测试红，改回中国时区就绿）。
+ * 用本地中午构造，同一个夹具在任何时区都表示同一天。
+ */
+const localAt = (day, hour = 12) => {
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(y, m - 1, d, hour).toISOString()
+}
+
+const note = (over = {}) => normalizeNote({ text: '一件事', created: localAt('2026-11-01'), ...over })
 
 test('文件名不与 session-notes.json 撞名', () => {
   assert.equal(NOTES_FILE, 'notes.json')
@@ -83,6 +97,39 @@ test('daysBetween 按本地日历日算，跨月也对', () => {
   assert.equal(daysBetween('2026-11-05', '2026-11-04'), -1, '将来是负数')
 })
 
+// 2026-11-18：加拿大（America/Toronto）报「便条说 2 天前，其实昨天」。
+// 根因是拿 ISO 串切前 10 个字（UTC 日期）当本地日：西半球晚上记的会算成第二天，
+// 东八区凌晨记的会算成前一天。下面两条盯着「本地日历日」这个口径，
+// 在 UTC-12 / UTC+14 的任何时区都该绿。
+test('「最后动过」按本地日历日算，不切 UTC 的前 10 个字（2026-11-18 加拿大反馈）', () => {
+  const now = new Date(2026, 10, 5, 12, 0) // 本地 11-05 中午
+  for (const hour of [0, 1, 12, 23]) {
+    const created = new Date(2026, 10, 4, hour, 30).toISOString()
+    assert.equal(ageLabel(created, now), '昨天', `本地 11-04 ${hour}:30 记的，到 11-05 就是昨天`)
+  }
+  // 本地 11-01 记的 → 4 天前；UTC 零点那一版夹具在 UTC-5 会算成 5 天
+  assert.equal(ageLabel(new Date(2026, 10, 1, 23, 30).toISOString(), now), '4 天前')
+})
+
+test('nudge 的 7 天冷却按本地日历日算，不切 UTC 的前 10 个字（同上）', () => {
+  // 本地 11-13 全天任意时刻记的都该是「11-13 那天」：24:00 边界两侧的 UTC 日期
+  // 分别落在前后两天，老写法（切 ISO）在东八区和西半球各错一头。
+  for (const hour of [0, 23]) {
+    const one = [note({ id: 'n1', created: new Date(2026, 10, 13, hour, 30).toISOString() })]
+    const label = `本地 11-13 ${hour}:30 记的`
+    assert.equal(pickNudge(one, new Date(2026, 10, 19, 12)), null, `${label}：第 6 天还不提`)
+    assert.equal(pickNudge(one, new Date(2026, 10, 20, 12))?.id, 'n1', `${label}：第 7 天提`)
+  }
+})
+
+test('醒来那行写的月日也按本地那天，不按 UTC（同上）', () => {
+  for (const hour of [0, 23]) {
+    const one = [note({ id: 'n1', text: '去 B 站说一句话', created: new Date(2026, 10, 12, hour, 30).toISOString() })]
+    const wake = renderNotes(one, new Date(2026, 10, 20, 12))
+    assert.match(wake, /11-12 你记着：去 B 站说一句话/, `本地 11-12 ${hour}:30 记的，行里就该写 11-12`)
+  }
+})
+
 test('没有到期的一张时，醒来那一段是空串', () => {
   assert.equal(renderNotes([], new Date(2026, 10, 4)), '')
   assert.equal(renderNotes(null, new Date(2026, 10, 4)), '')
@@ -96,7 +143,7 @@ test('没有到期的一张时，醒来那一段是空串', () => {
 })
 
 test('没写日子的：满 7 天才提一次，提过记 nshow 再等 7 天', () => {
-  const made = '2026-11-13T09:00:00.000Z'
+  const made = localAt('2026-11-13', 0)
   const one = [note({ id: 'n1', text: '去 B 站说一句话', created: made })]
   assert.equal(pickNudge(one, new Date(2026, 10, 19)), null, '第 6 天还不提')
   assert.equal(pickNudge(one, new Date(2026, 10, 20))?.id, 'n1', '第 7 天第一次提')
@@ -108,8 +155,8 @@ test('没写日子的：满 7 天才提一次，提过记 nshow 再等 7 天', (
 
 test('一次只提一张：最久没被提过的排前面，都提过就按上次提的先后轮换', () => {
   const list = [
-    note({ id: 'old', text: '早记的', created: '2026-11-01T00:00:00.000Z' }),
-    note({ id: 'new', text: '晚记的', created: '2026-11-05T00:00:00.000Z' }),
+    note({ id: 'old', text: '早记的', created: localAt('2026-11-01') }),
+    note({ id: 'new', text: '晚记的', created: localAt('2026-11-05') }),
   ]
   assert.equal(pickNudge(list, new Date(2026, 10, 20))?.id, 'old')
   const seen = new Map([['old', '2026-11-10'], ['new', '2026-11-05']])
@@ -118,8 +165,8 @@ test('一次只提一张：最久没被提过的排前面，都提过就按上�
 
 test('醒来的那段会带上没日子的一张，但不会一次摆好几张', () => {
   const list = [
-    note({ id: 'a', text: '去 B 站说一句话', created: '2026-11-01T00:00:00.000Z' }),
-    note({ id: 'b', text: '把那张图看完', created: '2026-11-02T00:00:00.000Z' }),
+    note({ id: 'a', text: '去 B 站说一句话', created: localAt('2026-11-01') }),
+    note({ id: 'b', text: '把那张图看完', created: localAt('2026-11-02') }),
   ]
   const text = renderNotes(list, new Date(2026, 10, 20))
   assert.match(text, /便条里有一张没写日子的/)
@@ -131,9 +178,9 @@ test('醒来的那段会带上没日子的一张，但不会一次摆好几张',
 
 test('提过的一张与划掉/放下的不再出现在醒来那段，满 7 天再提', () => {
   const list = [
-    note({ id: 'a', text: '提过的一张', created: '2026-11-01T00:00:00.000Z' }),
-    note({ id: 'b', text: '划掉的', created: '2026-11-01T00:00:00.000Z', status: 'done' }),
-    note({ id: 'c', text: '放下的', created: '2026-11-01T00:00:00.000Z', status: 'dropped' }),
+    note({ id: 'a', text: '提过的一张', created: localAt('2026-11-01') }),
+    note({ id: 'b', text: '划掉的', created: localAt('2026-11-01'), status: 'done' }),
+    note({ id: 'c', text: '放下的', created: localAt('2026-11-01'), status: 'dropped' }),
   ]
   const seen = new Map([['a', '2026-11-19']])
   assert.equal(renderNotes(list, new Date(2026, 10, 20), { seen }), '', '刚提过，且划掉/放下的不提')
@@ -412,8 +459,8 @@ test('重名时先划最早记下的那张，一次只划一张', async () => {
 test('「最早」看记下的时间，不看文件里的前后（文件允许人手改）', async () => {
   await withRoot(async (root) => {
     await writeNotes(root, [
-      note({ id: 'later', text: '交水费', created: '2026-11-03T00:00:00.000Z' }),
-      note({ id: 'earlier', text: '交水费', created: '2026-11-01T00:00:00.000Z' }),
+      note({ id: 'later', text: '交水费', created: localAt('2026-11-03') }),
+      note({ id: 'earlier', text: '交水费', created: localAt('2026-11-01') }),
     ])
     const { call } = herTool(root)
     assert.equal(await call({ text: '交水费', status: 'done' }), '[划掉了]')
@@ -510,9 +557,9 @@ test('名额只算还没关掉的：两百张划掉的压着，也还记得了�
     const many = Array.from({ length: NOTES_MAX }, (_, i) =>
       normalizeNote({
         text: `旧事${i}`,
-        created: '2026-10-01T00:00:00.000Z',
+        created: localAt('2026-10-01'),
         status: 'done',
-        closedAt: '2026-10-02T00:00:00.000Z',
+        closedAt: localAt('2026-10-02'),
       }),
     )
     await writeNotes(root, many)
@@ -527,7 +574,7 @@ test('名额只算还没关掉的：两百张划掉的压着，也还记得了�
 test('名额真满时还是拒绝，但拒绝里给她两条走得通的路（issue #53）', async () => {
   await withRoot(async (root) => {
     const many = Array.from({ length: NOTES_MAX }, (_, i) =>
-      normalizeNote({ text: `事${i}`, created: '2026-10-01T00:00:00.000Z' }),
+      normalizeNote({ text: `事${i}`, created: localAt('2026-10-01') }),
     )
     await writeNotes(root, many)
     const { call } = herTool(root)
@@ -571,7 +618,7 @@ test('翻桌子看得到划掉的和放下的，行里带日期和理由（issue
 test('翻不完就告诉她还剩，翻过头就说没有了，不报总数（issue #53）', async () => {
   await withRoot(async (root) => {
     const many = Array.from({ length: 25 }, (_, i) =>
-      normalizeNote({ text: `第${i + 1}件`, created: `2026-10-${String(i + 1).padStart(2, '0')}T00:00:00.000Z` }),
+      normalizeNote({ text: `第${i + 1}件`, created: localAt(`2026-10-${String(i + 1).padStart(2, '0')}`) }),
     )
     await writeNotes(root, many)
     const { call } = herTool(root)
@@ -761,7 +808,7 @@ test('在等的便条上桌：不进 nudge，行里写「在等」和最后动�
   const n = normalizeNote({
     text: '等他的回信',
     waiting: '他说周五前给答复',
-    created: '2026-11-04T00:00:00.000Z',
+    created: localAt('2026-11-04'),
   })
   const now = new Date(2026, 10, 5)
   const wake = renderNotes([n], now)
@@ -776,7 +823,7 @@ test('在等 + 到期日：两样都摆出来，不二选一', () => {
     text: '等他的回信',
     waiting: '他说周五前给答复',
     due: '2026-11-04',
-    created: '2026-11-01T00:00:00.000Z',
+    created: localAt('2026-11-01'),
   })
   const wake = renderNotes([n], new Date(2026, 10, 5))
   assert.match(wake, /在等：他说周五前给答复——等他的回信/)
@@ -816,8 +863,8 @@ test('在等的说明也能只改它：newText 不给，别的字不动', async 
 test('进展：坏数据不会拖垮一次唤醒，坏项直接丢掉', () => {
   const n = normalizeNote({
     text: '一件事',
-    created: '2026-11-01T00:00:00.000Z',
-    progress: [{ at: '2026-11-02T00:00:00.000Z', text: '第一步' }, { text: '' }, null, '乱七八糟'],
+    created: localAt('2026-11-01'),
+    progress: [{ at: localAt('2026-11-02'), text: '第一步' }, { text: '' }, null, '乱七八糟'],
   })
   assert.deepEqual(n.progress.map((p) => p.text), ['第一步'])
   assert.equal(normalizeNote({ text: '没进展的' }).progress.length, 0)

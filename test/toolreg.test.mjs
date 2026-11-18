@@ -30,9 +30,9 @@ import { FISH_TOOLS, HER_TOOLS, fishToolsNow, herToolsNow, herSceneToolsNow, reg
 import { withUseDuringRegistration } from '../lib/use.js'
 import { defineTool } from '../lib/tool.js'
 
-/** 1.0 起是这 15 个（`grep "name: '" lib/*.js` 对着数的）；1.0.4 加了 her_make / her_work。 */
+/** 1.0 起是这 15 个（`grep "name: '" lib/*.js` 对着数的）；1.0.4 加了 her_make / her_work；2026-11-18 加 her_stance。 */
 const ALL_TOOLS = [
-  'growth_commit', 'her_recall', 'her_diary', 'her_leave', 'her_note', 'her_appoint',
+  'growth_commit', 'her_recall', 'her_stance', 'her_diary', 'her_leave', 'her_note', 'her_appoint',
   'her_make', 'her_work',
   'bili_look', 'bili_watch', 'bili_sub', 'bili_speak', 'ask_owner', 'ask_pronoun', 'her_dream',
   'bring_back', 'her_say',

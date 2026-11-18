@@ -61,9 +61,9 @@ test('出图走服务端白名单路由，客户端不内联图', async () => {
   assert.ok(ob.includes('fileURLToPath(new URL(`../media/'), '必须从包内 media/ 读文件')
 
   const cl = await readFile(CLIENT, 'utf8')
-  assert.ok(cl.includes('`${API}/media/principle-loop.svg?v=20261114`'), '图一必须走 /media 路由')
-  assert.ok(cl.includes('`${API}/media/principle-memory.svg?v=20261114`'), '图二必须走 /media 路由')
-  assert.ok(cl.includes('`${API}/media/principle-drive.svg?v=20261114`'), '图三必须走 /media 路由')
+  assert.ok(cl.includes('`${API}/media/principle-loop.svg?v=20261118`'), '图一必须走 /media 路由')
+  assert.ok(cl.includes('`${API}/media/principle-memory.svg?v=20261118`'), '图二必须走 /media 路由')
+  assert.ok(cl.includes('`${API}/media/principle-drive.svg?v=20261118`'), '图三必须走 /media 路由')
   assert.ok(cl.includes('`${API}/media/feedback-qr.jpg`'), '反馈页二维码必须走 /media 路由，不引外链')
   assert.ok(!cl.includes('<svg'), '客户端里不许内联 SVG（会让 bundle 无谓变大）')
 })

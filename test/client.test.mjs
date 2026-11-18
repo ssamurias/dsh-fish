@@ -943,3 +943,23 @@ test('回家/请神「等核对」看 tampered，不再看一个响应里根本�
   assert.ok(src.includes('r?.tampered'), '请神同一套判据')
   assert.ok(src.includes('histDaysRef.current'), '历史天数走 ref，load 的闭包读不到新 state')
 })
+
+
+test('对话页综合分：A/B/C 三种公式平均，缺了退回上下文占用（PR #148，2026-11-18）', async () => {
+  const src = await readFile(CLIENT, 'utf8')
+  const server = await readFile(CLIENT.replace(/client\.js$/, 'session-pressure.js'), 'utf8')
+
+  assert.ok(src.includes('function pressureScoreOf(data)'), '要给胶囊和报表一个统一的取分函数')
+  assert.ok(src.includes('const raw = data?.compositeAverage'), '优先用服务端算好的综合分')
+  assert.ok(src.includes('raw == null ? NaN : Number(raw)'), '空值不能当 0 分（Number(null) === 0，2026-11-18 用户报 0 分）')
+  assert.ok(src.includes('live == null ? NaN'), '上下文占用为空时也不能显示 0 分')
+  assert.ok(server.includes('const compositeValues = [currentDiagnostic?.scores?.A'), '服务端取 A/B/C 三项')
+  assert.ok(server.includes('compositeAverage, updatedAt: Date.now()'), '综合分要随响应返回')
+  // 胶囊和第一屏读同一个分数，否则点开前后两个数对不上
+  assert.equal(src.split('pressureScoreOf(data)').length - 1, 4, '定义 + 胶囊/建议/第一屏三处读取')
+})
+
+test('胶囊用轻量请求，不触发历史房间分析（2026-11-18，用户 m04207）', async () => {
+  const src = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.ok(src.includes("&light=1"), '胶囊请求要标 light=1')
+})

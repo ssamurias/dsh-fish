@@ -714,3 +714,49 @@ test('tensions 一次调用与以前两次调用结果相同（前三条 + 总�
   assert.equal(m.tensions.length, 3, '摆出来的仍然是 3 条')
   assert.ok(m.tensionsTotal > 3, '总数要超过摆出来的 3 条')
 })
+
+// ---- 拒绝的来路：refs 指到他的那句话才记下来（2026-11-18，加拿大反馈带出来的） ----
+// 「是他先提的吗」不在措辞里猜：她挂过 refs、而且指到一条 heard（他本人说的、不是群里的），
+// 才算他先提。没挂就当她没记过——文档退回只写她自己的话。
+test('拒绝挂了 refs 指到 heard，就记下「他那天说过什么」', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_h', 'heard', 2, '今晚去吃火锅吧', { scene: 'desk' }),
+    ev('ev_r', 'refusal', 2, '我不想吃火锅。', { refs: ['ev_h'] }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
+  assert.equal(m.refusals.length, 1)
+  assert.deepEqual(m.refusals[0].refs, ['ev_h'], 'refs 要原样留给读取端')
+  assert.equal(m.refusals[0].fromOwner?.id, 'ev_h')
+  assert.equal(m.refusals[0].fromOwner?.text, '今晚去吃火锅吧')
+})
+
+test('refs 指到群里的那句，不算「他对她说的」', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_h', 'heard', 2, '今晚去吃火锅吧', { scene: 'group' }),
+    ev('ev_r', 'refusal', 2, '我不想吃火锅。', { refs: ['ev_h'] }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
+  assert.equal(m.refusals[0].fromOwner, null, '群场景的 heard 不是对她说的')
+})
+
+test('没挂 refs：fromOwner 是空的，读取端不会替她补一个请求', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_r', 'refusal', 2, '我不想去。'),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
+  assert.equal(m.refusals[0].fromOwner, null)
+  assert.deepEqual(m.refusals[0].refs, [])
+})
+
+test('revise 推翻那条拒绝：记 revisedVerdict，立场清单不再拿它当站住', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_r', 'refusal', 2, '我不想吃火锅。'),
+    ev('ev_v', 'revise', 3, '其实吃火锅也没那么糟。', { refs: ['ev_r'], verdict: 'refuted' }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 3 * DAY_MS })
+  assert.equal(m.refusals[0].revisedVerdict, 'refuted')
+})
