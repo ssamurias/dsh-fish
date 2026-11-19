@@ -16,8 +16,9 @@ import { join } from 'node:path'
 
 import {
   AT_SHOW_MAX, atScanDue, seenMentions, mentionsToday, repliedToOthers,
-  mentionUrl, scanMentions, renderMentions, recordMentions, markMentionsSeen,
+  mentionUrl, mentionReplyHint, scanMentions, renderMentions, recordMentions, markMentionsSeen,
 } from '../lib/at.js'
+import { mapMentionItem } from '../lib/bili.js'
 import { readEvents, appendEvent, paths } from '../lib/store.js'
 
 async function withRoot(fn) {
@@ -138,4 +139,96 @@ test('repliedToOthers：回主人的不计数', () => {
     { type: 'meta', text: 'creply:2026-11-11 BV1 z 3 other' },
   ]
   assert.equal(repliedToOthers(events), 2)
+})
+
+// ---------------------------------------------------------------- 2026-11-19：@ 的正文与编号
+
+// 真接口 2026-11-19 实打 /x/msgfeed/at 的形状：正文在 source_content，desc 不给，
+// uri 是 https 视频链接，楼根和被 @ 那条的编号在 native_uri 里。
+const atTop = {
+  id: 99001,
+  user: { mid: 123, nickname: '他' },
+  at_time: 1763000000,
+  item: {
+    type: 'reply', business: '评论', business_id: 1,
+    title: '某视频', uri: 'https://www.bilibili.com/video/BV1oTnZ6LEtc',
+    subject_id: 117507369209080, root_id: 0, target_id: 0,
+    source_id: 319944780465,
+    source_content: '@大肥鱼红豆 看得见吗',
+    native_uri: 'bilibili://video/117507369209080?page=0&comment_root_id=319944780465',
+    hide_reply_button: false,
+  },
+}
+
+test('mapMentionItem：正文读 source_content，BV 号 / 楼根 / 被回那条都带出来', () => {
+  const m = mapMentionItem(atTop)
+  assert.equal(m.uname, '他', '发话人名在 user.nickname')
+  assert.equal(m.sourceContent, '@大肥鱼红豆 看得见吗')
+  assert.equal(m.desc, '', 'desc 现在不给了')
+  assert.equal(m.bvid, 'BV1oTnZ6LEtc')
+  assert.equal(m.aid, 117507369209080)
+  assert.equal(m.parentRpid, 319944780465)
+  assert.equal(m.rootRpid, 319944780465, '顶层评论里 @：楼根就是被 @ 的那条')
+  assert.equal(m.hideReplyButton, false)
+  assert.equal(m.atTime, 1763000000)
+})
+
+test('mapMentionItem：楼中楼里 @ 时，楼根和被回那条是两个编号', () => {
+  const m = mapMentionItem({
+    id: 99002, user: { mid: 900, nickname: '路人' }, at_time: 1763000100,
+    item: {
+      type: 'reply', business: '评论', title: '另一个视频',
+      uri: 'https://www.bilibili.com/video/BV1Tq4H6rEPW',
+      subject_id: 117576742998336, source_id: 318700912625,
+      source_content: '这鱼好可爱',
+      native_uri: 'bilibili://video/117576742998336?page=0&comment_root_id=318442070833&comment_secondary_id=318700912625',
+    },
+  })
+  assert.equal(m.rootRpid, 318442070833)
+  assert.equal(m.parentRpid, 318700912625)
+  assert.equal(m.bvid, 'BV1Tq4H6rEPW')
+})
+
+test('mentionUrl / mentionReplyHint：链接落到那条评论，回它的参数直接给全', () => {
+  const top = mapMentionItem(atTop)
+  assert.equal(mentionUrl(top), 'https://www.bilibili.com/video/BV1oTnZ6LEtc#reply319944780465')
+  assert.match(mentionReplyHint(top), /bvid 填 BV1oTnZ6LEtc/)
+  assert.match(mentionReplyHint(top), /parentRpid 填 319944780465/)
+  assert.match(mentionReplyHint(top), /rootRpid 填 319944780465/, '楼根和被回那条是同一个也要写：回外楼的闸要看它')
+
+  const deep = mapMentionItem({
+    ...atTop,
+    item: {
+      ...atTop.item,
+      source_id: 318700912625,
+      native_uri: 'bilibili://video/117507369209080?page=0&comment_root_id=318442070833&comment_secondary_id=318700912625',
+    },
+  })
+  assert.match(mentionReplyHint(deep), /rootRpid 填 318442070833/)
+  assert.match(mentionReplyHint(deep), /parentRpid 填 318700912625/)
+  assert.equal(mentionReplyHint({ bvid: 'BV1xx' }), '', '没有编号就不给这句，省得她照着试')
+})
+
+test('scanMentions：正文取 source_content，链接带上那条评论', async () => {
+  await withRoot(async (root) => {
+    const mapped = mapMentionItem(atTop)
+    const r = await scanMentions({
+      root,
+      client: { mentions: async () => ({ ok: true, code: 0, data: { items: [mapped] } }) },
+      events: [],
+      owners: new Set([123]),
+    })
+    assert.equal(r.items[0].text, '@大肥鱼红豆 看得见吗')
+    assert.equal(r.items[0].url, 'https://www.bilibili.com/video/BV1oTnZ6LEtc#reply319944780465')
+  })
+})
+
+test('renderMentions：每条下面都给出回它的参数', () => {
+  const txt = renderMentions([
+    { fromOwner: true, uname: '他', title: '某视频', text: '来看这个', url: '', bvid: 'BV1xx', parentRpid: 5, rootRpid: 5 },
+    { fromOwner: false, uname: '路人', title: '', text: '好可爱', url: '', bvid: 'BV1yy', parentRpid: 8, rootRpid: 3 },
+  ])
+  assert.equal((txt.match(/要回这一条：bili_speak/g) ?? []).length, 2)
+  assert.match(txt, /bvid 填 BV1yy/)
+  assert.match(txt, /rootRpid 填 3/)
 })

@@ -423,3 +423,123 @@ test('postReply：额度满了、又没有可能是他的号时，探测之前�
     assert.match((await creplies(root)).pop(), / owner$/)
   })
 })
+
+// ---------------------------------------------------------------- 5. 别人的楼里 @ 她（2026-11-19）
+
+test('postReply：她没在这个视频下说过话，别人在楼里 @ 她，也能回到那条下面', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root)
+    await writeOwner({ mid: 555, account: { mid: 999 } }, root)
+    // 她一条评论都没有：楼 7777 是别人的，8888 那条挂在里面
+    const fake = fakeBili({ threads: { 7777: { mid: 900, replies: [{ rpid: 8888, mid: 900, message: '看得见吗' }] } } })
+    const r = await postReply({
+      root, client: realClient(fake), bvid: 'BV1', rootRpid: 7777, parentRpid: 8888, text: '看得见。', dateKey: dk,
+    })
+    assert.equal(r.ok, true)
+    assert.deepEqual(fake.posts(), [[7777, 8888]], '回到被 @ 的那条下面，不是她自己的楼')
+    assert.match((await creplies(root)).pop(), /^creply:\S+ BV1 7777 8888$/)
+  })
+})
+
+test('postReply：别人在顶层评论里 @ 她（楼根就是被回那条），也发得出去', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root)
+    await writeOwner({ mid: 555, account: { mid: 999 } }, root)
+    const fake = fakeBili({ threads: { 5555: { mid: 900, replies: [] } } })
+    const r = await postReply({
+      root, client: realClient(fake), bvid: 'BV1', rootRpid: 5555, parentRpid: 5555, text: '看得见。', dateKey: dk,
+    })
+    assert.equal(r.ok, true)
+    assert.deepEqual(fake.posts(), [[5555, 5555]])
+  })
+})
+
+test('postReply：别人的楼里那条是他写的，额度满了也放行并记 owner；是陌生人就挡住', async () => {
+  // 是「他」：额度 0 也照样能回
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root, { replyPerDay: 0 })
+    await writeOwner({ mid: 555, account: { mid: 999 } }, root)
+    const fake = fakeBili({ threads: { 7777: { mid: 555, replies: [{ rpid: 8888, mid: 555, message: '看得见吗' }] } } })
+    const r = await postReply({
+      root, client: realClient(fake), bvid: 'BV1', rootRpid: 7777, parentRpid: 8888, text: '看得见。', dateKey: dk,
+    })
+    assert.equal(r.ok, true)
+    assert.match((await creplies(root)).pop(), / owner$/)
+  })
+
+  // 是陌生人：额度 0，挡住，一条都不发
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root, { replyPerDay: 0 })
+    await writeOwner({ mid: 555, account: { mid: 999 } }, root)
+    const fake = fakeBili({ threads: { 7777: { mid: 900, replies: [{ rpid: 8888, mid: 900, message: '看得见吗' }] } } })
+    const r = await postReply({
+      root, client: realClient(fake), bvid: 'BV1', rootRpid: 7777, parentRpid: 8888, text: '看得见。', dateKey: dk,
+    })
+    assert.equal(r.ok, false)
+    assert.match(r.why, /今天回够了/)
+    assert.deepEqual(fake.posts(), [])
+  })
+})
+
+test('postReply：楼根对不上、那条也不在楼里时，不硬发到别人楼下', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root)
+    await writeOwner({ mid: 555, account: { mid: 999 } }, root)
+    // 她在这个视频下没说过话，给的楼根又查不到：只能拒，不能猜一楼发出去
+    const fake = fakeBili({ threads: {} })
+    const r = await postReply({
+      root, client: realClient(fake), bvid: 'BV1', rootRpid: 9999, parentRpid: 8888, text: '嗯', dateKey: dk,
+    })
+    assert.equal(r.ok, false)
+    assert.match(r.why, /还没在那个视频下说过话/)
+    assert.deepEqual(fake.posts(), [])
+  })
+})
+
+// 2026-11-19 二修：顶层评论里 @ 她时楼根 == 被回那条，提示行曾经因为「一样就不写」
+// 只给了 parentRpid；她在这个视频下没说过话时就是这么被拒的。现在只给 parent 也能回。
+test('postReply：只给了 parentRpid 的顶层 @ 也回得出去（那条自己就是楼根）', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root)
+    await writeOwner({ mid: 555, account: { mid: 999 } }, root)
+    const fake = fakeBili({ threads: { 8888: { mid: 900, replies: [] } } })
+    const r = await postReply({ root, client: realClient(fake), bvid: 'BV1', parentRpid: 8888, text: '看得见。', dateKey: dk })
+    assert.equal(r.ok, true)
+    assert.deepEqual(fake.posts(), [[8888, 8888]], '拿被回那条当楼根，回到它下面')
+    assert.match((await creplies(root)).pop(), /^creply:\S+ BV1 8888 8888$/)
+  })
+})
+
+test('postReply：只给 parentRpid、而那条是楼中楼时，不瞎猜楼根，照旧拒', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root)
+    await writeOwner({ mid: 555, account: { mid: 999 } }, root)
+    // 楼中楼当 root 传给接口是「没有该评论」：拿不到楼根就当查不到，一条都不发
+    const fake = fakeBili({ threads: {} })
+    const r = await postReply({ root, client: realClient(fake), bvid: 'BV1', parentRpid: 8888, text: '嗯', dateKey: dk })
+    assert.equal(r.ok, false)
+    assert.match(r.why, /还没在那个视频下说过话/)
+    assert.deepEqual(fake.posts(), [])
+  })
+})
+
+test('postReply：登录号不知道时，顶层 @ 也不会把外楼楼主当成她自己', async () => {
+  await withRoot(async (root) => {
+    const dk = dateKey()
+    await enableComment(root)
+    // owner 没记 account.mid，cookie 里也没有 DedeUserID：loginMid 是 0。
+    // 外楼的楼主是被 @ 的那个人——这里若退回「楼主就是她」，每一条顶层 @ 都会被拒。
+    await writeOwner({ mid: 555, nickname: '他', cookie: 'SESSDATA=x; bili_jct=y' }, root)
+    const fake = fakeBili({ threads: { 8888: { mid: 900, replies: [] } } })
+    const r = await postReply({ root, client: realClient(fake), bvid: 'BV1', rootRpid: 8888, parentRpid: 8888, text: '看得见。', dateKey: dk })
+    assert.equal(r.ok, true)
+    assert.deepEqual(fake.posts(), [[8888, 8888]])
+  })
+})
