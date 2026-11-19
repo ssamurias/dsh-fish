@@ -312,6 +312,31 @@ test('compactWake：没有会话 / 宿主拒绝，都只返回 false，不抛', 
   assert.match(logs.join('\n'), /missing 7/)
 })
 
+test('compactWake：这段已经落在别人的折叠里 → onFail 说 contended，文案说清楚是让位', async () => {
+  const logs = []
+  const fails = []
+  const contended = {
+    append() {
+      throw new Error('surface replace: sourceEventSeqs must include every shadowed surface node; missing 7')
+    },
+  }
+  const ok = await compactWake(
+    contended,
+    { startSeq: 1, endSeq: 2, sourceEventSeqs: [1] },
+    { log: (a, b) => logs.push(`${a}|${b}`), onFail: (why) => fails.push(why) },
+  )
+  assert.equal(ok, false)
+  assert.deepEqual(fails, ['contended'])
+  assert.match(logs.join('\n'), /落在别人的折叠里/, '不是插件坏了，是这段没省下来')
+  assert.match(logs.join('\n'), /missing 7/, '宿主原文留着，排查时知道少了几号节点')
+
+  // 别的拒绝原因不能误报成「让位」：那样真出问题时反而看不出来
+  const fails2 = []
+  const other = { append() { throw new Error('boom') } }
+  await compactWake(other, { startSeq: 1, endSeq: 2, sourceEventSeqs: [1] }, { onFail: (why) => fails2.push(why) })
+  assert.deepEqual(fails2, ['rejected'])
+})
+
 test('「没什么要说的」不算开口：短、开头就交代', () => {
   // 2026-11-05（用户 m02937）真机原话
   assert.equal(looksLikeNothingSaid('这一轮没什么要说的。今天想说的话，一小时前已经说完了。'), true)

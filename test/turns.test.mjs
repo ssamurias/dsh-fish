@@ -1150,6 +1150,70 @@ test('认不出来源：同一个 kind 连着丢十条，日志也只留一行',
   }
 })
 
+test('插件用自定义 kind 注入（万卷的 wanjuan-nudge）：判据不动，但日志要留一行', async () => {
+  // 2026-11-20（万卷/识海适配）。万卷的 80% 水位提醒带 `source.kind:'wanjuan-nudge'`，
+  // 两张表都没它，兜底当人——这条判据是 #18 定下的方向，不能为了兼容改宽/改窄。
+  // 代价是她会多算一轮「他来过」，所以至少日志里要查得到是哪个 kind 干的。
+  const root = await tmpRoot()
+  const lines = []
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: (...a) => lines.push(a.join(' ')) })
+    try {
+      ctx.emit('session/event', session('s-fish'), {
+        type: 'user/message',
+        data: {
+          id: 'nudge-1',
+          role: 'user',
+          content: [{ type: 'text', text: '上下文已经用掉八成，可以压一下了。' }],
+          source: { kind: 'wanjuan-nudge', form: 'nudge' },
+        },
+      })
+      ctx.emit('session/event', session('s-fish'), TURN_END)
+      await settled()
+
+      // 判据没改：外渠道照旧算他来过（seen 要写），否则 #18 那条路会断
+      const { events } = await readEvents(root)
+      const seen = events.filter((e) => e.type === 'meta' && String(e.text).startsWith('seen:'))
+      assert.equal(seen.length, 1, '兜底还是当人——这是判断，不是这次要改的东西')
+
+      const about = lines.filter((l) => l.includes('这个来源不认得'))
+      assert.equal(about.length, 1, '多算一轮可以，但日志里一个字都没有就不行')
+      assert.match(about[0], /wanjuan-nudge/)
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+test('桥的 kind（qq）不报「这个来源不认得」：那是文档里写明的那条路', async () => {
+  const root = await tmpRoot()
+  const lines = []
+  try {
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: (...a) => lines.push(a.join(' ')) })
+    try {
+      ctx.emit('session/event', session('s-qq'), {
+        type: 'user/message',
+        data: {
+          id: 'qq-1',
+          role: 'user',
+          content: [{ type: 'text', text: '桥接来的话' }],
+          source: { kind: 'qq' },
+        },
+      })
+      await settled()
+      assert.equal(lines.filter((l) => l.includes('这个来源不认得')).length, 0, '正常桥接不能十分钟一行噪音')
+    } finally {
+      off()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
 test('便条卡片（kind user + fish:note）：不算他来过，也不打「认不出来源」', async () => {
   const root = await tmpRoot()
   const lines = []
