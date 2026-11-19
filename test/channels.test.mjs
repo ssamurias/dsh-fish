@@ -13,7 +13,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -180,6 +180,50 @@ test('映射文件坏了不许丢消息：读成空表，投递照常走建新�
 
 test('房间映射有上限，不会无限长', () => {
   assert.ok(typeof CHANNELS_MAX === 'number' && CHANNELS_MAX > 0)
+})
+
+test('映射上限是 200 间，不是 40（2026-11-19，用户 m02608）', () => {
+  assert.equal(CHANNELS_MAX, 200, '多少群同时活跃都不该被硬砍到 40 间')
+})
+
+test('闲置超过 30 天的房间记录会被回收，房间本身不动', async () => {
+  const root = await tmpRoot()
+  try {
+    await mkdir(root, { recursive: true })
+    const old = '2026-09-01T00:00:00.000Z'
+    await writeFile(channelsPath(root), JSON.stringify({
+      version: 1,
+      list: [{
+        key: 'qq-group:old', scene: 'group', sessionId: 's-old', title: '老群',
+        at: old, lastAt: old, bornAt: old,
+      }],
+    }), 'utf8')
+
+    const r = await saveChannel(root, { channel: 'qq-group:new', scene: 'group', sessionId: 's-new' })
+    assert.equal(r.ok, true)
+    const list = JSON.parse(await readFile(channelsPath(root), 'utf8')).list
+    assert.deepEqual(list.map((x) => x.key), ['qq-group:new'], '三十天没说话的记录该回收，免得映射越滚越长')
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('同时活跃的渠道超过上限时，只丢最久没说话的旧记录', async () => {
+  const root = await tmpRoot()
+  try {
+    await mkdir(root, { recursive: true })
+    const fresh = new Date().toISOString()
+    const list = Array.from({ length: CHANNELS_MAX + 20 }, (_, i) => ({
+      key: `qq-group:k${i}`, scene: 'group', sessionId: `s${i}`, title: `群${i}`,
+      at: fresh, lastAt: fresh, bornAt: fresh,
+    }))
+    await writeFile(channelsPath(root), JSON.stringify({ version: 1, list }), 'utf8')
+
+    const r = await saveChannel(root, { channel: 'qq-group:newest', scene: 'group', sessionId: 's-newest' })
+    assert.equal(r.ok, true)
+    const after = JSON.parse(await readFile(channelsPath(root), 'utf8')).list
+    assert.equal(after.length, CHANNELS_MAX, '硬上限仍然要兜住，别让文件无限长')
+    assert.ok(after.some((x) => x.key === 'qq-group:newest'), '刚说话的这间必须在')
+    assert.ok(!after.some((x) => x.key === 'qq-group:k0'), '丢的是最久没说话的那头')
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
 
 // ------------------------------------------------------------------ talkmem 分桶
