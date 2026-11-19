@@ -12,7 +12,9 @@ import {
   disarmHandoff,
   handoffArmed,
   handoffLimit,
+  handoffShown,
   handoffTextSync,
+  markHandoffShown,
   renderHandoff,
   resetHandoff,
 } from '../lib/handoff.js'
@@ -104,6 +106,23 @@ test('这一轮要不要摆：arm → armed → disarm', () => {
   assert.equal(handoffArmed('s2'), false, '按会话记，别的房间不沾')
   disarmHandoff('s1')
   assert.equal(handoffArmed('s1'), false)
+})
+
+test('「她看到了」要单独记：没摆出来、没进上下文，结账时不许清 carry（2026-11-19，外部反馈）', () => {
+  resetHandoff()
+  armHandoff('s1')
+  assert.equal(handoffShown('s1'), false, '刚认领还没组装 prompt，不算看到')
+  markHandoffShown('s1')
+  assert.equal(handoffShown('s1'), true)
+  assert.equal(handoffShown('s2'), false, '别的房间不沾')
+
+  // 下一轮重新认领要把上一轮的「看到」清掉——否则第二轮没摆也会被当成看到
+  armHandoff('s1')
+  assert.equal(handoffShown('s1'), false)
+
+  markHandoffShown('s1')
+  disarmHandoff('s1')
+  assert.equal(handoffShown('s1'), false, '结完连这一笔一起撤')
 })
 
 test('buildHandoff 从盘上读便条、约定和原话', () => withRoot(async (root) => {

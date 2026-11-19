@@ -57,6 +57,7 @@ import {
   trimToolDocs,
 } from '../lib/identity.js'
 import { legacySelfDocPath, selfDocPath } from '../lib/selfdoc.js'
+import { armHandoff, disarmHandoff, handoffShown, resetHandoff } from '../lib/handoff.js'
 import { paths } from '../lib/store.js'
 import { DEFAULTS } from '../lib/settings.js'
 import { BELIEF_SHOWN, SELF_DOC_BUDGET } from '../lib/persona.js'
@@ -169,6 +170,39 @@ test('attachIdentity：挂六段——交接页 + 身份 + 这一次的处境（
   assert.match(filled, /用 her_recall 翻/)
   assert.doesNotMatch(filled, /\d/, '「不吃状态」：不许报「你还有 N 条未完成」')
   assert.ok(!filled.includes('{T}'), '挂上来的段不经过 persona 出口，自己就得把称呼填掉')
+})
+
+// 2026-11-19（外部反馈）：光「他开口了」不算数——他插进还没结束的叫醒轮次时，
+// 宿主不会为这一句再组装 prompt，那一页根本没进她的上下文。所以身份段真把页面
+// 读出来时要单独记一笔，结账（turns.js）按这一笔决定要不要清 home.json 里的 carry。
+test('交接页段：真读出页面才记「她看到了」，没认领或没页面都不记', () => {
+  resetIdentityCache()
+  resetHandoff()
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  fs.writeFileSync(selfDocPath(root), '我是她', 'utf8')
+  fs.writeFileSync(
+    join(paths(root).root, 'home.json'),
+    JSON.stringify({ wsId: 'ws', sessionId: 's-h', carry: '## 上次停在这\n- 旧话' }),
+    'utf8',
+  )
+  const calls = []
+  const agent = {
+    session: { header: { id: 's-h' } },
+    ctx: { systemPrompt: { section: (o) => calls.push(o) } },
+  }
+  attachIdentity(agent, root)
+  const handoff = calls.find((c) => c.name === HANDOFF_SECTION)
+  assert.ok(handoff, '交接页段要挂上')
+  assert.equal(handoff.text(), '', '没认领就不摆')
+  assert.equal(handoffShown('s-h'), false, '没摆出来就不算看到')
+
+  armHandoff('s-h')
+  assert.match(handoff.text(), /旧话/, '认领之后读得到那页')
+  assert.equal(handoffShown('s-h'), true, '真读出来了才记一笔')
+
+  disarmHandoff('s-h')
+  assert.equal(handoffShown('s-h'), false, '结完连这一笔一起撤')
 })
 
 test('attachIdentity：手边有什么这一段不能漏字面量 {T}（issue #137，2026-11-14）', () => {

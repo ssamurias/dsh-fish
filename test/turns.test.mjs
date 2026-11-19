@@ -32,6 +32,7 @@ import { appendEvent, readEvents, writeAtomic, paths } from '../lib/store.js'
 import { recentExchanges } from '../lib/talkmem.js'
 import { saveChannel } from '../lib/channels.js'
 import { setWakeSection, getWakeSection, clearWakeSection } from '../lib/identity.js'
+import { armHandoff, handoffArmed, markHandoffShown, resetHandoff } from '../lib/handoff.js'
 import { deriveSelf } from '../lib/derive.js'
 
 const HER_SESSION = 's-her'
@@ -1627,6 +1628,10 @@ test('rotatedTo 那条隔多久说话都认，carry 也留着', async () => {
     const off = registerTurns(ctx, { root, log: () => {} })
     try {
       ctx.emit('session/event', session('s-new-1'), humanMsg('三个钟头后我才搬过来'))
+      // 这一页是在宿主组装 system prompt 时被身份段读出来的（identity.js 记一笔）。
+      // 这一条守「看到了就撤」；没进上下文的情形见下一条。
+      await waitFor(async () => handoffArmed('s-new-1'))
+      markHandoffShown('s-new-1')
       ctx.emit('session/event', session('s-new-1'), TURN_END)
       const h = await waitFor(async () => {
         const st = await homeStatus(root)
@@ -1646,6 +1651,51 @@ test('rotatedTo 那条隔多久说话都认，carry 也留着', async () => {
       off()
     }
   } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  }
+})
+
+// 2026-11-19（外部反馈，真机 10:51:22 换房、10:51:48 第一句）：
+// 他第一句落在还没结束的叫醒轮次里，宿主不会为它再组装一次 system prompt——那一页
+// 根本没进她的上下文；旧写法在结账时无条件清 carry，10:53:30 她再问「？」时页面已经没了。
+// 现在只有身份段真读出过（handoffShown）才清；没读到的留着，下一轮他开口再摆一次。
+test('交接页没进她的上下文：这一轮结完不许清 carry，下一轮再摆', async () => {
+  const root = await tmpRoot({
+    rotatedAt: new Date(Date.now() - 60_000).toISOString(),
+    carry: '## 上次停在这\n- 旧话',
+  })
+  try {
+    await writeCfg(root, { chat: { rotateAfter: 40 } })
+    const { ctx } = fakeCtx()
+    const off = registerTurns(ctx, { root, log: () => {} })
+    try {
+      ctx.emit('session/event', session(HER_SESSION), humanMsg('你前天说的那本书呢'))
+      await waitFor(async () => handoffArmed(HER_SESSION))
+      ctx.emit('session/event', session(HER_SESSION), TURN_END)
+      const first = await waitFor(async () => {
+        const st = await homeStatus(root)
+        return st.turns > 0 ? st : null
+      })
+      assert.equal(first.turns, 1, '轮次照常结')
+      let raw = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+      assert.equal(raw.carry, '## 上次停在这\n- 旧话', '没进上下文就不能清——这一轮她根本没看到')
+      assert.equal(handoffArmed(HER_SESSION), false, '这一轮结完照常撤开关，下一轮他开口再认领')
+
+      // 下一轮他再开口：这一回宿主真组装了 prompt（身份段把页面读出来）。看到之后才撤。
+      ctx.emit('session/event', session(HER_SESSION), humanMsg('你看到我说的了吗'))
+      await waitFor(async () => handoffArmed(HER_SESSION))
+      markHandoffShown(HER_SESSION)
+      ctx.emit('session/event', session(HER_SESSION), TURN_END)
+      const gone = await waitFor(async () => {
+        const r = JSON.parse(await readFile(join(paths(root).root, 'home.json'), 'utf8'))
+        return 'carry' in r ? null : r
+      })
+      assert.equal(gone.carry, undefined, '她真看到之后才撤')
+    } finally {
+      off()
+    }
+  } finally {
+    resetHandoff()
     await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
   }
 })
