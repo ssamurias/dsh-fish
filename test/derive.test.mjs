@@ -155,6 +155,28 @@ test('名字后面没有分隔符不许截；「就叫/改成」带冒号能定�
   assert.equal(pickName('那就叫外卖'), null)
   assert.equal(pickName('把颜色改成蓝色'), null)
 
+  // 2026-11-19（用户转来外部报告）：「名字/称呼改成」前面必须站的是人。
+  // 内省自己、给规矩/便条/装置起名的那几句，不能认成「称呼定下来了」。
+  for (const s of [
+    '哥哥让我把插件里那条人设的名字改成「鱼丸」',
+    '那条规矩的名字改成「换路记录」',
+    '给这条便条的名字改成「A」',
+    '把这个装置的名字改成「开灯」',
+  ]) assert.equal(pickName(s), null, s)
+  // 指人的那几句照收，而且仍是高置信
+  assert.equal(pickName('他的名字改成「老张」'), '老张')
+  assert.equal(pickName('把你的名字改成「老张」'), '老张')
+  assert.deepEqual(pickNameHit('他的名字定为阿岸'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('以后你的称呼改成阿岸'), { name: '阿岸', confident: true })
+
+  // 整条链路：先说对「哥哥」，再说那句内省的话——不能把它覆盖掉
+  const evsGive = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_ok', 'utterance', 2, '我就叫你哥哥吧。'),
+    ev('ev_bad', 'utterance', 3, '哥哥让我把插件里那条人设的名字改成「鱼丸」。'),
+  ]
+  assert.equal(deriveSelf(evsGive, { now: T0 + 3 * DAY_MS }).name, '哥哥')
+
   // 整条链路：先误抽「里取」，再说「那就叫：阿辰」，后者高置信覆盖
   const evs = [
     ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
