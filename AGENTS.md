@@ -134,6 +134,10 @@ POST /dsh-fish/say
 
 **群房会轮换。** 默认一间群房用满 **7 天**换新的（`config.rooms.groupRotateDays`，`0` = 不换）：旧房改名成「… YYYY-MM-DD 之前」留在侧栏，新房从当天重新算天数。200 条上下文对热闹的群不够用，所以按天而不是按轮数。
 
+**`channel` 的名字要稳定。** 同一个群、同一个人每次都传同一个名字（`qq-group:<群号>`、`qq:dm:<QQ号>` 这种），**别带消息 id、时间戳、序号**——名字变了就是另一间房，插件会老老实实再建一间。插件把名字截到 **120 字**（`lib/channels.js` 的 `KEY_MAX`）；如果桥把一整段 JSON 当名字，两条只在 120 字之后不同的渠道会被并成同一间。
+
+**同时挂很多群时。** `channels.json` 最多记 **200 间房**（`CHANNELS_MAX`），并且**只回收闲置超过 30 天的记录**——平时不按说话多少砍人。真的超过 200 条时按「最久没说话」丢掉旧的，那个群下次说话就会重新建一间房、多发一次唤醒。群特别多时，把不常看的群并进书房（`room: 'house'`）比调这个上限有效。
+
 
 启动前可以先探一句：
 
@@ -143,6 +147,29 @@ GET /dsh-fish/whoami
 ```
 
 `writable: false` 表示这个数据目录已被另一个插件实例占着——桥看到就该停手，不要再起进程。`root` 用来判断"是不是同一个家"。
+
+**⚠️ 外部进程直接打 `/dsh-fish/*` 会被挡（2026-11-19 实测确认）。**上面那个口子挂在宿主的 webServer 上，每条路由都过 `connection.requestRejection()`：
+
+- 它第一关看 Host 头（回环地址或 App 登记的地址才放行）；
+- 第二关要一枚**用本次启动的 secret 签名**的 cookie。那枚 cookie 是桌面端进程内 `GET /connect?token=<launchToken>` 换出来、只贴在自己窗口请求上的（`app.asar` 的 `lib/main.js` 里 `set-cookie` 之后 `headers.set("cookie", …)`），launchToken 是进程级随机值，**外部进程拿不到**；
+- 所以一个不在 App 里跑的桥，每个请求都是 **401**（1.0.5 及更早的插件把它错写成 403 + `forbidden`，看起来像"被禁"，其实只是"没认出来"）。
+
+外部桥有两条路，**推荐第二条**：
+
+**(a) 打开插件自带的本机投递口（推荐）。** 把 `config.bridge.port` 设成一个端口（`0` = 关，**默认就是关**），插件会在 `127.0.0.1:<port>` 上另起一个小服务，把同一份 `/say`、`/whoami` 挂上去，**不经过宿主的任何一条路由**：
+
+```
+GET  http://127.0.0.1:<port>/whoami   → 同上的字段，另加 bridge（现取的投递口地址，没开是空串）
+POST http://127.0.0.1:<port>/say      → 字段与 POST /dsh-fish/say 完全一样
+```
+
+它自己守四条边：绑 `127.0.0.1`（外网连不进来）、**校验 Host 头**（挡 DNS rebinding）、**只认本机程序、不认浏览器**（带 `Origin` 头的一律 403，`Sec-Fetch-Site` 是 `cross-site`/`same-site` 也拒；写入类请求必须 `content-type: application/json`，不让 `text/plain` 那种「简单请求」连预检都省掉——不加这几条，任何网页都能直接 fetch 到这个端口，以他的名义跟她说话）、只有那两条路（其余 404）。**没有认证**：够得着这个端口的本机程序照样能说话，所以默认关着，谁接桥谁自己开。
+
+开了之后在设置页「上网」那一页最上面能看到当前地址（`GET http://127.0.0.1:<port>/whoami` 也回 `bridge` 字段），改端口存完就生效，不用重启。
+
+**(b) 自己带 cookie 打宿主端口。** 读 `~/.dsh/.credentials.yaml` 里 `client-connection/browser-session` 的 `payload.secret`，按 `base64url(sha256(authority))` 拼出 cookie 名 `dsh-auth-<...>`，值是 `v1.<base64url(payload)>.<base64url(hmac-sha256(secret, body))>`，`payload` 形如 `{version:1, authority:'127.0.0.1:<port>', issuedAt, expiresAt}`。这条路实测能通（2026-11-19 验过），但它依赖宿主的密钥布局，宿主换个存法就断——**能跑，但别推荐**。
+
+不管走哪条：**不要用浏览器直接打开 `http://127.0.0.1:<App 端口>/dsh-fish`**，那里永远是 401/403，跟插件本身好不好没有关系。
 
 **桥那边怎么实现是桥的事**；我们这边只保证上面这几个字段能收、能落到正确的地方。
 
