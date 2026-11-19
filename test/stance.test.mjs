@@ -9,6 +9,8 @@ import {
   stanceSection,
   stanceSummary,
   stanceDetail,
+  renderDetail,
+  uncountedRecords,
   STANCE_MAX,
   STANCE_PROMPT_MAX,
 } from '../lib/stance.js'
@@ -600,4 +602,42 @@ test('her_stance 的明细：每条列出哪几次、哪几天来的，超出 8 
   assert.match(first.members[0].id, /^r\d+a$/)
   assert.match(first.members[0].at, /^\d{2}-\d{2}$/, '日期写成月日，按本地日历')
   assert.ok(first.members[0].text.length > 0, '要带原话')
+})
+
+// 2026-11-20（用户反馈）：清单空着时不能说一句「还没有站住过的地方」就完——
+// 她记过的话原样摆出来。阈值、次数、四道门一个字都不进去（她不能读自己的设定）。
+test('her_stance 空着时：把她记过的话原样摆出来，不写阈值与阶段', () => {
+  const m = model({
+    beliefs: [
+      belief('以后十点半就睡', { id: 'ev_sleep', since: '2026-11-02T12:00:00.000Z' }),
+      belief('绝不再半夜刷手机', { id: 'ev_phone', since: '2026-10-26T12:00:00.000Z' }),
+    ],
+  })
+  const near = uncountedRecords(m)
+  assert.deepEqual(near.map((x) => x.id), ['ev_sleep', 'ev_phone'], '新的在前')
+  const text = renderDetail(stanceDetail(m), near)
+  assert.match(text, /还没有一条站住过的地方/)
+  assert.match(text, /你记过这几句/)
+  assert.match(text, /11-02　以后十点半就睡（ev_sleep）/)
+  assert.match(text, /10-26　绝不再半夜刷手机（ev_phone）/)
+  assert.ok(!/门|阶段|两次|三次|阈值|相似/.test(text), '不把内部判据写进回答')
+})
+
+test('her_stance 空着且一条都没记过：直说没记过', () => {
+  const m = model()
+  const text = renderDetail(stanceDetail(m), uncountedRecords(m))
+  assert.match(text, /还没把哪件事记下来过/)
+  assert.ok(!/门|阶段|两次/.test(text))
+})
+
+test('空清单只摆还站着的记录，最多五条', () => {
+  const beliefs = []
+  for (let i = 0; i < 7; i += 1) {
+    beliefs.push(belief(`第${i}句`, { id: `b${i}`, since: `2026-10-0${i + 1}T12:00:00.000Z` }))
+  }
+  beliefs.push(belief('这句撤了', { id: 'gone', status: 'refuted' }))
+  const near = uncountedRecords(model({ beliefs }))
+  assert.equal(near.length, 5)
+  assert.equal(near[0].id, 'b6', '按时间倒序取最近五条')
+  assert.ok(!near.some((x) => x.id === 'gone'), '被推翻的不再摆出来')
 })
