@@ -126,12 +126,16 @@ test('空的话不记（避免一堆空行占名额）', () => withRoot(async (r
   assert.equal((await recentExchanges(root)).length, 0)
 }))
 
-function fakeCtx({ createId = 'sess-new' } = {}) {
+function fakeCtx({ createId = 'sess-new', presetReject = false } = {}) {
   const calls = { create: [], rename: [], get: [] }
   return {
     calls,
     sessionController: {
-      async create(args) { calls.create.push(args); return { sessionId: createId } },
+      async create(args) {
+        calls.create.push(args)
+        if (presetReject && args?.agentPreset) throw new Error('unknown preset')
+        return { sessionId: createId }
+      },
       async rename(args) { calls.rename.push(args); return {} },
     },
     get(name) {
@@ -218,9 +222,14 @@ test('换会话只换该换的：preset / title 要留下，hearAt 跟着轮数�
     title: '她自己起的名字',
     adoptedAt: '2026-10-01T00:00:00.000Z',
   }))
+  // 2026-11-19：preset 的权威来源是配置（`tools.preset`），换房按它建；
+  // 旧档案里的值只用来对照「这次真用上了哪套」。
+  await updateConfig({ tools: { preset: '那个人挑的那套', allow: [] } }, root)
 
-  const r = await rotateTalkSession(fakeCtx(), { root })
+  const ctx = fakeCtx()
+  const r = await rotateTalkSession(ctx, { root })
   assert.equal(r.ok, true)
+  assert.equal(ctx.calls.create[0].agentPreset, '那个人挑的那套')
 
   const raw = JSON.parse(await readFile(homeFile, 'utf8'))
   assert.equal(raw.sessionId, 'sess-new')
@@ -572,6 +581,53 @@ test('没有 prompt 服务也能换房（不再依赖问她留话，2026-11-15�
 })
 
 // ---------------------------------------------------------------- 轮换失败
+
+test('换房也按配置里的 preset 建（2026-11-19 外部反馈：默认是「PTC 极简」的人，换完房她只剩几件工具）', () => withRoot(async (root) => {
+  const { writeAtomic, paths } = await import('../lib/store.js')
+  const homeFile = join(paths(root).root, 'home.json')
+  await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 120 }))
+  await updateConfig({ tools: { preset: 'standard', allow: [] } }, root)
+
+  const ctx = fakeCtx()
+  const r = await rotateTalkSession(ctx, { root })
+  assert.equal(r.ok, true)
+  assert.equal(r.preset, 'standard')
+  assert.equal(ctx.calls.create.length, 1)
+  assert.equal(ctx.calls.create[0].agentPreset, 'standard', '换房这条路必须和补建那条同一个口径')
+  const st = await homeStatus(root)
+  assert.equal(st.preset, 'standard', 'home.json 要记下这一间实际用的组合')
+}))
+
+test('换房时宿主不认这个 preset：回落默认建、日志说清楚、home.json 不谎报', () => withRoot(async (root) => {
+  const { writeAtomic, paths } = await import('../lib/store.js')
+  const homeFile = join(paths(root).root, 'home.json')
+  await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 120, preset: 'old' }))
+  await updateConfig({ tools: { preset: 'fish-home', allow: [] } }, root)
+
+  const notes = []
+  const ctx = fakeCtx({ presetReject: true })
+  const r = await rotateTalkSession(ctx, { root, log: (m) => notes.push(String(m)) })
+  assert.equal(r.ok, true, '换房不能因为这个失败')
+  assert.equal(r.preset, '')
+  assert.equal(ctx.calls.create.length, 2)
+  assert.equal(ctx.calls.create[0].agentPreset, 'fish-home')
+  assert.equal(ctx.calls.create[1].agentPreset, undefined)
+  assert.ok(notes.some((n) => /没被接受/.test(n)))
+  assert.equal((await homeStatus(root)).preset, '', '继承旧值会把上次的组合当成这次的')
+}))
+
+test('没配 preset 就照宿主的默认建：老行为一个字不变', () => withRoot(async (root) => {
+  const { writeAtomic, paths } = await import('../lib/store.js')
+  const homeFile = join(paths(root).root, 'home.json')
+  await writeAtomic(homeFile, JSON.stringify({ wsId: 'ws-1', sessionId: 'sess-old', turns: 120 }))
+
+  const ctx = fakeCtx()
+  const r = await rotateTalkSession(ctx, { root })
+  assert.equal(r.ok, true)
+  assert.equal(ctx.calls.create.length, 1)
+  assert.equal(ctx.calls.create[0].agentPreset, undefined)
+  assert.equal((await homeStatus(root)).preset, '')
+}))
 
 // 病历（2026-11-06，用户反馈的截图）：换会话失败时，那条「要不要给下一个房间
 // 留一句话」已经先发出去、落在他正在用的会话窗口里了，而 turns 不归零，
