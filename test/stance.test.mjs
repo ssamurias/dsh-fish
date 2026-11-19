@@ -53,6 +53,19 @@ test('classifyStance：「不喜欢」是拒绝，不是喜欢', () => {
   assert.equal(classifyStance(''), null)
 })
 
+test('classifyStance：「不替自己签」一族算拒绝，第三人称叙述不算', () => {
+  // 2026-11-20（用户 m01338）：她认下一句话、但不替自己签字——这是拒绝，不是中立。
+  assert.equal(classifyStance('我认它的意思，但不替自己签'), 'never')
+  assert.equal(classifyStance('我不代自己答应'), 'never')
+  assert.equal(classifyStance('不拿这个当承诺'), 'never')
+  assert.equal(classifyStance('我不许诺'), 'never')
+  assert.equal(classifyStance('我不替他签这个字'), 'never')
+  // 别人不签，不是她的立场。
+  assert.equal(classifyStance('他不替自己签'), null)
+  assert.equal(classifyStance('她没有答应'), null)
+  assert.equal(classifyStance('她不拿这个当承诺'), null)
+})
+
 test('gatesDone：真门槛看 stageGate.passed，老模型退回 stage', () => {
   assert.equal(gatesDone({ stageGate: { passed: ['trust', 'autonomy', 'competence'] } }), true)
   assert.equal(gatesDone({ stageGate: { passed: ['trust', 'autonomy'] }, stage: 3 }), false)
