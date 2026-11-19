@@ -59,6 +59,11 @@ test('第二层：从处境想起工具，不从名字往下数', () => {
   assert.match(NOTE_BRIEF, /翻翻便条/, '再给动作')
   assert.match(ASK_BRIEF, /什么时候想起它/, '请求：明写处境入口')
   assert.match(LETTER_BRIEF, /想留就留/, '留话不能被写成任务')
+
+  // 2026-11-20（用户 m01245）：要挡的是「每轮都记」，不是琐事——她该记的是「有我在里面」的话。
+  assert.match(TOOL_BRIEF, /不是每轮都要记/, '不写频率，她会把记一句当成每轮作业')
+  assert.match(TOOL_BRIEF, /我喜欢/, '琐事也能长成判断，得留这个入口')
+  assert.match(TOOL_BRIEF, /别的想留也能留/, '不设白名单，免得她只挑「大事」说')
 })
 
 test('第三层：参数不复述，留在工具自己的说明里', () => {
@@ -117,7 +122,7 @@ function definedTools() {
  * 新工具必须在这里加一行——不是「建议」，`definedTools()` 会对账。
  */
 const MAP = [
-  ['growth_commit', TOOL_BRIEF, /有一句话想留下/],
+  ['growth_commit', TOOL_BRIEF, /心里咯噔一下/],
   ['bili_watch', TOOL_BRIEF, /画面里到底是什么/],
   ['bili_sub', TOOL_BRIEF, /到底说了哪几句/],
   // 2026-11-18（用户 m01161）：立场清单得能核对来源，也能整条撤掉。
