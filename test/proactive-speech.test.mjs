@@ -36,11 +36,11 @@ before(() => { Date.now = () => realNow() + offset })
 after(() => { Date.now = realNow; rmSync(tmp, { recursive: true, force: true }) })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-function host({ bail } = {}) {
+function host({ bail, append } = {}) {
   const listeners = []
   const followups = []
   const appended = []
-  const session = { id: 's-main', header: { id: 's-main' }, append: (type, m, o) => { appended.push({ type, text: m?.content?.[0]?.text, op: o?.surfaceOp }); return { seq: 999 } } }
+  const session = { id: 's-main', header: { id: 's-main' }, append: append ?? ((type, m, o) => { appended.push({ type, text: m?.content?.[0]?.text, op: o?.surfaceOp }); return { seq: 999 } }) }
   const ws = { sessionIds: ['s-main'] }
   const registry = { get: (id) => (id === 'w' ? ws : undefined), list: () => [ws], archivedSessionIds: [], create: async () => ws, rename: async () => {}, addSession: async () => {}, removeSession: async () => {} }
   const ctx = {
@@ -185,6 +185,37 @@ test('foldSilent 关掉：没开口只记账，不动历史', async () => {
 test('foldSilent 不写就是开着', async () => {
   const r = await run({}, { tool: null })
   assert.ok(r.folded > 0)
+})
+
+test('折叠让位给别人（宿主校验拒了）：记一笔账，日志说清楚是让位不是空转', async () => {
+  // 2026-11-20（万卷/识海适配）：宿主原生压缩或万卷这类插件先折过一段时，
+  // 我们的 replace 会被宿主整笔拒掉。历史不动，只是这段没省下来——
+  // 但日志不能跟着说「这轮没有可收的」，那会让人以为插件没干活。
+  const root = await setup({})
+  const h = host({
+    append: (type, m, o) => {
+      if (o?.surfaceOp?.op === 'replace') {
+        throw new Error('surface replace: sourceEventSeqs must include every shadowed surface node; missing 7')
+      }
+      return { seq: 999 }
+    },
+  })
+  const logs = []
+  const s = startScheduler(h.ctx, { root, sessionId: 's-main', log: (...a) => logs.push(a.join(' ')) })
+  await s.tick()
+  assert.equal(h.followups.length, 1)
+  playTurn(h, { tool: null })
+  await sleep(60)
+  try {
+    const line = logs.find((l) => l.includes('没说什么')) ?? ''
+    assert.match(line, /落在别人的折叠里/)
+    assert.doesNotMatch(line, /没有可收的/)
+    const m = await metas(root)
+    assert.equal(m.filter((x) => x === 'compact-skipped').length, 1, '事件流里留一笔，观测台查得到')
+  } finally {
+    s.dispose()
+    clearWakeSection()
+  }
 })
 
 test('这一轮还在跑时不投递，过一会儿再看', async () => {
