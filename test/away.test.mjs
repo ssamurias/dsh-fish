@@ -152,7 +152,7 @@ test('出门那条会话：身份用走时快照、并挂上兜底守卫；家�
         effect: (fn) => fn,
       },
     } })
-    assert.equal(sections.length, 6, "外面那条要挂身份、处境、手边、旧话、本子目录与交接页六段")
+    assert.equal(sections.length, 7, "外面那条要挂身份、处境、手边、旧话、本子目录、规矩与交接页七段")
     assert.equal(sections[0].text(), '走时的我', '外面读到的是出门那一刻的身份')
 
     // 家里那条：正常挂身份，但不挂兜底守卫（自己家不需要拦自己）
@@ -162,7 +162,7 @@ test('出门那条会话：身份用走时快照、并挂上兜底守卫；家�
       session: { header: { cwd: herDir } },
       ctx: { systemPrompt: { section: (o) => homeSections.push(o) }, tools: { guard: () => { homeGuarded = true; return () => {} } } },
     } })
-    assert.equal(homeSections.length, 6)
+    assert.equal(homeSections.length, 7)
     assert.equal(homeGuarded, false)
 
     // 无关的人：一段都不挂
@@ -199,7 +199,7 @@ test('先记账再建会话：会话还没有 cwd 也认得出是出门，并把
         effect: (fn) => fn,
       },
     } })
-    assert.equal(sections.length, 6, "这种情况也要挂身份、处境、手边、旧话、本子目录与交接页六段")
+    assert.equal(sections.length, 7, "这种情况也要挂身份、处境、手边、旧话、本子目录、规矩与交接页七段")
     assert.equal(guarded, true, '兜底守卫也要挂上')
 
     // bind 是异步写的（钩子不能等），这里等它落盘；CI 的 node 20 上 50ms 不够，
@@ -228,7 +228,7 @@ test('台账记了 id、会话 header 没 cwd 时，靠 id 也认得出', async 
     registerIdentity({ on: (e, fn) => { if (e === 'agent/created') handler = fn; return () => {} } }, { root, herDir, log: () => {} })
     const sections = []
     handler({ agent: { session: { header: { id: 'session-out-2' } }, ctx: { systemPrompt: { section: (o) => sections.push(o) }, tools: { guard: () => () => {} }, effect: (fn) => fn } } })
-    assert.equal(sections.length, 6)
+    assert.equal(sections.length, 7)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -277,12 +277,12 @@ test('出门时挂了几段，回家就能拆几段：身份段 + 处境段 + �
     const { agent, sections, guardDisposed } = fakeAgent()
     assert.equal(attachIdentity(agent, root, { frozen: '走的时候的我' }).ok, true)
     assert.equal(attachAwayGuard(agent, { root, herDir: join(root, 'home'), log: () => {} }).ok, true)
-    assert.equal(mountedCount(agent), 7, '身份段 + 处境段 + 手边段 + 旧话段 + 本子目录段 + 交接页段 + 守卫')
-    assert.equal(sections.length, 6)
+    assert.equal(mountedCount(agent), 8, '身份段 + 处境段 + 手边段 + 旧话段 + 本子目录段 + 规矩段 + 交接页段 + 守卫')
+    assert.equal(sections.length, 7)
 
     const r = detachOutside(agent)
     assert.equal(r.ok, true)
-    assert.equal(r.removed, 7)
+    assert.equal(r.removed, 8)
     assert.equal(mountedCount(agent), 0, '拆完不能留着')
     assert.equal(sections.length, 0, '段要从 system prompt 上注销')
     assert.equal(guardDisposed(), 1, '守卫也要卸掉')
@@ -384,14 +384,14 @@ test('出门时也会挂上组装钩子与正文清洗钩子，回家一起拆',
   try {
     const { agent, sections, events, hookDisposed } = fakeAgentWithHook()
     assert.equal(attachIdentity(agent, root, { frozen: '走的时候的我' }).ok, true)
-    assert.equal(sections.length, 6, '钩子不是段，不许占段位；六段含交接页')
-    assert.equal(mountedCount(agent), 6, 'mountedCount 只数段：身份 + 处境 + 手边 + 旧话 + 本子目录 + 交接页')
+    assert.equal(sections.length, 7, '钩子不是段，不许占段位；七段含交接页')
+    assert.equal(mountedCount(agent), 7, 'mountedCount 只数段：身份 + 处境 + 手边 + 旧话 + 本子目录 + 规矩 + 交接页')
     assert.deepEqual(events, ['system-prompt/assemble', 'llm/stream', 'agent/request-error'], '组装钩子 + 正文清洗钩子 + 空正文重试')
     assert.equal(hookDisposed(), 0, '还没拆')
 
     const r = detachOutside(agent)
     assert.equal(r.ok, true)
-    assert.equal(r.removed, 8, '六段 + 两个钩子（清洗那个 disposer 里包着两条监听）')
+    assert.equal(r.removed, 9, '七段 + 两个钩子（清洗那个 disposer 里包着两条监听）')
     assert.equal(sections.length, 0)
     assert.equal(hookDisposed(), 3, '两个钩子都要拆；清洗那个一次性摘两条监听')
     assert.equal(mountedCount(agent), 0)

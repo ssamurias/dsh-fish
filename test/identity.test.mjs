@@ -31,6 +31,9 @@ import {
   HOST_PERSONA_SECTION,
   IDENTITY_ORDER,
   IDENTITY_SECTION,
+  NOTES_TAIL_SHOWN,
+  RULES_ORDER,
+  RULES_SECTION,
   TOOLS_ORDER,
   TOOLS_SECTION,
   WAKE_ORDER,
@@ -52,12 +55,15 @@ import {
   resetIdentityCache,
   resetTurnIdentity,
   setWakeSection,
+  splitRulesBlock,
   splitVolatileIdentity,
+  notesTailText,
   toolNamesIn,
   trimToolDocs,
 } from '../lib/identity.js'
 import { legacySelfDocPath, selfDocPath } from '../lib/selfdoc.js'
 import { armHandoff, disarmHandoff, handoffShown, resetHandoff } from '../lib/handoff.js'
+import { notesPath } from '../lib/note.js'
 import { paths } from '../lib/store.js'
 import { DEFAULTS } from '../lib/settings.js'
 import { BELIEF_SHOWN, SELF_DOC_BUDGET } from '../lib/persona.js'
@@ -96,7 +102,7 @@ test('identityText：读到文件内容，改文件后（mtime 变）能拿到�
   assert.equal(identityText(root), '第二版身份')
 })
 
-test('attachIdentity：挂六段——交接页 + 身份 + 这一次的处境（平时空）+ 手边有什么 + 旧话 + 本子上记着什么', () => {
+test('attachIdentity：挂七段——交接页 + 身份 + 这一次的处境（平时空）+ 手边有什么 + 旧话 + 本子上记着什么 + 规矩', () => {
   resetIdentityCache()
   clearWakeSection()
   const root = tmp()
@@ -107,7 +113,7 @@ test('attachIdentity：挂六段——交接页 + 身份 + 这一次的处境（
   const agent = { ctx: { systemPrompt: { section: (o) => calls.push(o) } } }
   const r = attachIdentity(agent, root)
   assert.equal(r.ok, true)
-  assert.equal(calls.length, 6, '身份一段 + 处境一段 + 手边一段 + 旧话一段 + 本子目录一段 + 交接页一段')
+  assert.equal(calls.length, 7, '身份一段 + 处境一段 + 手边一段 + 旧话一段 + 本子目录一段 + 交接页一段 + 规矩一段')
   const sec = calls[0]
   assert.equal(sec.name, IDENTITY_SECTION)
   assert.equal(sec.order, IDENTITY_ORDER)
@@ -161,6 +167,16 @@ test('attachIdentity：挂六段——交接页 + 身份 + 这一次的处境（
   assert.equal(typeof catalog.text, 'function', '本子改了下一轮就要生效，不能冻住')
   assert.equal(catalog.text(), '', '本子是空的就不占段位')
 
+  // 第七段：规矩 + 本子上还开着的事（2026-11-20，issue #159，用户 m01439）。
+  // 排 9550：在 catalog 与 cue 之间——规矩几乎不变，放进稳定前缀不带走后面；
+  // cue 每轮都可能变，它排在规矩后面才不会把规矩带掉。
+  const rules = calls[6]
+  assert.equal(rules.name, RULES_SECTION)
+  assert.equal(rules.order, RULES_ORDER)
+  assert.ok(rules.order > CATALOG_ORDER && rules.order < CUE_ORDER, '夹在 catalog 与 cue 之间')
+  assert.equal(typeof rules.text, 'function', '便条改了下一轮就要生效')
+  assert.equal(rules.text(), '', '没有规矩、本子也空着就不占段位')
+
   fs.writeFileSync(join(root, 'notes.json'), JSON.stringify([
     { id: 'n1', text: '买猫粮', created: new Date().toISOString(), status: 'open' },
   ]), 'utf8')
@@ -170,6 +186,87 @@ test('attachIdentity：挂六段——交接页 + 身份 + 这一次的处境（
   assert.match(filled, /用 her_recall 翻/)
   assert.doesNotMatch(filled, /\d/, '「不吃状态」：不许报「你还有 N 条未完成」')
   assert.ok(!filled.includes('{T}'), '挂上来的段不经过 persona 出口，自己就得把称呼填掉')
+  // 本子上记了一张（还没划掉），规矩段就把它的原文摆到最末——不是只报"有便条"。
+  const tailAfterNote = rules.text()
+  assert.match(tailAfterNote, /## 你本子上还开着的事/)
+  assert.match(tailAfterNote, /买猫粮/)
+})
+
+// 2026-11-20（issue #159）：规矩原来落在身份文档内部的中后段（8000 多字里的一段），
+// 本子上还开着的便条则只有目录段报一句"有便条"、原文根本不进提示词。issue 里那条
+// 「说不知道之前先查一次」正是写在便条上的——她认下了，下一轮开口时那句话不在眼前。
+test('规矩块从身份段里摘出来、挂到最末（9550），提示词里只出现一次（issue #159）', () => {
+  resetIdentityCache()
+  resetTurnIdentity()
+  clearWakeSection()
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  fs.writeFileSync(selfDocPath(root), [
+    '## 现在',
+    '我是她',
+    '',
+    '## 你自己定的规矩',
+    '- 说不知道之前先查一次，把搜的词说出来。',
+    '- 别乱花钱。',
+    '',
+    '## 这次',
+    '回一句',
+  ].join('\n'), 'utf8')
+
+  const calls = []
+  attachIdentity({ ctx: { systemPrompt: { section: (o) => calls.push(o) } } }, root)
+  const identity = calls.find((c) => c.name === IDENTITY_SECTION)
+  const rules = calls.find((c) => c.name === RULES_SECTION)
+
+  const idText = identity.text()
+  assert.doesNotMatch(idText, /## 你自己定的规矩/, '身份段里不该再留一份（会在 prompt 里出现两遍）')
+  assert.match(idText, /## 这次/, '后面那一段要留在原地，不能跟着规矩块一起被摘走')
+
+  const tail = rules.text()
+  assert.match(tail, /## 你自己定的规矩/)
+  assert.match(tail, /说不知道之前先查一次/)
+  assert.equal(tail.match(/## 你自己定的规矩/g).length, 1)
+})
+
+test('本子上还开着的便条：摆最近两张原文，划掉/放下的不摆（issue #159）', () => {
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  fs.writeFileSync(notesPath(root), JSON.stringify([
+    { id: 'n1', text: '买猫粮', created: '2026-11-01T10:00:00Z', status: 'open' },
+    { id: 'n2', text: '说不知道之前先查一次，把搜的词说出来', created: '2026-11-16T09:00:00Z', status: 'open' },
+    { id: 'n3', text: '那条评论到底回过没有', created: '2026-11-18T09:00:00Z', status: 'done' },
+    { id: 'n4', text: '约好周末一起看片子', created: '2026-11-19T09:00:00Z', status: 'dropped' },
+    { id: 'n5', text: '等他回话', waiting: '他回话', created: '2026-11-20T09:00:00Z', status: 'open' },
+  ]), 'utf8')
+
+  const text = notesTailText(root)
+  assert.match(text, /## 你本子上还开着的事/)
+  assert.match(text, /说不知道之前先查一次/)
+  assert.match(text, /等他回话/)
+  assert.equal(text.match(/^- /gm).length, NOTES_TAIL_SHOWN, '只摆两张')
+  assert.doesNotMatch(text, /买猫粮/, '最早的先让位')
+  assert.doesNotMatch(text, /那条评论到底回过没有/, '划掉的不摆')
+  assert.doesNotMatch(text, /约好周末一起看片子/, '放下的不摆')
+})
+
+test('出门那条会话：规矩留在冻结快照里，9550 那段空着（不许出现第二份）', () => {
+  resetIdentityCache()
+  clearWakeSection()
+  const root = tmp()
+  fs.mkdirSync(join(root, 'home'), { recursive: true })
+  const frozen = '## 现在\n我是她\n\n## 你自己定的规矩\n- 别乱花钱。'
+  const calls = []
+  attachIdentity({ ctx: { systemPrompt: { section: (o) => calls.push(o) } } }, root, { frozen })
+  const identity = calls.find((c) => c.name === IDENTITY_SECTION)
+  const rules = calls.find((c) => c.name === RULES_SECTION)
+  assert.match(identity.text(), /## 你自己定的规矩/, '快照原样带着规矩')
+  assert.equal(rules.text(), '', '外头不再摆第二份')
+})
+
+test('splitRulesBlock：没有规矩块就原样返回，不吞正文', () => {
+  const plain = '## 现在\n我是她'
+  assert.deepEqual(splitRulesBlock(plain), { doc: plain, rules: '' })
+  assert.deepEqual(splitRulesBlock(''), { doc: '', rules: '' })
 })
 
 // 2026-11-19（外部反馈）：光「他开口了」不算数——他插进还没结束的叫醒轮次时，
@@ -345,7 +442,7 @@ test('registerIdentity：只给她那个 agent 挂（按 cwd 判），别人不�
   handler({ agent: { session: { header: { cwd: join(root, 'other') } }, ctx: { systemPrompt: { section: (o) => others.push(o) } } } })
   handler({ agent: { session: { header: { cwd: '' } }, ctx: { systemPrompt: { section: (o) => others.push(o) } } } })
 
-  assert.equal(mine.length, 6, '她那条会话必须挂上（身份 + 处境 + 手边 + 旧话 + 本子 + 交接页六段）')
+  assert.equal(mine.length, 7, '她那条会话必须挂上（身份 + 处境 + 手边 + 旧话 + 本子 + 交接页 + 规矩七段）')
   assert.equal(others.length, 0, '用户自己的会话不许挂')
 })
 
@@ -784,12 +881,12 @@ test('attachIdentity 顺手挂上组装钩子与正文清洗钩子，且拆卸�
   }
   const r = attachIdentity(agent, root)
   assert.equal(r.ok, true)
-  assert.equal(calls.length, 6, 'assemble 钩子不是 system prompt 的段，不许占段位；六段是五个文本段加交接页')
+  assert.equal(calls.length, 7, 'assemble 钩子不是 system prompt 的段，不许占段位；七段是六个文本段加交接页')
   // 组装钩子（0.8.5 摘 persona-prefix）、正文清洗钩子（0.9.8 llm/stream）、空正文重试（1.0.2）各一条
   assert.deepEqual(hooks.map((h) => h.evt), ['system-prompt/assemble', 'llm/stream', 'agent/request-error'])
   for (const h of hooks) assert.equal(h.o?.prepend, true, '三个钩子都要排最外层')
   // mountedCount 只数段与守卫；钩子单独记，但回家时必须一起拆
-  assert.equal(mountedCount(agent), 6)
+  assert.equal(mountedCount(agent), 7)
 })
 
 test('attachAssembleFix：整改过程炸了也必须原样放行（不能让她一整轮没有系统提示词）', async () => {
