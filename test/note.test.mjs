@@ -24,6 +24,8 @@ import {
   NOTE_LIST_MAX,
   NOTE_PROGRESS_MAX,
   NOTE_PROGRESS_TEXT_MAX,
+  NOTE_NUDGE_DAYS,
+  cnNum,
   notesPath,
   readNotes,
   writeNotes,
@@ -32,6 +34,7 @@ import {
   daysBetween,
   ageLabel,
   renderNotes,
+  wakeNotesOf,
   pickNudge,
   nudgeSeen,
   addNote,
@@ -417,13 +420,13 @@ test('走一遍：记一张，醒来读到字，照着划掉，下次醒来就�
   })
 })
 
-test('没日子的纸条从不进醒来那段，也能靠自己写过的那句话划掉', async () => {
+test('没日子的纸条记下当天不进醒来那段，也能靠自己写过的那句话划掉', async () => {
   await withRoot(async (root) => {
     const { call } = herTool(root)
     const now = new Date(2026, 10, 5)
 
-    assert.equal(await call({ text: '下次路过\n  那家店\t看一眼' }), '[记下了：下次路过 那家店 看一眼]（没写日子，醒来不会出现）')
-    assert.equal(await wakeOf(root, now), '', '没日子不上桌：这张她读不到第二遍')
+    assert.equal(await call({ text: '下次路过\n  那家店\t看一眼' }), '[记下了：下次路过 那家店 看一眼]（没写日子：满七天以后，醒来时隔些天提一次）')
+    assert.equal(await wakeOf(root, now), '', '没日子的记下当天不上桌（满七天才提，见文件末尾）')
 
     // 空白和记的时候不一样也算同一句：addNote 落盘前就是这么规整的
     assert.equal(await call({ text: ' 下次路过 那家店  看一眼\n', status: 'done' }), '[划掉了]')
@@ -532,7 +535,7 @@ test('id 这条路还在：回执同样写划掉，没对上 id 但给了原话�
     await def.execute({ text: '第四件' }, { session: {} })
     assert.equal(await call({ id: c.id, text: '第四件', status: 'done' }), '[划掉了]')
     assert.deepEqual((await readNotes(root)).map((n) => n.status), ['done', 'done', 'done', 'open'])
-    assert.equal(await call({ id: c.id, text: '第五件' }), '[记下了：第五件]（没写日子，醒来不会出现）')
+    assert.equal(await call({ id: c.id, text: '第五件' }), '[记下了：第五件]（没写日子：满七天以后，醒来时隔些天提一次）')
     assert.equal((await readNotes(root)).length, 5)
   })
 })
@@ -564,7 +567,7 @@ test('名额只算还没关掉的：两百张划掉的压着，也还记得了�
     )
     await writeNotes(root, many)
     const { call } = herTool(root)
-    assert.equal(await call({ text: '新的这一件' }), '[记下了：新的这一件]（没写日子，醒来不会出现）')
+    assert.equal(await call({ text: '新的这一件' }), '[记下了：新的这一件]（没写日子：满七天以后，醒来时隔些天提一次）')
     const after = await readNotes(root)
     assert.equal(after.length, NOTES_MAX + 1, '划掉的不清走，只是不再占名额')
     assert.equal(after.filter((n) => n.status === 'open').length, 1)
@@ -869,4 +872,75 @@ test('进展：坏数据不会拖垮一次唤醒，坏项直接丢掉', () => {
   assert.deepEqual(n.progress.map((p) => p.text), ['第一步'])
   assert.equal(normalizeNote({ text: '没进展的' }).progress.length, 0)
   assert.equal(lastProgress(normalizeNote({ text: '空' })), null)
+})
+
+// ---- her_note 自己说的话，要和醒来时真发生的事对得上 ----
+// 1.0.0 起没写日子的便条记满 NOTE_NUDGE_DAYS 天以后会在醒来时轮着提（pickNudge），
+// 1.0.4 起写了 waiting 的不管有没有日子都先摆（renderNotes）。due 的说明和记下时的回执要说同一件事。
+
+test('due 的说明照实说没写日子的什么时候出现：记下满七天以后醒来时隔些天提一次', async () => {
+  await withRoot(async (root) => {
+    const { def } = herTool(root)
+    const due = def.parameters.properties.due.description
+    assert.doesNotMatch(due, /不会在醒来时出现|只能自己 list 看/, '满七天会提，不能说不出现')
+    assert.match(due, new RegExp(`满${cnNum(NOTE_NUDGE_DAYS)}天以后醒来时隔些天提一次`), '天数跟着 NOTE_NUDGE_DAYS')
+    assert.match(due, /waiting/, '写了 waiting 的不等这几天，说明里点到')
+  })
+})
+
+test('没写日子记下的回执说满七天以后会提，不再说「醒来不会出现」；写了日子的回执不变', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    assert.equal(await call({ text: '找时间把那本书还回去' }), '[记下了：找时间把那本书还回去]（没写日子：满七天以后，醒来时隔些天提一次）')
+    assert.equal(await call({ text: '交水费', due: '2026-11-20' }), '[记下了：交水费]', '有日子的那张回执照旧不带尾巴')
+    assert.equal(await call({ text: '等快递', waiting: '等快递到', due: '2026-11-30' }), '[记下了：等快递]', '在等 + 日子也照旧')
+  })
+})
+
+test('写了 waiting、没写日子的回执不说「醒来不会出现」：下一次醒来它就摆在「在等」里', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    const said = await call({ text: '等对方回信', waiting: '对方说周五前回' })
+    assert.equal(said, '[记下了：等对方回信]', '在等的会自己上桌，回执不带尾巴')
+    const [n] = await readNotes(root)
+    await writeNotes(root, [{ ...n, created: localAt('2026-11-01') }])
+    const wake = await wakeOf(root, new Date(2026, 10, 1, 18))
+    assert.match(wake, /^（压着一张便条）\n#\S+ 在等：对方说周五前回——等对方回信（最后动过：今天）$/, '记下当天醒来就摆')
+  })
+})
+
+test('照回执说的去等：没写日子的那张，记下当天、第六天醒来不摆，满七天那天醒来摆出来', async () => {
+  await withRoot(async (root) => {
+    const { call } = herTool(root)
+    await call({ text: '找时间把那本书还回去' })
+    const [n] = await readNotes(root)
+    await writeNotes(root, [{ ...n, created: localAt('2026-11-01') }])
+    assert.equal(await wakeOf(root, new Date(2026, 10, 1, 18)), '', '记下当天不摆')
+    assert.equal(await wakeOf(root, new Date(2026, 10, 7, 18)), '', '第六天还不摆')
+    const day7 = await wakeOf(root, new Date(2026, 10, 8, 18))
+    assert.match(day7, /^（便条里有一张没写日子的）\n#\S+ 11-01 你记着：找时间把那本书还回去（隔些天提一次；最后动过：11-01）$/)
+  })
+})
+
+test('wakeNotesOf：被在等的便条压住时，没日子的那张不算「摆出来」，nudgeId 为空（用户 m02695）', async () => {
+  await withRoot(async (root) => {
+    const waiting = normalizeNote({ id: 'wa', text: '等快递', waiting: '等快递到', created: localAt('2026-11-01') })
+    const plain = normalizeNote({ id: 'pl', text: '找时间把那本书还回去', created: localAt('2026-11-01') })
+    await writeNotes(root, [waiting, plain])
+    const hidden = wakeNotesOf(await readNotes(root), new Date(2026, 10, 20, 18))
+    assert.match(hidden.text, /在等：等快递到/, '在等的那张先摆')
+    assert.equal(hidden.nudgeId, '', '没摆在桌上就不能记账——记了等于白扣七天，那张永远轮不到')
+    await closeNote(root, { id: 'wa' })
+    const shown = wakeNotesOf(await readNotes(root), new Date(2026, 10, 20, 18))
+    assert.match(shown.text, /你记着：找时间把那本书还回去/)
+    assert.equal(shown.nudgeId, 'pl', '真摆出来了才给 id，唤醒那边照它记 nshow:')
+  })
+})
+
+test('唤醒那边只按 wakeNotesOf 回的 nudgeId 记 nshow:，不再拿 pickNudge 的结果记账（用户 m02695）', async () => {
+  const src = await readFile(new URL('../lib/scheduler.js', import.meta.url), 'utf8')
+  assert.match(src, /import \{[^}]*\bwakeNotesOf\b[^}]*\} from '\.\/note\.js'/)
+  assert.equal(/pickNudge\(/.test(src), false, '选中不等于摆出来，别再回到拿 pickNudge 记账')
+  assert.match(src, /const nudgeNoteId = wakeNotes\.nudgeId/)
+  assert.match(src, /nshow:\$\{nudgeNoteId\}/)
 })
