@@ -117,3 +117,24 @@ test('「他来过」的证据：群聊里的 heard 不算（2026-11-08，用户
   // 她自己的话永远不算
   assert.equal(isContactEvent({ type: 'utterance', text: '我自己的话', ts: at }), false)
 })
+
+test('为约定问一句时那条编号要落盘（2026-11-21，用户 m02695）', () => {
+  // ask_owner 写的是 value.appointId，而 value 的白名单只放 time 那两项——
+  // 这条编号曾被静默丢掉，到点查「他当时怎么答的」永远查不到。
+  const kept = validateEvent(
+    { type: 'ask', text: '周六提醒你复查这句，我就这么说一次，行吗？', ask: { kind: 'appoint', subject: 'ap1', options: ['答应', '不用'], value: { appointId: 'ap1' } } },
+    { source: 'system' },
+  )
+  assert.equal(kept.ask.appointId, 'ap1')
+  assert.equal(kept.ask.value, undefined)
+  // 顶层直接写的也认（测试与旧数据里是这种形状）
+  const direct = validateEvent({ type: 'ask', text: '问一句', ask: { kind: 'appoint', subject: 'ap2', appointId: 'ap2' } }, { source: 'system' })
+  assert.equal(direct.ask.appointId, 'ap2')
+  // time 那档不受影响：value 仍只有 wakesPerDay / window，别的字段照样进不来
+  const time = validateEvent(
+    { type: 'ask', text: '要不要改成一天醒三次？', ask: { kind: 'time', subject: '', value: { wakesPerDay: 3, appointId: 'ap9', evil: 'x' } } },
+    { source: 'system' },
+  )
+  assert.deepEqual(time.ask.value, { wakesPerDay: 3 })
+  assert.equal(time.ask.appointId, '')
+})

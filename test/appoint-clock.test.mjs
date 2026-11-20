@@ -232,3 +232,13 @@ test('约定确认卡不占那三次自决额度，一天最多两张', () => {
   assert.equal(APPOINT_ASK_PER_DAY, 2)
   assert.equal(askForAppoint(events).size, 2)
 })
+
+test('存量事件没有 appointId 时，靠 subject 也认得出是哪条约定（2026-11-21，用户 m02695）', () => {
+  // schema 曾经把 value.appointId 丢掉，磁盘上那些老 ask 只留下 subject。
+  const legacy = (id, appointId) => ({ id, type: 'ask', ts: '2026-11-18T12:00:00.000Z', ask: { kind: 'appoint', subject: appointId } })
+  const events = [legacy('q1', 'ap1'), legacy('q2', 'ap2'), legacy('q3', 'ap3')]
+  const m = askForAppoint(events)
+  assert.equal(m.size, 3)
+  assert.equal(m.get('ap1').id, 'q1')
+  assert.equal(m.get('ap3').id, 'q3')
+})
