@@ -18,6 +18,21 @@ function ev(id, type, day, text, extra = {}) {
   }
 }
 
+// 2026-11-21（第二轮审计）：derive 用 id 的前 10 位 Crockford 字当时间
+// （`idTime`）。假 id 像 `ev_new` 这种解出来是个乱数，会把两件事的先后倒过来，
+// 于是「后来者覆盖」的断言看起来像没生效。要测顺序，就得给真 ULID 形状的 id。
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+function ulidAt(ms) {
+  let t = ms
+  let s = ''
+  while (s.length < 10) {
+    s = CROCKFORD[t % 32] + s
+    t = Math.floor(t / 32)
+  }
+  return `${s}0000000000000000`
+}
+
 // 契约 §4：30 天 → 8/16/26/30；7 天 → 2/4/6/7
 test('阶段边界对齐契约', () => {
   assert.deepEqual(stageBounds(30), [8, 16, 26, 30])
@@ -144,12 +159,17 @@ test('名字后面没有分隔符不许截；「就叫/改成」带冒号能定�
   assert.equal(pickName('他给了自己的名字：时梦尘，说他认这个名字。'), '时梦尘')
   assert.equal(pickName('他给了自己的名字「时梦尘」'), '时梦尘')
 
-  // 声明入口：带冒号的「就叫 / 改成」、带时间壳的「改成」
+  // 声明入口：带冒号的「就叫」、带时间壳的「改成」
   assert.equal(pickName('那就叫：阿辰'), '阿辰')
   assert.equal(pickName('以后就改成阿辰'), '阿辰')
-  assert.equal(pickName('改成：阿辰'), '阿辰')
   assert.equal(pickName('从今天起就改成阿辰'), '阿辰')
   assert.equal(pickNameHit('那就叫：阿辰').confident, true)
+
+  // 2026-11-21（第五份改名报告）：裸的「改成：」不再算定名——
+  // 它在中文里最常见的用法是改措辞，不是起名
+  assert.equal(pickName('改成：阿辰'), null)
+  assert.equal(pickName('所以这句改成：先问结果——「这几天睡得怎么样」'), null)
+  assert.equal(pickName('标题改成：周报'), null)
 
   // 不能因此误收：裸的「就叫外卖」「把颜色改成蓝色」
   assert.equal(pickName('那就叫外卖'), null)
@@ -184,6 +204,152 @@ test('名字后面没有分隔符不许截；「就叫/改成」带冒号能定�
     ev('ev_good', 'utterance', 3, '那就叫：阿辰。'),
   ]
   assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿辰')
+})
+
+// 2026-11-21（第五份改名报告，A / B / D 三闸）。
+// 前五次修都在加壳词：入口越开越宽，误判面也跟着变宽。这一组锁的是「跟壳词无关」的
+// 三道判断——指人锚、引号与否定、以及「你以后就叫 X」这条自然说法。
+test('改称呼的三道闸：只认指人、引号/否定不算、时间壳+叫能认（第五份报告）', () => {
+  // A 闸：没有指人锚的定名，最多算低置信，盖不掉已有的名字
+  for (const s of [
+    '这条规矩以后就改成周报',
+    '插件以后就改叫 fish',
+    '把变量改叫 total',
+    '这个函数改叫 init',
+  ]) {
+    const hit = pickNameHit(s)
+    assert.equal(hit.confident, false, s)
+  }
+  // 高置信的「那就叫：」不受影响
+  assert.equal(pickNameHit('那就叫：阿辰').confident, true)
+
+  // B 闸一：引号里的是别人的原文（她在复述规则），不是给他定名
+  assert.equal(pickName('那句「以后就改成阿辰」是什么意思'), null)
+  assert.equal(pickName('我在便条上写「以后就改成阿辰」'), null)
+
+  // B 闸二：紧挨否定词的，不是定名
+  for (const s of ['以后不叫你老大', '我不叫你哥哥了', '我不能叫他哥哥', '别叫你老大']) {
+    assert.equal(pickName(s), null, s)
+  }
+
+  // A 闸的下定义：「这就叫：X」「这也叫：X」是解释概念，不是起名
+  assert.equal(pickName('这就叫：沉没成本'), null)
+  assert.equal(pickName('这也叫：缘分'), null)
+
+  // D：自然说法「你以后就叫 X」原来一条都收不进来（老壳只认「叫你 / 叫他」）
+  assert.deepEqual(pickNameHit('那你以后就叫阿辰吧'), { name: '阿辰', confident: true })
+  assert.deepEqual(pickNameHit('以后你就叫阿辰'), { name: '阿辰', confident: true })
+  assert.deepEqual(pickNameHit('从今起你就叫阿辰'), { name: '阿辰', confident: true })
+  // 但没有指人词的单说一句（「以后叫外卖」「这个东西以后叫table吧」）分不清，宁可不认
+  assert.equal(pickName('以后就叫外卖吧'), null)
+  assert.equal(pickName('这个东西以后叫table吧'), null)
+
+  // 链路：先把错的名字挂上（低置信），正确的「你以后就叫 X」要高置信覆盖
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_bad', 'utterance', 2, '这条规矩以后就改成周报。'),
+    ev('ev_good', 'utterance', 3, '那你以后就叫阿辰吧。'),
+  ]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿辰')
+})
+
+test('改称呼的第二轮审计：喊/管…叫、叫我、『』引号、转述别人的要求（用户 m02227）', () => {
+  // 这三句原来一条都收不进来：「喊 / 管…叫」和「叫」是同一件事
+  assert.deepEqual(pickNameHit('以后就喊你阿辰'), { name: '阿辰', confident: true })
+  assert.deepEqual(pickNameHit('以后我喊你阿辰'), { name: '阿辰', confident: true })
+  assert.deepEqual(pickNameHit('以后管你叫阿辰'), { name: '阿辰', confident: true })
+  assert.deepEqual(pickNameHit('以后我管你叫阿辰'), { name: '阿辰', confident: true })
+  // 「叫我」的主语是他自己，含义已经明确
+  assert.deepEqual(pickNameHit('以后叫我阿辰'), { name: '阿辰', confident: true })
+
+  // 引号两头都是标记，不是名字的一部分（原来会得到「『阿辰』」）
+  assert.deepEqual(pickNameHit('以后叫你『阿辰』'), { name: '阿辰', confident: true })
+  assert.deepEqual(pickNameHit('以后叫你【阿辰】'), { name: '阿辰', confident: true })
+
+  // 转述别人的要求（「他让我叫你 X」）不是他本人定的称呼：认得出，但不能高置信覆盖。
+  // 也别整条丢掉——issue #81 那条「说你让我叫你老大」还指着这里认名字。
+  assert.deepEqual(pickNameHit('他让我叫你阿辰'), { name: '阿辰', confident: false })
+  assert.deepEqual(pickNameHit('以后他让我叫你阿辰'), { name: '阿辰', confident: false })
+
+  // 没有起名壳的祈使句照旧不认
+  assert.equal(pickName('喊你吃饭'), null)
+  assert.equal(pickName('我喊你起床'), null)
+
+  // 链路：这些说法都不能把已经定好的名字顶掉
+  const traps = ['以后他让我叫你阿辰。', '他说「以后就叫你阿辰」。', '以后叫你起床。', '喊你吃饭。']
+  for (const t of traps) {
+    const evs = [ev(ulidAt(T0), 'seed', 1, '种', { source: 'system' }), ev(ulidAt(T0 + DAY_MS), 'utterance', 2, '我就叫你哥哥吧。'), ev(ulidAt(T0 + 2 * DAY_MS), 'utterance', 3, t)]
+    assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '哥哥', t)
+  }
+  // 而新认的三种说法要能覆盖
+  for (const t of ['以后就喊你阿辰。', '以后管你叫阿辰。', '以后叫我阿辰。']) {
+    const evs = [ev(ulidAt(T0), 'seed', 1, '种', { source: 'system' }), ev(ulidAt(T0 + DAY_MS), 'utterance', 2, '我就叫你哥哥吧。'), ev(ulidAt(T0 + 2 * DAY_MS), 'utterance', 3, t)]
+    assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿辰', t)
+  }
+})
+
+// PR #161（@BBleae）：「改称」后面紧跟「呼 / 谓」时说的是「改称呼」这件事本身，
+// 不是改称某个名字。原来「以后改称呼了」被截成「呼」还带高置信，一句话就把称呼换掉。
+test('「改称呼 / 改称谓」不会被截成「呼 / 谓」', () => {
+  for (const s of ['以后改称呼了。', '从今天起改称谓了', '改称呼吧', '往后就改称呼了', '以后改称呼的时候再说']) {
+    assert.equal(pickName(s), null, s)
+  }
+  // 「改称」后面真跟着名字的照收（低置信：没有指人词）
+  assert.deepEqual(pickNameHit('以后改称阿岸'), { name: '阿岸', confident: false })
+  // 整条链路：已经定下的称呼不会被换成「呼」；还没有称呼时也不会凭空多出一个
+  const seed = ev('ev_seed', 'seed', 1, '种', { source: 'system' })
+  const said = ev('ev_x', 'utterance', 3, '以后改称呼了。')
+  const evs = [seed, ev('ev_ok', 'utterance', 2, '以后叫他「阿辰」。'), said]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿辰')
+  assert.equal(deriveSelf([seed, said], { now: T0 + 3 * DAY_MS }).name, null)
+})
+
+// PR #161（@BBleae）：只靠时间壳撑起来的「以后改成 / 改叫」和「叫他 X」一样两种可能——
+// 定名字，或者在说以后改做别的事。A 闸只看「句子里有没有指人词」，
+// 「他说以后就改成周三见」里有个「他」就会被放成高置信，所以壳本身也要判一层。
+test('只靠时间壳认出来的「改成 / 改叫」是低置信；带引号、冒号、指人主语的照旧高置信', () => {
+  for (const [s, name] of [
+    ['以后改成早点睡。', '早点睡'],
+    ['从今天起改成每天写日记。', '每天写日记'],
+    ['我以后改叫早上跑步了。', '早上跑步'],
+    ['他说以后就改成周三见。', '周三见'],
+    ['以后就改成阿辰', '阿辰'],
+    ['从今天起就改成阿辰', '阿辰'],
+    ['改叫阿辰吧', '阿辰'],
+  ]) assert.deepEqual(pickNameHit(s), { name, confident: false }, s)
+
+  for (const s of ['以后就改成「阿辰」', '从今天起改叫“阿辰”', '改叫「阿辰」吧', '往后改称"阿辰"']) {
+    assert.deepEqual(pickNameHit(s), { name: '阿辰', confident: true }, s)
+  }
+  // 带冒号的「就叫：」仍高置信（「改成：」那条已在第五份报告里删掉）
+  assert.deepEqual(pickNameHit('那就叫：阿辰'), { name: '阿辰', confident: true })
+  // 带指人主语的仍高置信
+  assert.deepEqual(pickNameHit('以后你的称呼改成阿岸'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('他的名字定为阿岸'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('以后你就改成阿辰'), { name: '阿辰', confident: true })
+  // 「叫他X」那条不归这里管，同一句里有「以后」照旧高置信
+  assert.deepEqual(pickNameHit('以后叫他阿辰。'), { name: '阿辰', confident: true })
+})
+
+test('平常的安排句盖不掉已经定下的称呼；带引号的改口照样能盖', () => {
+  const seed = ev('ev_seed', 'seed', 1, '种', { source: 'system' })
+  const ok = ev('ev_ok', 'utterance', 2, '以后叫他「阿辰」。')
+  const now = T0 + 3 * DAY_MS
+  for (const s of ['以后改成早点睡。', '从今天起改成每天写日记。', '我以后改叫早上跑步了。', '他说以后就改成周三见。']) {
+    assert.equal(deriveSelf([seed, ok, ev('ev_x', 'utterance', 3, s)], { now }).name, '阿辰', s)
+    // revise 走的是同一个 settleName
+    const r = ev('ev_r', 'revise', 3, s, { refs: ['ev_ok'], verdict: 'refined' })
+    assert.equal(deriveSelf([seed, ok, r], { now }).name, '阿辰', `revise: ${s}`)
+  }
+  // 还没有称呼时，低置信的照旧先用
+  assert.equal(deriveSelf([seed, ev('ev_a', 'utterance', 2, '以后就改成阿辰。')], { now }).name, '阿辰')
+  // 低置信之间后来的盖前面的
+  const evs = [seed, ev('ev_a', 'utterance', 2, '以后改成早点睡。'), ev('ev_b', 'utterance', 3, '以后就改成「阿辰」。')]
+  assert.equal(deriveSelf(evs, { now }).name, '阿辰')
+  // 已经定下的称呼，用带引号的说法照样改得掉
+  for (const s of ['以后就改成「阿岸」。', '那就叫：阿岸。', '以后叫他阿岸。']) {
+    assert.equal(deriveSelf([seed, ok, ev('ev_b', 'utterance', 3, s)], { now }).name, '阿岸', s)
+  }
 })
 
 test('needs 只有三个键，且绝不出现好感度类字段', () => {
@@ -781,4 +947,37 @@ test('revise 推翻那条拒绝：记 revisedVerdict，立场清单不再拿它�
   ]
   const m = deriveSelf(evs, { now: T0 + 3 * DAY_MS })
   assert.equal(m.refusals[0].revisedVerdict, 'refuted')
+})
+
+// issue #160（2026-11-20）：她的认错大多记在 revise 里，聊天行那批被 uncommitted 挡掉，
+// 于是 corrected 恒 0、learn-affection 永远卡着、能力门也少一档。三条分别钉住：
+// ① revise 里明确认错要算；② 只是换说法不算；③ 聊天行照旧不算（m00680 的决定不动）。
+test('revise 里明确认下一处具体的错：corrected +1（issue #160）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_u', 'utterance', 2, '那条评论昨天已经回过了。'),
+    ev('ev_v', 'revise', 3, '是我说反了，那条评论 11-16 就回过。', { refs: ['ev_u'], verdict: 'refined' }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 3 * DAY_MS })
+  assert.equal(m.facts.corrected, 1)
+  assert.equal(m.facts.revises, 1)
+})
+
+test('revise 里只是换了说法、没有认错：不计 corrected', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_u', 'utterance', 2, '我觉得这个工具好用。'),
+    ev('ev_v', 'revise', 3, '把 X 当成 Y 了，换个说法：这个工具还算顺手。', { refs: ['ev_u'], verdict: 'refined' }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 3 * DAY_MS })
+  assert.equal(m.facts.corrected, 0)
+})
+
+test('聊天行里的认错照旧不进计数（uncommitted 只留证，m00680 的决定）', () => {
+  const evs = [
+    ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
+    ev('ev_c', 'utterance', 2, '那句「翻不到」我收回。', { flags: ['uncommitted'] }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
+  assert.equal(m.facts.corrected, 0)
 })
