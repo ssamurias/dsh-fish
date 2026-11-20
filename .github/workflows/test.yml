@@ -42,9 +42,20 @@ jobs:
         with:
           node-version: '22'
 
+      # 失败时把失败的用例名打成 annotation：这一步的日志要登录才能看，
+      # 而 annotation 匿名也能读到——2026-11-21 查一个偶发失败时卡在这里。
       - name: 跑测试
-        run: npm test
         shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.log
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -E '^(not ok|✖)' test-output.log | head -20 | while IFS= read -r line; do
+              echo "::error::${line%$'\r'}"
+            done
+          fi
+          exit "$status"
 
   # 白名单核对：`npm pack` 到底装了哪些文件。
   # 2026-11-13 的事故——README 三处教用户跑 `node tools/check-install.mjs`，

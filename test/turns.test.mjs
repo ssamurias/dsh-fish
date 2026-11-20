@@ -1318,12 +1318,25 @@ test('桥登记过的 prompt 照旧算他来过（登记表不能退化成摆设
   }
 })
 
+// 换房要抢文件锁（withFileLock 自己会等 8 秒），CI 的 Windows runner 只有两核，
+// 杀软还在扫 mkdtemp 目录，整套测试并行跑时这点活儿能拖到十几秒。
+// 等的时间给足；真等不到时把插件日志原样带进报错，不然只看到「超时」没法查。
+const ROTATE_WAIT_MS = 60_000
+
 test('满 rotateAfter 就换会话，事件流里留一条 meta', async () => {
   const root = await tmpRoot()
   try {
     await writeCfg(root, { chat: { rotateAfter: 1 } })
     const { ctx, created, renamed } = fakeCtx()
-    const off = registerTurns(ctx, { root, log: () => {} })
+    const logs = []
+    const off = registerTurns(ctx, {
+      root,
+      log: (m) => {
+        logs.push(String(m))
+      },
+    })
+    const withLogs = (err) =>
+      new Error(`${err?.message ?? err}\n插件日志：\n${logs.join('\n') || '（空）'}`, { cause: err })
     try {
       ctx.emit('session/event', session(), humanMsg('聊满一轮了'))
       ctx.emit('session/event', session(), TURN_END)
@@ -1331,6 +1344,8 @@ test('满 rotateAfter 就换会话，事件流里留一条 meta', async () => {
       const h = await waitFor(async () => {
         const st = await homeStatus(root)
         return st.sessionId && st.sessionId !== HER_SESSION ? st : null
+      }, ROTATE_WAIT_MS).catch((err) => {
+        throw withLogs(err)
       })
       assert.equal(created.length, 1, '只该建一个新会话')
       assert.equal(h.sessionId, 's-new-1')
@@ -1346,6 +1361,8 @@ test('满 rotateAfter 就换会话，事件流里留一条 meta', async () => {
           (e) => e.type === 'meta' && String(e.text ?? '').startsWith('rotate:'),
         )
         return hits.length === 1 ? hits : null
+      }, ROTATE_WAIT_MS).catch((err) => {
+        throw withLogs(err)
       })
       assert.equal(meta[0].text, 'rotate:1:s-new-1')
       assert.equal(meta[0].source, 'system')
