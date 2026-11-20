@@ -212,3 +212,13 @@ test('biliOn：只有 bili.enabled 明确为 false 才算断网（issue #62）',
   assert.equal(biliOn({ browse: { enabled: false } }), true)
   assert.equal(biliOn({ comment: { enabled: false } }), true)
 })
+
+test('她一次读多少字幕：只认 page / whole，坏值退回 page（issue #155）', () => {
+  assert.equal(DEFAULTS.bili.read, 'page', '默认是最省的那档')
+  assert.equal(normalizeConfig({}).bili.read, 'page', '老配置没有这一项 = 一页')
+  assert.equal(normalizeConfig({ bili: { read: 'whole' } }).bili.read, 'whole')
+  assert.equal(normalizeConfig({ bili: { read: 'page' } }).bili.read, 'page')
+  // 认不出来就按一页算：宁可她多翻几页，也别一次把几万 token 塞进上下文。
+  assert.equal(normalizeConfig({ bili: { read: 'all' } }).bili.read, 'page')
+  assert.equal(normalizeConfig({ bili: { read: '' } }).bili.read, 'page')
+})

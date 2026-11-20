@@ -617,6 +617,42 @@ test('她的请求：放一天没人答会自动记成以后再说，之后补�
   assert.match(note, /补答不了/)
 })
 
+test('这事已经过去了：第一下只把话说明白，按了确定才记账', async () => {
+  // 2026-11-20 用户 m00849：不加撤销，改成二次确认——先把这一笔记什么、记完她会怎样说清楚。
+  const ask = { id: 'ask_1', question: '想要一个能读 PDF 的工具', verdict: null, done: false }
+  const posted = []
+  const restore = stubFetch({
+    '/ask': (path, opts) => {
+      if (opts && opts.method === 'POST') { posted.push(JSON.parse(opts.body)); return { ok: true } }
+      return { pending: [], items: [ask] }
+    },
+  })
+  try {
+    const app = await mount({ state: stateWith(), tab: 'home', asks: { pending: [], items: [ask] } })
+    const first = card(app.render(), '她的请求')
+    assert.ok(first.all.includes('这事已经过去了'), `按钮：${first.all}`)
+    assert.ok(!first.all.includes('这件事已经解决了'), '不再替她宣布「这件事已经解决了」')
+    button(first.node, '这事已经过去了').props.onClick()
+    const second = card(app.render(), '她的请求').all
+    assert.equal(posted.length, 0, '点第一下不该写账')
+    assert.match(second, /后来的结局/)
+    assert.match(second, /这一笔也撤不回来/)
+    assert.match(second, /确定这件事已经为她解决了吗/)
+    button(app.render(), '确定，这事已经过去了').props.onClick()
+    for (let i = 0; i < 8 && !posted.length; i += 1) await Promise.resolve()
+    assert.deepEqual(posted, [{ action: 'done', askId: 'ask_1' }])
+  } finally { restore() }
+})
+
+test('已经过去的那张卡：状态字换了，也不再出按钮', async () => {
+  const ask = { id: 'ask_9', question: '想换个作息', verdict: 'later', done: true }
+  const { render } = await mount({ state: stateWith(), tab: 'home', asks: { pending: [], items: [ask] } })
+  const c = card(render(), '她的请求')
+  assert.ok(c.all.includes('已经过去'), `状态字：${c.all}`)
+  assert.equal(findAll(c.node, (n) => n.type === 'button' && text(n) === '这事已经过去了').length, 0)
+  assert.ok(!c.all.includes('已经解决'), '状态字不再说「已经解决」')
+})
+
 test('重开、重新搭一间之后，指到「状态」页的「现在叫醒大肥鱼」', async () => {
   // 重置卡本身
   {
@@ -681,4 +717,36 @@ test('导出报告时没有正文：别让人去点只管显示的「展开报�
   const note = noteOf(app.render())
   assert.ok(note, '没有正文时要说一句')
   assert.doesNotMatch(note, /展开报告/, `「展开报告」只切换显示，不取数据：${note}`)
+})
+
+// ---------------------------------------------------------------------------
+// 字幕一次读多少（issue #155，2026-11-21 用户 m01746）
+// ---------------------------------------------------------------------------
+
+test('她一次读多少字幕：页面上两档可选，选完界面跟着变', async () => {
+  const s = stateWith({
+    config: {
+      window: ['20:00', '23:00'], daily: { events: 1, questions: 1 }, diary: {}, absenceAfterDays: 3,
+      bili: { enabled: true, sub: true, read: 'page' },
+    },
+  })
+  const app = await mount({ state: s, tab: 'bili' })
+  app.render()
+  app.runAutosave() // 首屏只记基线
+
+  const selOf = () => findAll(field(app.render(), '她一次读多少字幕'), (n) => n.type === 'select')[0]
+  const sel = selOf()
+  assert.ok(sel, '要有一个「她一次读多少字幕」的下拉')
+  assert.deepEqual(sel.children.map((o) => o.props.value), ['page', 'whole'], '只有两档')
+  assert.match(text(sel), /一页 2800 字/)
+  assert.match(text(sel), /一次读完（单条上限 3 万字）/)
+  assert.equal(sel.props.value, 'page', '盘上是一页，就显示一页')
+
+  const hint = hintOf(app.render(), '她一次读多少字幕')
+  assert.match(hint, /一小时的视频约 10 页/)
+  assert.match(hint, /单条上限 3 万字，超过就退回一页页读/)
+  assert.match(hint, /整篇会一次占掉几万 token/, '代价要说在人能看见的地方')
+
+  sel.props.onChange({ target: { value: 'whole' } })
+  assert.equal(selOf().props.value, 'whole', '选了整篇，界面上的值要跟着变')
 })

@@ -2,7 +2,8 @@
  * sub.test.mjs —— 工具 bili_sub：这条视频里到底说了哪几句（1.0，用户 m04014）
  *
  * 守四件事：
- *   1. 按句给，不按篇给：一次最多三句，带时间点；
+ *   1. 一次给多少由设置定（2026-11-21，issue #155）：默认一页约 2800 字，也能设成整篇一次给全；
+ *      带 query 找原句不受档位影响，最多三句；
  *   2. 没有字幕就说没有，不猜内容；
  *   3. 只落一行 `subs:` 索引，正文不进口忆；
  *   4. 说明里要让她知道"怎么用、什么时候想起它"，也要允许"拼不出来"。
@@ -149,16 +150,18 @@ test('B 站关着 / 视频号不合法：直说打不开、说不是视频号', 
   })
 })
 
-test('工具说明：说清怎么用、一次最多三句、也允许拼不出来', () => {
+test('工具说明：说清一次给多少由设置定、允许拼不出来', () => {
   const seen = []
   registerSub({ tools: { register: (d) => { seen.push(d); return () => {} } } }, { root: '.', tenant: { ok: true } })
   const d = seen[0]
   assert.equal(d.name, 'bili_sub')
-  assert.match(d.description, /最多三句/)
-  assert.match(d.description, /片段，不是整篇/)
+  assert.match(d.description, /一次给你多少由这台机器的设置定/)
+  assert.match(d.description, /一页/)
+  assert.match(d.description, /整条一次给全/)
   assert.match(d.description, /没有字幕/)
   assert.match(d.description, /别硬凑一个总结/)
-  assert.match(d.description, /一页页读/, '要让她知道可以接着读，不是只能看三句')
+  assert.match(d.description, /填进 from/, '要让她知道可以接着读')
+  assert.match(d.description, /读完字幕不等于看过/)
   assert.ok(d.parameters?.properties?.bvid, 'bvid 要在 schema 里')
   assert.ok(d.parameters?.properties?.from, 'from 要在 schema 里，她才知道怎么接着读')
 })
@@ -173,16 +176,16 @@ test('接着读：from 认 "mm:ss" / "h:mm:ss" / 秒数，认不出来当没填'
   assert.equal(parseFrom(undefined), null)
 })
 
-test('接着读：一页十来句，页尾给下一页的起点，读到头说读完了', () => {
-  const sentences = Array.from({ length: 20 }, (_, i) => ({ t: i * 10, text: `第${i}句。` }))
+test('接着读：一页二十四句（约 2800 字），页尾给下一页的起点，读到头说读完了', () => {
+  const sentences = Array.from({ length: 40 }, (_, i) => ({ t: i * 10, text: `第${i}句。` }))
   const first = pickPage(sentences, 0)
   assert.equal(first.page.length, SUB_PAGE)
   assert.equal(first.page[0].t, 0)
   assert.equal(first.done, false)
-  assert.equal(first.next, 120)
+  assert.equal(first.next, 240)
 
   const second = pickPage(sentences, first.next)
-  assert.equal(second.page.length, 20 - SUB_PAGE)
+  assert.equal(second.page.length, 40 - SUB_PAGE)
   assert.equal(second.done, true)
   assert.equal(second.next, null)
 
@@ -245,16 +248,74 @@ test('翻页索引记下读到第几页、读没读完', async () => {
       if (r.page.done) break
       from = r.page.next
     }
-    assert.equal(pages.length, 3, '三十句、一页十二句：要三页才读完')
+    assert.equal(pages.length, 2, '三十句、一页二十四句：两页读完')
     assert.equal(pages[0].page, 1)
     assert.equal(pages[0].done, false)
-    assert.equal(pages[2].done, true)
+    assert.equal(pages[1].done, true)
 
     const seen = await readEvents(root)
     const subs = seen.events.filter((e) => String(e.text ?? '').startsWith('subs:')).map((e) => e.text)
-    assert.equal(subs.length, 3)
+    assert.equal(subs.length, 2)
     assert.match(subs[0], /page=1 done=0/)
-    assert.match(subs[2], /page=3 done=1/)
+    assert.match(subs[1], /page=2 done=1/)
+  })
+})
+
+test('一次读多少：默认一页，什么都不填也给一整页', async () => {
+  await withRoot(async (root) => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ t: i * 5, text: `第${i}句。` }))
+    const client = fakeClient({ subtitle: async () => ({ ok: true, data: many }) })
+    const r = await subOnce({ bvid: BVID, client, root, cfg: { bili: { enabled: true } } })
+    assert.equal(r.ok, true)
+    assert.ok(r.page, '默认档要带页面信息，她才好接着读')
+    assert.equal(r.snippets.length, SUB_PAGE)
+    assert.match(r.text, /这一页/)
+    assert.match(r.text, /想接着读/)
+
+    const seen = await readEvents(root)
+    assert.match(String(seen.events.at(-1)?.text ?? ''), /page=1 done=0/)
+  })
+})
+
+test('一次读多少：设置成整篇，一次给全，索引记 whole=1', async () => {
+  await withRoot(async (root) => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ t: i * 5, text: `第${i}句。` }))
+    const client = fakeClient({ subtitle: async () => ({ ok: true, data: many }) })
+    const r = await subOnce({ bvid: BVID, client, root, cfg: { bili: { enabled: true, read: 'whole' } } })
+    assert.equal(r.ok, true)
+    assert.equal(r.page, null, '整篇档没有「下一页」这回事')
+    assert.equal(r.snippets.length, 30)
+    assert.match(r.text, /整篇/)
+    assert.match(r.text, /读完不等于看过/)
+    assert.match(r.text, /\[02:25\] 第29句/, '每句都带时间点')
+
+    const seen = await readEvents(root)
+    assert.match(String(seen.events.at(-1)?.text ?? ''), /whole=1/)
+  })
+})
+
+test('一次读多少：整篇超过上限就退回一页，并说清为什么', async () => {
+  await withRoot(async (root) => {
+    // 400 句 × 90 字 = 36000 字，超过 3 万字上限。
+    const huge = Array.from({ length: 400 }, (_, i) => ({ t: i * 3, text: '字'.repeat(90) }))
+    const client = fakeClient({ subtitle: async () => ({ ok: true, data: huge }) })
+    const r = await subOnce({ bvid: BVID, client, root, cfg: { bili: { enabled: true, read: 'whole' } } })
+    assert.equal(r.ok, true)
+    assert.ok(r.page, '一次给不完就退回一页，不硬塞进上下文')
+    assert.equal(r.snippets.length, SUB_PAGE)
+    assert.match(r.note, /上限 30000 字/)
+    assert.match(r.note, /填进 from/)
+  })
+})
+
+test('带词查找不受档位影响：整篇档也只给最多三句', async () => {
+  await withRoot(async (root) => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ t: i * 5, text: i === 7 ? '这里讲定价。' : `第${i}句。` }))
+    const client = fakeClient({ subtitle: async () => ({ ok: true, data: many }) })
+    const r = await subOnce({ bvid: BVID, query: '定价', client, root, cfg: { bili: { enabled: true, read: 'whole' } } })
+    assert.equal(r.ok, true)
+    assert.ok(r.snippets.length <= SUB_MAX)
+    assert.equal(r.snippets[0].t, 35)
   })
 })
 
