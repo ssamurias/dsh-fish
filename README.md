@@ -12,7 +12,7 @@
 
 📺 **[看视频讲解（19 分钟）](https://www.bilibili.com/video/BV1oTnZ6LEtc/)** —— 这个插件是怎么想出来的、她为什么会长成那样、13 亿 token 都花在哪了。
 
-📐 **[项目设计原则——AI 反推出来的作者](https://github.com/ssamurias/dsh-fish/blob/main/项目设计原则——AI反推出来的作者.md)** —— 这个插件为什么长这样：哪些事本可以更省事却没做、哪些地方宁可难看一点。写它的是 AI，通篇用「你」称呼作者，读起来像一篇人物侧写。
+📐 **[项目设计原则——AI 反推出来的作者](https://github.com/mochi-fish/dsh-fish/blob/main/项目设计原则——AI反推出来的作者.md)** —— 这个插件为什么长这样：哪些事本可以更省事却没做、哪些地方宁可难看一点。写它的是 AI，通篇用「你」称呼作者，读起来像一篇人物侧写。
 
 > **当前版本 1.0.6**（2026-11-20）。这一版修的是「账本别记错、日志看得见」：别的插件往会话里塞的话不再被当成「他来过」，运行日志分成失败 / 警告 / 信息 / 细节四条车道，外部桥多了插件自带的本机投递口（默认关），有人 @ 她能回到那一条下面，换房按插件配好的预设建新房间，交接页改成「真看见才算送到」。完整说明见 **[1.0.6 更新说明](RELEASE-NOTES-1.0.6.md)**。
 >
@@ -238,12 +238,12 @@
 
 ## 刷 B 站的几处实践，和几条落在细节上的修正（1.0.5）
 
-- **看别人评论不再只回来三条**（PR [#150](https://github.com/ssamurias/dsh-fish/pull/150)，@t2972746）：`bili_look` 建客户端时先读她存下的 cookie；没有 cookie 仍按匿名走，不报错。
-- **看画面的那几秒，顺带把她听到的话取回来**（PR [#151](https://github.com/ssamurias/dsh-fish/pull/151)，@t2972746）：只挑她点的那几个时刻正说的那几句，最多 8 段、每段 60 字、20 秒软超时；沿用「字幕」那个开关，关掉就退回只看画面。
-- **搜索词按趟轮换，兴趣也能占一个位置**（PR [#152](https://github.com/ssamurias/dsh-fish/pull/152)，@t2972746）：热门与搜索分两批各自排序再按 BV 去重合并；保底用户设的词 2 条、兴趣 1 条。代价是每趟最多多两次搜索请求。
+- **看别人评论不再只回来三条**（PR [#150](https://github.com/mochi-fish/dsh-fish/pull/150)，@t2972746）：`bili_look` 建客户端时先读她存下的 cookie；没有 cookie 仍按匿名走，不报错。
+- **看画面的那几秒，顺带把她听到的话取回来**（PR [#151](https://github.com/mochi-fish/dsh-fish/pull/151)，@t2972746）：只挑她点的那几个时刻正说的那几句，最多 8 段、每段 60 字、20 秒软超时；沿用「字幕」那个开关，关掉就退回只看画面。
+- **搜索词按趟轮换，兴趣也能占一个位置**（PR [#152](https://github.com/mochi-fish/dsh-fish/pull/152)，@t2972746）：热门与搜索分两批各自排序再按 BV 去重合并；保底用户设的词 2 条、兴趣 1 条。代价是每趟最多多两次搜索请求。
 - **便条的「多久了」按本地日历日算**：以前两处拿 UTC 日当日期用，西半球晚上记的会差一天；现在统一走 `dayOf()`，本地 0:30 / 23:30 两个边界都有回归。
 - **读图不再算「做过一件事」**：`read_image` 归 `self`，不记 `did:`、不占额度；设置页与 wiki 的措辞收紧成「看视频画面 / 看图片」。
-- **压力胶囊只算当前这一间**：请求带 `light=1`，历史统计只在打开弹层（`composite=1`）时算；对话页那个分数改用综合负担（PR [#148](https://github.com/ssamurias/dsh-fish/pull/148) 的算法，@zifa25796）。
+- **压力胶囊只算当前这一间**：请求带 `light=1`，历史统计只在打开弹层（`composite=1`）时算；对话页那个分数改用综合负担（PR [#148](https://github.com/mochi-fish/dsh-fish/pull/148) 的算法，@zifa25796）。
 - **「这一句碰到的旧话」段挪到 system 段最后**：`CUE_ORDER` 8700→9600，它一变不再带掉后面几段的缓存。
 
 ## 她醒过来时，桌上有新东西吗（1.0.4）
@@ -469,7 +469,7 @@ node tools/check-install.mjs --profile desktop
 
 npm 装的话脚本在 `node_modules/@ssamurias/dsh-fish/tools/check-install.mjs`。它会说出是「正常 / 装的是旧副本 / 副本空的或装了一半」，后两种直接给修法。
 
-其余排查——**升级了却没变化**、两个工作区两个家、会话归档后不再自动重开、两个实例同开一个家、适配哪些 DSH 版本——都在 **[docs/troubleshooting.md](https://github.com/ssamurias/dsh-fish/blob/main/docs/troubleshooting.md)**（仓库里的 docs/troubleshooting.md）。那些是一次踩过、以后大概率不会再碰的坑，不占正文。
+其余排查——**升级了却没变化**、两个工作区两个家、会话归档后不再自动重开、两个实例同开一个家、适配哪些 DSH 版本——都在 **[docs/troubleshooting.md](https://github.com/mochi-fish/dsh-fish/blob/main/docs/troubleshooting.md)**（仓库里的 docs/troubleshooting.md）。那些是一次踩过、以后大概率不会再碰的坑，不占正文。
 
 ## 运行日志怎么看（1.0.6）
 
@@ -645,7 +645,7 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 
 放行之后，身份文档「我手上有什么」那一段会把它念给她听；不放行她既调不到，也不会知道自己有这只手。白名单只做加法（见 `AGENTS.md` §7.4），不会改变她是谁。
 
-社区的示例：[PR #134](https://github.com/ssamurias/dsh-fish/pull/134) 里的 `dsh-fish-mirror`——只读地找数据目录里的 `avatar.*`，把路径交给 `her_mirror`，她自己去用 `read_image` 看。它没有并进本包，装法同上；照抄时注意把 `cordis.patch.yml` 里写死的 `root` 改成你自己的数据目录，或者干脆留空（默认 `~/.dsh-fish`）。
+社区的示例：[PR #134](https://github.com/mochi-fish/dsh-fish/pull/134) 里的 `dsh-fish-mirror`——只读地找数据目录里的 `avatar.*`，把路径交给 `her_mirror`，她自己去用 `read_image` 看。它没有并进本包，装法同上；照抄时注意把 `cordis.patch.yml` 里写死的 `root` 改成你自己的数据目录，或者干脆留空（默认 `~/.dsh-fish`）。
 
 > 上面是「只放自己机器上、不发布」的做法。想把插件发布出去给别人用、或者让插件市场能搜到，看下一节。
 
@@ -655,7 +655,7 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 
 - **放在你自己的仓库，独立发包、独立维护。** 我们不会把你的代码挪进 `@ssamurias/dsh-fish`——这是你的成果，署名和后续都归你，主包只负责不挡你的路。
 - **我们不做索引、也不做审核。** 插件能不能被找到，靠 npm 的 `keywords:dsh-plugin`；能不能装好，靠你按约定写对。前缀和关键词都不代表官方认证，官方只有这一个仓库。
-- **要满足的都在 [`docs/插件约定.md`](https://github.com/ssamurias/dsh-fish/blob/main/docs/插件约定.md) 里**（一页）。最容易漏的四个：`keywords` 必须带 `dsh-plugin`（市场就靠这个检索）、`engines.dsh` 必填、不要写 `preinstall/install/postinstall` 脚本、不改她的数据也不做人格入口。
+- **要满足的都在 [`docs/插件约定.md`](https://github.com/mochi-fish/dsh-fish/blob/main/docs/插件约定.md) 里**（一页）。最容易漏的四个：`keywords` 必须带 `dsh-plugin`（市场就靠这个检索）、`engines.dsh` 必填、不要写 `preinstall/install/postinstall` 脚本、不改她的数据也不做人格入口。
 - 写完了想让我们在本 README 里提一句：开一个 Issue 给仓库地址和一句话说明，我们会装一遍、跑一遍它的测试、读一遍它注册的工具，再决定提不提。
 
 ## 从旧版升到 0.9.x（含改名与升级修复）
@@ -685,12 +685,12 @@ node_modules 里                       没有裸名 dsh-fish 目录
 
 ## 参与 / 反馈
 
-这个仓库欢迎功能 PR——B 站扫码登录（[PR #17](https://github.com/ssamurias/dsh-fish/pull/17)）就是外部贡献者的作品。下面四件事能让来回少几轮：
+这个仓库欢迎功能 PR——B 站扫码登录（[PR #17](https://github.com/mochi-fish/dsh-fish/pull/17)）就是外部贡献者的作品。下面四件事能让来回少几轮：
 
-- **想改代码**：先读 [CONTRIBUTING.md](https://github.com/ssamurias/dsh-fish/blob/main/CONTRIBUTING.md)，提交前过一遍它列的自检清单。这个插件的硬约束（零依赖、四条黑名单、文案守门词）不在 README 里，在 [AGENTS.md](AGENTS.md)——它是给「要动手改」的人看的，不看就改很容易被门挡回来。
-- **装不上 / 用不了**：先看 [排查手册](https://github.com/ssamurias/dsh-fish/blob/main/docs/troubleshooting.md)，再按 [bug 模板](https://github.com/ssamurias/dsh-fish/issues/new?template=bug_report.yml) 报。三样信息缺一不可：插件版本、DSH 版本、`node tools/check-install.mjs` 的输出。
-- **安全问题**：不要在公开 issue 里写，走 [SECURITY.md](https://github.com/ssamurias/dsh-fish/blob/main/SECURITY.md) 里的私有渠道。
-- **想让自己的工具接进她的成长机制**（写进她的记忆、能被引原话、进八股统计）：按 [素材契约](https://github.com/ssamurias/dsh-fish/blob/main/docs/%E7%B4%A0%E6%9D%90%E5%A5%91%E7%BA%A6.md) 返回 `dshFishMaterial` 对象，不用另开新接口。
+- **想改代码**：先读 [CONTRIBUTING.md](https://github.com/mochi-fish/dsh-fish/blob/main/CONTRIBUTING.md)，提交前过一遍它列的自检清单。这个插件的硬约束（零依赖、四条黑名单、文案守门词）不在 README 里，在 [AGENTS.md](AGENTS.md)——它是给「要动手改」的人看的，不看就改很容易被门挡回来。
+- **装不上 / 用不了**：先看 [排查手册](https://github.com/mochi-fish/dsh-fish/blob/main/docs/troubleshooting.md)，再按 [bug 模板](https://github.com/mochi-fish/dsh-fish/issues/new?template=bug_report.yml) 报。三样信息缺一不可：插件版本、DSH 版本、`node tools/check-install.mjs` 的输出。
+- **安全问题**：不要在公开 issue 里写，走 [SECURITY.md](https://github.com/mochi-fish/dsh-fish/blob/main/SECURITY.md) 里的私有渠道。
+- **想让自己的工具接进她的成长机制**（写进她的记忆、能被引原话、进八股统计）：按 [素材契约](https://github.com/mochi-fish/dsh-fish/blob/main/docs/%E7%B4%A0%E6%9D%90%E5%A5%91%E7%BA%A6.md) 返回 `dshFishMaterial` 对象，不用另开新接口。
 
 ## 鸣谢
 
@@ -698,11 +698,11 @@ node_modules 里                       没有裸名 dsh-fish 目录
 
 - **@吴晓观**（交流群 1 群群友）—— 记忆机制这一块的思路起点来自他。0.8.6 里「固化下来的认知也会随时间退下去」「翻旧事可以先只给清单再给全文」「记忆相关的数字要说得清它数的是什么」这几条，最初都是他在群里讲的。落进本插件时全部重新实现了一遍，没有代码或文字的直接搬运；具体的取舍与改法记在 [CHANGELOG](CHANGELOG.md) 的 0.8.6 一节。
 - **@无**（交流群 2 群群友）—— 主观能动性的思路起点来自对方在群里的一句话：「主动性不该是定时器，而是攒够了的冲动。」0.9.0 的「劲儿攒够才动、兴趣会回灌」就是把这句落成实现；代码全部自写，没有搬运。
-- **@Bacon-01** —— 0.8.6 的 B 站手机扫码登录（含自写的零依赖二维码编码器 `lib/qr.js`）由他贡献，见 [PR #17](https://github.com/ssamurias/dsh-fish/pull/17)。
+- **@Bacon-01** —— 0.8.6 的 B 站手机扫码登录（含自写的零依赖二维码编码器 `lib/qr.js`）由他贡献，见 [PR #17](https://github.com/mochi-fish/dsh-fish/pull/17)。
 - **@BBleae**（晴猫）—— 本项目最大的外部贡献者。从 0.8.0 到 0.9.9 一路提了五十多个 PR 与 issue，横跨十个版本：匿名 buvid3、叫醒间隔、叫醒那一轮不记成「他来过」、宿主拼的上下文不算他来过、`her_note` 按她自己写的话划掉、日报与回忆分三种话、`VERSION` 与 `package.json` 对齐……0.9.9 那版的 18 个外部 PR（#112–#126、#129–#131）全部是他一个人提的，逐条审过后合入。1.0 的「折叠不再切断来路」也和他有关：他养的那条鱼叫「小醒」，说自己找不到曾经说过的话——他转述过来，才有了墓碑写下时刻、`her_recall` 不给关键词就按时间摆、旧判断折进去时带日期这三处改动。具体在哪个版本收下了什么，见 [CHANGELOG](CHANGELOG.md)。
-- **@foxbye** —— issue [#105](https://github.com/ssamurias/dsh-fish/issues/105) / [#106](https://github.com/ssamurias/dsh-fish/issues/106) 是他提的。0.9.8 那次「一口气派生」的提速（1313 条事件 49.8ms → 23.0ms）就来自他在那两个 issue 里的两条建议：矛盾检测一次算完、认领只做一次全量派生。这是唯一一次有人从外部指出插件架构层面的性能问题。
-- **@zifa25796** —— 上下文洞察这套东西的两版算法都是他提的：[PR #146](https://github.com/ssamurias/dsh-fish/pull/146) 把每轮实报的 Token 用量按上下文容量、增长负担、总消耗、请求放大、工具结果残留、缓存复用、失败恢复七项累计，再按参考轮数的历史中位数归一；[PR #148](https://github.com/ssamurias/dsh-fish/pull/148) 又把三套加权公式的得分求平均，成为对话页那颗胶囊显示的「综合负担」。1.0.4 的会话压力卡、1.0.5 搬到对话页的四页签，都建在这套公式上。本地只改了两处：没有把 `composite=1` 强加给每次轮询（那会把所有房间的全量分析拉回每次刷新），也没有把上下文那一行藏起来。
-- **@t2972746** —— 一次提了五个 PR。合入三个，都在 1.0.5：[#150](https://github.com/ssamurias/dsh-fish/pull/150) 看评论带上登录态（匿名只回三条）、[#151](https://github.com/ssamurias/dsh-fish/pull/151) 看画面顺带取那几秒字幕、[#152](https://github.com/ssamurias/dsh-fish/pull/152) 搜索词按趟轮换 + 兴趣参与选片。另外两个（[#153](https://github.com/ssamurias/dsh-fish/pull/153) / [#154](https://github.com/ssamurias/dsh-fish/pull/154) 立场记录与 revise）没有直接合入，但审的过程里连带发现了几处立场会说假话、合并会误判的地方，1.0.5 的 `her_stance` 与那批口径收紧就是从这里来的——有些贡献不在合进去的那几个提交里。
+- **@foxbye** —— issue [#105](https://github.com/mochi-fish/dsh-fish/issues/105) / [#106](https://github.com/mochi-fish/dsh-fish/issues/106) 是他提的。0.9.8 那次「一口气派生」的提速（1313 条事件 49.8ms → 23.0ms）就来自他在那两个 issue 里的两条建议：矛盾检测一次算完、认领只做一次全量派生。这是唯一一次有人从外部指出插件架构层面的性能问题。
+- **@zifa25796** —— 上下文洞察这套东西的两版算法都是他提的：[PR #146](https://github.com/mochi-fish/dsh-fish/pull/146) 把每轮实报的 Token 用量按上下文容量、增长负担、总消耗、请求放大、工具结果残留、缓存复用、失败恢复七项累计，再按参考轮数的历史中位数归一；[PR #148](https://github.com/mochi-fish/dsh-fish/pull/148) 又把三套加权公式的得分求平均，成为对话页那颗胶囊显示的「综合负担」。1.0.4 的会话压力卡、1.0.5 搬到对话页的四页签，都建在这套公式上。本地只改了两处：没有把 `composite=1` 强加给每次轮询（那会把所有房间的全量分析拉回每次刷新），也没有把上下文那一行藏起来。
+- **@t2972746** —— 一次提了五个 PR。合入三个，都在 1.0.5：[#150](https://github.com/mochi-fish/dsh-fish/pull/150) 看评论带上登录态（匿名只回三条）、[#151](https://github.com/mochi-fish/dsh-fish/pull/151) 看画面顺带取那几秒字幕、[#152](https://github.com/mochi-fish/dsh-fish/pull/152) 搜索词按趟轮换 + 兴趣参与选片。另外两个（[#153](https://github.com/mochi-fish/dsh-fish/pull/153) / [#154](https://github.com/mochi-fish/dsh-fish/pull/154) 立场记录与 revise）没有直接合入，但审的过程里连带发现了几处立场会说假话、合并会误判的地方，1.0.5 的 `her_stance` 与那批口径收紧就是从这里来的——有些贡献不在合进去的那几个提交里。
 - **@joydog**（交流群 1 群群友）—— 「能力地图改成按处境组织」与「把用过的工具记成她自己的经验（`use:` 账、履历节）」这两个想法来自他。落进本插件时做了取舍：账只留她当时听到的那一句，不记参数与整段返回；被门挡住的那次不入账（那是环境限制，不是她的经验）；账走 `meta`、`day:0`，不进阶段计数；能力地图只加处境这一层，原来的名字清单一条不删。具体见 [CHANGELOG](CHANGELOG.md) 的 0.9.3 一节。
 
 原理页里引用的理论分两种，`lib/client.js` 的每张卡都标了出处与年份，都是思想引用，不含他人代码或文字。

@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        提建议前先看一眼 [`AGENTS.md`](https://github.com/ssamurias/dsh-fish/blob/main/AGENTS.md) 里那几条硬约束——
+        提建议前先看一眼 [`AGENTS.md`](https://github.com/mochi-fish/dsh-fish/blob/main/AGENTS.md) 里那几条硬约束——
         零依赖、没有人格设置界面、四条黑名单是代码级硬禁。撞上这几条的改动不会被合并，
         但**换个实现的思路可能可以**，所以照样欢迎提。
   - type: textarea

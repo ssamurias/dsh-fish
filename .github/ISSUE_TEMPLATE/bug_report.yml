@@ -16,7 +16,7 @@ body:
         npm 装的，脚本在 `node_modules/@ssamurias/dsh-fish/tools/check-install.mjs`。
 
         更多排查（升级没变化、两个工作区两个家、会话归档、多实例、DSH 版本适配）在
-        [docs/troubleshooting.md](https://github.com/ssamurias/dsh-fish/blob/main/docs/troubleshooting.md)。
+        [docs/troubleshooting.md](https://github.com/mochi-fish/dsh-fish/blob/main/docs/troubleshooting.md)。
   - type: input
     id: version
     attributes:
