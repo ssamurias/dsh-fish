@@ -586,7 +586,7 @@ ffmpeg 写文件这件事不需要额外权限：抽帧和拼图都从 stdout �
 不想经过 npm 就直接从 GitHub 装，同样不用关 DSH：
 
 ```
-"<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "github:ssamurias/dsh-fish"
+"<DSH>/resources/runtime/cli/bin/dsh.cmd" plugin --profile <profile> add "github:mochi-fish/dsh-fish"
 ```
 
 要改代码才用源码目录，而且**必须先关掉 DSH**——运行中替换已被加载的包会 `EPERM`，包目录会被留成「已删除」，下次启动缺包：

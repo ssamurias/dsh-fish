@@ -63,14 +63,14 @@ test('compareVersion：按数字比，不按字符串比', () => {
 })
 
 test('仓库地址只在一处定义', () => {
-  assert.equal(REPO, 'ssamurias/dsh-fish')
-  assert.equal(REPO_URL, 'https://github.com/ssamurias/dsh-fish')
+  assert.equal(REPO, 'mochi-fish/dsh-fish')
+  assert.equal(REPO_URL, 'https://github.com/mochi-fish/dsh-fish')
   assert.equal(RELEASES_URL, REPO_URL + '/releases')
 })
 
 test('真有新版：hasUpdate 为 true，并把来源带出来', async () => {
   const fetchImpl = fakeFetch({
-    'api.github.com/repos/ssamurias/dsh-fish/releases/latest': () => resp({ tag_name: 'v0.4.0' }),
+    'api.github.com/repos/mochi-fish/dsh-fish/releases/latest': () => resp({ tag_name: 'v0.4.0' }),
   })
   // 其余源全部失败（模拟国内被重置）
   const r = await checkUpdate({ current: '0.3.0', fetchImpl, timeoutMs: 2000 })
