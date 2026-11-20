@@ -653,6 +653,27 @@ test('已经过去的那张卡：状态字换了，也不再出按钮', async ()
   assert.ok(!c.all.includes('已经解决'), '状态字不再说「已经解决」')
 })
 
+test('第三个选项不再被记成一句空的「以后再说」：点中的原文跟着走（用户 m03230）', async () => {
+  const ask = { id: 'ask_c', question: '那条评论是我去删还是你来？', options: ['可以', '这次不行', '我来改'], verdict: null, done: false }
+  const posted = []
+  const restore = stubFetch({
+    '/ask': (path, opts) => {
+      if (opts && opts.method === 'POST') { posted.push(JSON.parse(opts.body)); return { ok: true } }
+      return { pending: [ask], items: [] }
+    },
+  })
+  try {
+    const app = await mount({ state: stateWith(), tab: 'home', asks: { pending: [ask], items: [] } })
+    button(app.render(), '我来改').props.onClick()
+    for (let i = 0; i < 8 && !posted.length; i += 1) await Promise.resolve()
+    assert.deepEqual(posted, [{ action: 'answer', askId: 'ask_c', verdict: 'later', reason: '我来改' }])
+    posted.length = 0
+    button(app.render(), '以后再说').props.onClick()
+    for (let i = 0; i < 8 && !posted.length; i += 1) await Promise.resolve()
+    assert.deepEqual(posted, [{ action: 'answer', askId: 'ask_c', verdict: 'later', reason: '' }], '真的「以后再说」不该带原文')
+  } finally { restore() }
+})
+
 test('重开、重新搭一间之后，指到「状态」页的「现在叫醒大肥鱼」', async () => {
   // 重置卡本身
   {
