@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { cueLineFrom, rememberHuman, clearHuman, cueFor, CUE_TTL_MS } from '../lib/cue.js'
+import { updateConfig } from '../lib/settings.js'
 
 const SINCE = '2026-11-01T04:00:00.000Z'
 
@@ -69,4 +73,35 @@ test('turn/end 丢了也有兜底：15 分钟后不再摆上一句', () => {
   assert.match(cueFor('ttl', { now: t0 + 1000, model }), /你以前说过/)
   assert.equal(cueFor('ttl', { now: t0 + CUE_TTL_MS + 1, model }), '')
   clearHuman('ttl')
+})
+
+test('换个说法也碰得上：topic 的近义词算 0.7', () => {
+  const model = { beliefs: [belief({ topic: '害怕', text: '我有点怕黑。' })] }
+  assert.match(cueLineFrom(model, '今天走夜路有点慌'), /你以前说过/)
+  assert.equal(cueLineFrom(model, '今天走了很远的路'), '')
+})
+
+test('原话里的关键词也认：三个二字组以上才算', () => {
+  const model = { beliefs: [belief({ topic: '搬家', text: '每次搬家都要收拾箱子，太折腾了。' })] }
+  assert.match(cueLineFrom(model, '这两天收拾箱子收拾得腰疼'), /你以前说过/)
+  // 只撞一个「收拾」，不够
+  assert.equal(cueLineFrom(model, '收拾东西'), '')
+})
+
+test('cue.enabled 关掉之后不再摆，打开又摆', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fish-cue-'))
+  const model = { beliefs: [belief()] }
+  const t0 = Date.parse(SINCE) + 1000
+  try {
+    await updateConfig({ cue: { enabled: false } }, root)
+    rememberHuman('sw', '叫老大', { at: t0 })
+    assert.equal(cueFor('sw', { now: t0 + 1000, model, root }), '')
+    await updateConfig({ cue: { enabled: true } }, root)
+    rememberHuman('sw', '叫老大', { at: t0 })
+    assert.match(cueFor('sw', { now: t0 + 1000, model, root }), /你以前说过/)
+  } finally {
+    clearHuman('sw')
+    await updateConfig({ cue: { enabled: true } }, root).catch(() => {})
+    await rm(root, { recursive: true, force: true })
+  }
 })
