@@ -186,6 +186,22 @@ test('名字后面没有分隔符不许截；「就叫/改成」带冒号能定�
   assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿辰')
 })
 
+// 「改称」后面紧跟「呼 / 谓」时，说的是「改称呼」这件事本身，不是改称某个名字。
+// 原来「以后改称呼了」被截成「呼」，还是高置信，一句话就把定下的称呼换掉。
+test('「改称呼 / 改称谓」不会被截成「呼 / 谓」', () => {
+  for (const s of ['以后改称呼了。', '从今天起改称谓了', '改称呼吧', '往后就改称呼了']) {
+    assert.equal(pickName(s), null, s)
+  }
+  // 「改称」后面真跟着名字的照收
+  assert.equal(pickName('以后改称阿岸'), '阿岸')
+  // 整条链路：已经定下的称呼不会被换成「呼」；还没有称呼时也不会凭空多出一个
+  const seed = ev('ev_seed', 'seed', 1, '种', { source: 'system' })
+  const said = ev('ev_x', 'utterance', 3, '以后改称呼了。')
+  const evs = [seed, ev('ev_ok', 'utterance', 2, '以后叫他「阿辰」。'), said]
+  assert.equal(deriveSelf(evs, { now: T0 + 3 * DAY_MS }).name, '阿辰')
+  assert.equal(deriveSelf([seed, said], { now: T0 + 3 * DAY_MS }).name, null)
+})
+
 test('needs 只有三个键，且绝不出现好感度类字段', () => {
   const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' }), ev('ev_a', 'utterance', 2, '我不喜欢被催。')]
   const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
