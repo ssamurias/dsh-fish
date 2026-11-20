@@ -654,3 +654,65 @@ test('空清单只摆还站着的记录，最多五条', () => {
   assert.equal(near[0].id, 'b6', '按时间倒序取最近五条')
   assert.ok(!near.some((x) => x.id === 'gone'), '被推翻的不再摆出来')
 })
+
+// ---- issue #158（2026-11-20，用户 m01094）：同一件事，她每次说法都不一样 ----
+// 报告人的 87 条判断没有一条能并进同一组：全是单条视频长出来的 100–200 字复盘，
+// 两两字面相似度上不去 0.45，mentions 恒 1，立场清单因此永远是空的。
+// 修法是加两条「同一件事」的判据：她自己打的 topic、以及拒绝那一句的「头一句」。
+const topiced = (since, topic, id) => belief('我不想再为一条没核实过的评论开口', { id, since, topic })
+
+test('同一件事说法差很远，但她打了同一个 topic、跨了天：并成一条（issue #158）', () => {
+  const r = buildStances(model({
+    beliefs: [
+      topiced('2026-10-01T10:00:00Z', '核实', 'b1'),
+      belief('我不会去替没查过的事撑腰', { id: 'b2', since: '2026-10-06T10:00:00Z', topic: '核实' }),
+    ],
+  }))
+  assert.equal(r.length, 1, '字面不像，但她说的是同一件事')
+  assert.equal(r[0].kind, 'never')
+  assert.deepEqual([...r[0].members].sort(), ['b1', 'b2'])
+})
+
+test('同一个 topic 但挤在同一天，不并（那是同一条判断的上下半句）', () => {
+  // 日期键按本地日历算：选 10Z / 14Z 这两个点，东八区与多伦多都落在 10-06 当天。
+  const r = buildStances(model({
+    beliefs: [
+      topiced('2026-10-06T10:00:00Z', '核实', 'b1'),
+      belief('我不会去替没查过的事撑腰', { id: 'b2', since: '2026-10-06T14:00:00Z', topic: '核实' }),
+    ],
+  }))
+  assert.equal(r.length, 0)
+})
+
+test('没有 topic 就还是只看字面：不因为「都是拒绝」就并成一条', () => {
+  const r = buildStances(model({
+    beliefs: [
+      belief('我不想再为一条没核实过的评论开口', { id: 'b1', since: '2026-10-01T10:00:00Z' }),
+      belief('我不会去替没查过的事撑腰', { id: 'b2', since: '2026-10-06T10:00:00Z' }),
+    ],
+  }))
+  assert.equal(r.length, 0)
+})
+
+test('同一件事拒绝了两次、第二次把话说长了：头一句认得出是同一件（issue #158）', () => {
+  const r = buildStances(model({
+    refusals: [
+      refusal({
+        at: '2026-10-01T10:00:00Z',
+        act: '',
+        object: '看你推给我的那些视频，一看就到半夜，眼睛疼',
+        what: '我不想看你推的那些视频。',
+        reaction: 'insist',
+      }),
+      refusal({
+        at: '2026-10-08T10:00:00Z',
+        act: '',
+        object: '看你推给我的那些视频看到凌晨三点',
+        what: '我不想看你推的视频。',
+      }),
+    ],
+  }))
+  assert.equal(r.length, 1, '整句只有 0.51，头一句 0.82')
+  assert.equal(r[0].kind, 'refused')
+  assert.equal(r[0].object, '看你推给我的那些视频，一看就到半夜，眼睛疼', '代表句取组里第一条的那件事')
+})
