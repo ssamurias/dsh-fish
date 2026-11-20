@@ -202,6 +202,59 @@ test('「改称呼 / 改称谓」不会被截成「呼 / 谓」', () => {
   assert.equal(deriveSelf([seed, said], { now: T0 + 3 * DAY_MS }).name, null)
 })
 
+// 「以后 / 从今 / 往后 + 改成 / 改叫 / 改称」和裸的「改叫 / 改称」这一支，平常的安排句也长这样：
+// 「以后改成早点睡」「从今天起改成每天写日记」。名字前面没有引号、冒号的，降成低置信——
+// 还没有称呼时照旧先用，但盖不掉已经定下的。带引号、冒号、主语的照旧高置信。
+test('只靠时间壳认出来的「改成 / 改叫 / 改称」是低置信；带引号、冒号、主语的照旧高置信', () => {
+  for (const [s, name] of [
+    ['以后改成早点睡。', '早点睡'],
+    ['从今天起改成每天写日记。', '每天写日记'],
+    ['我以后改叫早上跑步了。', '早上跑步'],
+    ['他说以后就改成周三见。', '周三见'],
+    ['以后就改成阿辰', '阿辰'],
+    ['从今天起就改成阿辰', '阿辰'],
+    ['改叫阿辰吧', '阿辰'],
+  ]) assert.deepEqual(pickNameHit(s), { name, confident: false }, s)
+
+  // 名字前带引号
+  for (const s of ['以后就改成「阿辰」', '从今天起改叫“阿辰”', '改叫「阿辰」吧', '往后改称"阿辰"']) {
+    assert.deepEqual(pickNameHit(s), { name: '阿辰', confident: true }, s)
+  }
+  // 带冒号
+  for (const s of ['以后就改成：阿辰', '那就叫：阿辰', '改成：阿辰']) {
+    assert.deepEqual(pickNameHit(s), { name: '阿辰', confident: true }, s)
+  }
+  // 带主语
+  assert.deepEqual(pickNameHit('以后你的称呼改成阿岸'), { name: '阿岸', confident: true })
+  assert.deepEqual(pickNameHit('他的名字定为阿岸'), { name: '阿岸', confident: true })
+  // 「叫他X」那条不归这里管，同一句里有「以后」照旧高置信
+  assert.deepEqual(pickNameHit('以后叫他阿辰。'), { name: '阿辰', confident: true })
+})
+
+test('平常的安排句盖不掉已经定下的称呼；带引号的改口照样能盖', () => {
+  const seed = ev('ev_seed', 'seed', 1, '种', { source: 'system' })
+  const ok = ev('ev_ok', 'utterance', 2, '以后叫他「阿辰」。')
+  const now = T0 + 3 * DAY_MS
+  for (const s of ['以后改成早点睡。', '从今天起改成每天写日记。', '我以后改叫早上跑步了。', '他说以后就改成周三见。']) {
+    assert.equal(deriveSelf([seed, ok, ev('ev_x', 'utterance', 3, s)], { now }).name, '阿辰', s)
+    // revise 走的是同一个 settleName
+    const r = ev('ev_r', 'revise', 3, s, { refs: ['ev_ok'], verdict: 'refined' })
+    assert.equal(deriveSelf([seed, ok, r], { now }).name, '阿辰', `revise: ${s}`)
+  }
+
+  // 还没有称呼时，没引号的照旧先用
+  assert.equal(deriveSelf([seed, ev('ev_a', 'utterance', 2, '以后就改成阿辰。')], { now }).name, '阿辰')
+  // 先被一句平常话占了，后来的改口（带不带引号都行）能改过来：低置信之间后来的盖前面的
+  for (const s of ['以后就改成「阿辰」。', '以后就改成阿辰。', '那就叫：阿辰。']) {
+    const evs = [seed, ev('ev_a', 'utterance', 2, '以后改成早点睡。'), ev('ev_b', 'utterance', 3, s)]
+    assert.equal(deriveSelf(evs, { now }).name, '阿辰', s)
+  }
+  // 已经定下的称呼，用带引号 / 冒号的说法照样改得掉
+  for (const s of ['以后就改成「阿岸」。', '那就叫：阿岸。', '以后叫他阿岸。']) {
+    assert.equal(deriveSelf([seed, ok, ev('ev_b', 'utterance', 3, s)], { now }).name, '阿岸', s)
+  }
+})
+
 test('needs 只有三个键，且绝不出现好感度类字段', () => {
   const evs = [ev('ev_seed', 'seed', 1, '种', { source: 'system' }), ev('ev_a', 'utterance', 2, '我不喜欢被催。')]
   const m = deriveSelf(evs, { now: T0 + 2 * DAY_MS })
