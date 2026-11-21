@@ -44,7 +44,7 @@ async function withRoot(fn) {
 }
 
 /** 直接写一条 ask 进去（模拟工具那一侧已经问出来的状态）。 */
-function seedAsk(root, { id = 'ev_ask1', kind = 'other', text = '我想问一件事。', value, ts, day } = {}) {
+function seedAsk(root, { id = 'ev_ask1', kind = 'other', text = '我想问一件事。', value, ts, day, refs = [] } = {}) {
   const at = ts ?? new Date()
   const ev = {
     id,
@@ -55,7 +55,7 @@ function seedAsk(root, { id = 'ev_ask1', kind = 'other', text = '我想问一件
     type: 'ask',
     source: 'system',
     text,
-    refs: [],
+    refs,
     verdict: null,
     confidence: 0.5,
     flags: [],
@@ -317,3 +317,16 @@ test('认不出的回答不落地原文：日志只留回执形状（issue #35�
   assert.ok(!log.includes(secret), '他手打的原文不许进日志')
   assert.ok(log.includes(`"custom":${secret.length}`), '但要留下长度，够定位是哪种形状')
 }))
+
+test('答复把这一问指向的旧判断一起带上：answer 继承 ask 的 refs（2026-11-21，用户 m03644）', async () => withRoot(async (root) => {
+  // 这一问本来就是为了核对某条旧判断才问的（ask_owner 的 about 参数），
+  // 以前 answer 从不带 refs，「被检验」那一路在 derive.js 里永远空转。
+  const beliefId = 'b1k2m3n4p5q6r7s8t9u0v1w2'
+  seedAsk(root, { id: 'ev_ask9', refs: [beliefId], text: '这条判断还站得住吗？' })
+  const r = await settleAsk(root, { askId: 'ev_ask9', verdict: 'approve', reason: '站得住', via: 'ui' })
+  assert.equal(r.ok, true)
+  const { events } = await readEvents(root)
+  const ans = events.find((e) => e.type === 'answer' && e.ask?.askId === 'ev_ask9')
+  assert.deepEqual(ans.refs, [beliefId])
+})
+)

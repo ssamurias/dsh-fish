@@ -96,6 +96,7 @@ test('被反复检验过 → 固化（verified 到阈值），哪怕只说过一
   const evs = [
     ev('ev_seed', 'seed', 1, '种', { source: 'system' }),
     ev('ev_a', 'utterance', 1, '人多的地方我会紧张。'),
+    // 手工造的 test 事件：线上还没有写入方（2026-11-21 核过），这条用例只证明读的那头是通的。
     ev('ev_t1', 'test', 2, '', { refs: ['ev_a'] }),
     ev('ev_t2', 'test', 3, '', { refs: ['ev_a'] }),
   ]
@@ -104,6 +105,51 @@ test('被反复检验过 → 固化（verified 到阈值），哪怕只说过一
   assert.equal(m.solid.length, 1)
   assert.equal(m.solid[0].id, 'ev_a')
   assert.equal(m.solid[0].verified, 2)
+})
+
+test('改口就是一次检验：记在改写后那条上，两次改口把同一条判断送到固化（issue-dsh-fish-verified）', () => {
+  // 事件顺序由 id 前 10 位（Crockford 时间）决定，手写 'ev_a' 这种 id 会解析出 0，
+  // 把 revise 排到 utterance 前面去——所以这里造真 ULID 形状的 id。
+  const CROCK = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+  const uid = (day, tag) => {
+    let s = ''
+    let n = T0 + (day - 1) * DAY_MS
+    for (let i = 0; i < 10; i += 1) { s = CROCK[n % 32] + s; n = Math.floor(n / 32) }
+    return s + tag.repeat(16).slice(0, 16)
+  }
+  const A = uid(1, 'A')
+  const R1 = uid(2, 'B')
+  const R2 = uid(3, 'C')
+  const evs = [
+    ev(uid(1, 'S'), 'seed', 1, '种', { source: 'system' }),
+    ev(A, 'utterance', 1, '人多的地方我会紧张。'),
+    ev(R1, 'revise', 2, '人多的地方我会紧张，但熟了以后就还好。', { refs: [A], verdict: 'refined' }),
+    ev(R2, 'revise', 3, '人多的地方我还是会紧张，不过现在能撑住。', { refs: [R1], verdict: 'refined' }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 3 * DAY_MS })
+  assert.equal(m.beliefs.find((b) => b.id === R2).verified, 2, '检验次数要沿着改口链传下去，否则门槛 2 永远到不了')
+  assert.equal(m.solid.length, 1)
+  assert.equal(m.solid[0].id, R2, '记在旧句上会被 refined 过滤掉，读不到')
+  assert.deepEqual(m.beliefs.map((b) => b.id), [R2], '旧的两条都退役了，不再出现在 beliefs 里')
+})
+
+test('refs 为空的改口只是重说一遍，不算检验', () => {
+  const CROCK = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+  const uid = (day, tag) => {
+    let s = ''
+    let n = T0 + (day - 1) * DAY_MS
+    for (let i = 0; i < 10; i += 1) { s = CROCK[n % 32] + s; n = Math.floor(n / 32) }
+    return s + tag.repeat(16).slice(0, 16)
+  }
+  const evs = [
+    ev(uid(1, 'S'), 'seed', 1, '种', { source: 'system' }),
+    ev(uid(1, 'A'), 'utterance', 1, '人多的地方我会紧张。'),
+    ev(uid(2, 'B'), 'revise', 2, '人多的地方我会紧张，这句我改个说法。', { refs: [], verdict: 'refined' }),
+    ev(uid(3, 'C'), 'revise', 3, '人多的地方我会紧张，再说一遍。', { refs: [], verdict: 'refined' }),
+  ]
+  const m = deriveSelf(evs, { now: T0 + 3 * DAY_MS })
+  assert.equal(m.beliefs[0].verified, 0)
+  assert.equal(m.solid.length, 0)
 })
 
 test('没被提起、也没被检验过的，不固化——遗忘按重要性，不按时间', () => {

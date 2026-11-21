@@ -25,6 +25,7 @@ import {
   registerTurns,
   declareSource,
   clearDeclaredSources,
+  testAnswerCredit,
   TURN_TEXT_MAX,
 } from '../lib/turns.js'
 import { homeStatus } from '../lib/home.js'
@@ -2381,4 +2382,24 @@ test('他一开口撤掉叫醒处境时留一行（下一次同类报告能对�
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
   }
+})
+
+test('检验卡的回话算不算一次检验：编号和材料都要（2026-11-21，用户 m03644）', () => {
+  const id = 'b1k2m3n4p5q6r7s8t9u0v1w2'
+  // 带了编号、也引了这一轮的材料，且她说改了 → 记一次 changed
+  assert.deepEqual(testAnswerCredit(`「${id}」这条我改了口：视频里那句「先看结果」让我把顺序反过来。`, id), {
+    ok: true,
+    verdict: 'changed',
+  })
+  // 带编号、对了材料，结论是「还站得住」→ 也算一次（卡本来就允许没有结论）
+  assert.deepEqual(testAnswerCredit(`${id} 对过了，11 月 18 号那条评论确实是我回过的。`, id), {
+    ok: true,
+    verdict: 'held',
+  })
+  // 只带编号、没说任何材料 → 不记
+  assert.equal(testAnswerCredit(`${id} 我还是这么想。`, id).ok, false)
+  // 她自己说还没碰上 → 不记（卡里特意留的口子）
+  assert.equal(testAnswerCredit(`${id} 今天没碰上什么新东西。`, id).ok, false)
+  // 引了材料但没带编号 → 不记（没法知道她说的是哪条）
+  assert.equal(testAnswerCredit('视频里那句「先看结果」让我改口了。', id).ok, false)
 })
