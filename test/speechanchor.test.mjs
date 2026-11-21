@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { personaBudget, personaLine } from '../lib/persona.js'
-import { anchorSection, recentAnchors, ANCHOR_MAX } from '../lib/speechanchor.js'
+import { anchorSection, recentAnchors, ANCHOR_MAX, ANCHOR_READ_MAX } from '../lib/speechanchor.js'
 
 const NOW = Date.parse('2026-11-13T12:00:00Z')
 const DAY = 24 * 60 * 60 * 1000
@@ -85,9 +85,48 @@ test('那段话：有素材时写进来路和日期，并说明「能用就用�
   })
   const s = anchorSection(m, { now: NOW })
   assert.match(s, /说过：「我不喜欢被叫宝宝。」/)
-  assert.match(s, /你 \d+ 月 \d+ 日说过：「我觉得这句话放哪都成立。」/)
+  // 1.0.7（issue #165）：判断单独一档，不再和 heard 挤同一个池子。
+  assert.match(s, /你自己认领过的：/)
+  assert.match(s, /「我觉得这句话放哪都成立。」/)
   assert.match(s, /你看过：《一条视频》/)
   assert.match(s, /能用就用，用不上别硬套/)
+})
+
+test('issue #165：heard 再多也挤不掉她自己的判断', () => {
+  const m = model({
+    recentHeard: [
+      { at: NOW - 1 * DAY, text: '他说的第一句。' },
+      { at: NOW - 2 * DAY, text: '他说的第二句。' },
+      { at: NOW - 3 * DAY, text: '他说的第三句。' },
+    ],
+    beliefs: [belief('ev_a', '我自己站住的一句。', NOW - 5 * DAY)],
+  })
+  const s = anchorSection(m, { now: NOW })
+  assert.match(s, /你自己认领过的：/)
+  assert.match(s, /我自己站住的一句/)
+  // 「最近能引到的」那一档自己也有上限，不会把整段撑长。
+  assert.equal(
+    recentAnchors(m, { now: NOW, limit: ANCHOR_READ_MAX, kinds: ['heard', 'looked', 'material'] }).length,
+    ANCHOR_READ_MAX,
+  )
+})
+
+test('issue #165：老判断只要最近还被提起 / 检验，就还能被引', () => {
+  const stale = belief('ev_a', '半年前就站住的一句。', NOW - 180 * DAY, { lastTouchedAt: NOW - 2 * DAY })
+  const cold = belief('ev_b', '没人再提的那句。', NOW - 120 * DAY)
+  const s = anchorSection(model({ beliefs: [stale, cold] }), { now: NOW })
+  assert.match(s, /半年前就站住的一句/)
+  assert.ok(!s.includes('没人再提的那句'), '过了 90 天没被提起的判断不再摆出来')
+})
+
+test('recentAnchors 的 kinds 可选：不传时仍是四类同池、按时间取前 limit 条', () => {
+  const m = model({
+    recentHeard: [{ at: NOW - DAY, text: '他说的。' }],
+    beliefs: [belief('ev_a', '我说的。', NOW - 2 * DAY)],
+    lookedRecent: [{ bvid: 'BV1xx411c7mD', title: '一条视频', at: NOW - 3 * DAY }],
+  })
+  assert.deepEqual(recentAnchors(m, { now: NOW }).map((x) => x.kind), ['heard', 'belief', 'looked'])
+  assert.deepEqual(recentAnchors(m, { now: NOW, kinds: ['belief'] }).map((x) => x.kind), ['belief'])
 })
 
 test('默认不出这一段；打开才出，且不计入身份段预算', () => {
